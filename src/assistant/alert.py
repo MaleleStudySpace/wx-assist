@@ -114,13 +114,20 @@ class AlertEngine:
                     self._last_triggered[cooldown_key] = now
 
             if matched:
+                import json as _json
                 title = "关键词命中"
-                notif_content = (
-                    f"[群] {group_name}\n"
-                    f"[发送人] {sender_name}\n"
-                    f"[关键词] {', '.join(matched)}\n"
-                    f"[消息] {content}"
-                )
+                notif_content = _json.dumps({
+                    "group": group_name,
+                    "sender": sender_name,
+                    "keywords": matched,
+                    "message": content,
+                    "display": (
+                        f"[群] {group_name}\n"
+                        f"[发送人] {sender_name}\n"
+                        f"[关键词] {', '.join(matched)}\n"
+                        f"[消息] {content}"
+                    ),
+                }, ensure_ascii=False)
                 nid = self._outbox.add(
                     notif_type="keyword_alert",
                     chat_id=chat_id,

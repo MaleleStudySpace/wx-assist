@@ -2051,14 +2051,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         friendly = "推送会话已失效，请先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
                     elif "rate-limited" in raw_error:
                         friendly = "推送请求被限流，3 次重试后仍失败。请稍后再试，或先给助手主动发送一条消息。"
-                    update_status(ai_ok=False, ai_verified=False, error=friendly)
                     _send_sse("error", {
                         "error": friendly,
                         "detail": raw_error,
                     })
             except Exception as e:
                 friendly = f"推送异常：{e}。请尝试先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
-                update_status(ai_ok=False, ai_verified=False, error=friendly)
                 _send_sse("error", {"error": friendly})
             return
 

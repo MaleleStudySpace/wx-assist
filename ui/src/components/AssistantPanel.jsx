@@ -134,6 +134,8 @@ export default function AssistantPanel() {
   const [saveError, setSaveError] = useState('')
   const [dirty, setDirty] = useState(false)
   const saveTimerRef = useRef(null)
+  const alertEditorRef = useRef(null)
+  const digestEditorRef = useRef(null)
   const [saveFlash, setSaveFlash] = useState(null)  // 'saving' | 'saved' | 'error' | null
   const [notifications, setNotifications] = useState([])
   const [notificationLoading, setNotificationLoading] = useState(false)
@@ -230,6 +232,18 @@ export default function AssistantPanel() {
   useEffect(() => {
     loadNotifications()
   }, [filters.chat_id, filters.type, filters.status])
+
+  // Scroll to editor when adding new alert/digest
+  useEffect(() => {
+    if (showAlertEditor && alertEditorRef.current) {
+      alertEditorRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [showAlertEditor])
+  useEffect(() => {
+    if (showDigestEditor && digestEditorRef.current) {
+      digestEditorRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [showDigestEditor])
 
   function defaultConfig() {
     return {
@@ -619,6 +633,7 @@ export default function AssistantPanel() {
             <AnimatePresence>
               {showAlertEditor && (
                 <motion.div
+                  ref={alertEditorRef}
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
@@ -696,6 +711,7 @@ export default function AssistantPanel() {
                     expanded={!!expandedDigests[i]}
                     profileExpanded={!!expandedProfiles[i]}
                     draft={digestDrafts[i] || null}
+                    defaultSystemPrompt={config.default_system_prompt}
                     onToggleExpand={() => {
                       const nextExpanded = !expandedDigests[i]
                       setExpandedDigests(prev => ({ ...prev, [i]: nextExpanded }))
@@ -780,6 +796,7 @@ export default function AssistantPanel() {
             <AnimatePresence>
               {showDigestEditor && (
                 <motion.div
+                  ref={digestEditorRef}
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
@@ -790,6 +807,7 @@ export default function AssistantPanel() {
                     draft={digestDraft}
                     groups={groups}
                     error={editorError}
+                    defaultSystemPrompt={config.default_system_prompt}
                     onDraftChange={setDigestDraft}
                     onSave={() => {
                       if (!digestDraft.chat_id) { setEditorError('请先选择群聊'); return }
@@ -1265,7 +1283,7 @@ function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCron
   )
 }
 
-function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onSave, onCancel }) {
+function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onSave, onCancel, defaultSystemPrompt }) {
   const bodyRef = useRef(null)
   // Use draft if available (editing), otherwise use saved values
   const values = draft || dg
@@ -1472,7 +1490,7 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                             <div>
                               <label className="text-xs text-text-muted mb-1 block">当前默认 Prompt（只读参考）</label>
                               <div className="p-2 rounded-lg bg-bg-inset border border-border-main text-xs text-text-muted max-h-20 overflow-y-auto whitespace-pre-wrap">
-                                {config.default_system_prompt || '（暂无默认提示词）'}
+                                {defaultSystemPrompt || '（暂无默认提示词）'}
                               </div>
                             </div>
                             {/* 自定义 Prompt 输入框（可编辑，保存后完全替代默认） */}
@@ -1481,7 +1499,7 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                               <textarea
                                 value={values.profile?.custom_prompt || ''}
                                 onChange={e => onProfileChange({ custom_prompt: e.target.value })}
-                                placeholder={values.profile?.custom_prompt ? '' : (config.default_system_prompt || '修改后将完全替代默认 System Prompt...')}
+                                placeholder={values.profile?.custom_prompt ? '' : (defaultSystemPrompt || '修改后将完全替代默认 System Prompt...')}
                                 rows={3}
                                 className="w-full bg-bg-main border border-border-main rounded-xl px-4 py-2.5 text-sm text-text-main
                                   placeholder:text-text-muted/65 resize-none
@@ -1564,7 +1582,7 @@ function AlertGroupEditor({ draft, groups, error, onDraftChange, onSave, onCance
   )
 }
 
-function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCancel }) {
+function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCancel, defaultSystemPrompt }) {
   const [profileOpen, setProfileOpen] = useState(false)
   return (
     <div className="border border-brand-green/30 rounded-xl p-4 space-y-3 bg-brand-green/[0.02]">
@@ -1683,7 +1701,7 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
                     <textarea
                       value={draft.profile?.custom_prompt || ''}
                       onChange={e => onDraftChange({ ...draft, profile: { ...draft.profile, custom_prompt: e.target.value } })}
-                      placeholder={draft.profile?.custom_prompt ? '' : (config.default_system_prompt || '输入自定义摘要指令...')}
+                      placeholder={draft.profile?.custom_prompt ? '' : (defaultSystemPrompt || '输入自定义摘要指令...')}
                       rows={3}
                       className="w-full bg-bg-main border border-border-main rounded-xl px-4 py-2.5 text-sm text-text-main
                         placeholder:text-text-muted/65 resize-none

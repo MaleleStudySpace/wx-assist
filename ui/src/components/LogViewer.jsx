@@ -295,7 +295,7 @@ export default function LogViewer() {
 
   useEffect(() => {
     fetchLogs()
-    const timer = setInterval(fetchLogs, 2000)
+    const timer = setInterval(fetchLogs, 10000)
     return () => clearInterval(timer)
   }, [fetchLogs])
 
