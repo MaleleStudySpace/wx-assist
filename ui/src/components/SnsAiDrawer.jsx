@@ -404,12 +404,17 @@ export default function SnsAiDrawer({ open, onClose, contacts = [] }) {
               {summaryStreaming && !summaryText && (
                 <div className="flex items-center gap-2 text-sm text-text-muted py-8 justify-center">
                   <div className="w-4 h-4 border-2 border-brand-green/30 border-t-brand-green rounded-full animate-spin" />
-                  AI 正在总结...
+                  <span>AI 正在总结<span className="text-text-muted/60">（首次生成约 30-40 秒）</span></span>
                 </div>
               )}
               <div className="prose prose-sm dark:prose-invert max-w-none text-text-main/90 leading-relaxed whitespace-pre-wrap">
                 {summaryText}
-                {summaryStreaming && <span className="inline-block w-1.5 h-4 bg-brand-green/60 animate-pulse ml-0.5 align-middle" />}
+                {summaryStreaming && (
+                  <span className="inline-flex items-center gap-1.5 ml-0.5">
+                    <span className="inline-block w-1.5 h-4 bg-brand-green/60 animate-pulse align-middle" />
+                    <span className="text-[11px] text-text-muted/50">生成中</span>
+                  </span>
+                )}
               </div>
 
               {/* Continue to chat after summary */}
@@ -464,7 +469,12 @@ export default function SnsAiDrawer({ open, onClose, contacts = [] }) {
                           : 'bg-bg-raised text-text-main'
                     }`}>
                       <div className="whitespace-pre-wrap">{m.content}</div>
-                      {m.streaming && <span className="inline-block w-1.5 h-4 bg-brand-green/60 animate-pulse ml-0.5 align-middle" />}
+                      {m.streaming && (
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="inline-block w-1.5 h-4 bg-brand-green/60 animate-pulse align-middle" />
+                          {!m.content && <span className="text-sm text-text-muted">AI 正在生成...</span>}
+                        </span>
+                      )}
                     </div>
                     {m.role === 'user' && (
                       <div className="w-7 h-7 rounded-lg bg-bg-raised flex items-center justify-center shrink-0 mt-0.5">

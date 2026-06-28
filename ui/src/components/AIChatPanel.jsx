@@ -326,7 +326,10 @@ export default function AIChatPanel({
                 )}
               </p>
               {msg.streaming && msg.content && (
-                <span className="inline-block w-1.5 h-4 bg-text-muted animate-pulse ml-0.5 align-text-bottom" />
+                <span className="inline-flex items-center gap-1.5 ml-0.5">
+                  <span className="inline-block w-1.5 h-4 bg-text-muted animate-pulse align-text-bottom" />
+                  <span className="text-[11px] text-text-muted/50">生成中</span>
+                </span>
               )}
             </div>
           </div>

@@ -878,7 +878,7 @@ def handle_ai_chat_message_stream(body: dict, wfile) -> None:
     _send_sse_headers(wfile)
 
     # ── Stream response ─────────────────────────────────────────
-    FIRST_TOKEN_TIMEOUT_SEC = 20
+    FIRST_TOKEN_TIMEOUT_SEC = 40
     full_response = []
     stream_start = time.monotonic()
     first_token_received = False
@@ -1115,7 +1115,7 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
     user_message = f"请总结以下朋友圈内容：\n\n{context_text}"
 
     # Stream response
-    FIRST_TOKEN_TIMEOUT_SEC = 20
+    FIRST_TOKEN_TIMEOUT_SEC = 40
     _send_sse_headers(wfile)
     full_response = []
     stream_start = time.monotonic()
