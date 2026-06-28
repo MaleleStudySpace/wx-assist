@@ -1228,29 +1228,38 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     self.send_json({"ok": True, "groups": groups})
                     return
                 if groups_raw == "*" or not groups_raw:
-                    # All groups: distinct chat_ids from messages
+                    # All groups: use one GROUP BY query instead of N per-group COUNT queries.
+                    # 性能优化原因：群助手首屏不需要精确实时成员数；这里统计的是
+                    # messages.db 历史消息中的 sender_id 去重数，不调用 WCDB DLL，避免慢查询。
                     rows = conn.execute(
-                        "SELECT DISTINCT chat_id FROM messages WHERE chat_id LIKE '%@chatroom%' ORDER BY chat_id"
+                        """
+                        SELECT chat_id, COUNT(DISTINCT sender_id) as cnt
+                        FROM messages
+                        WHERE chat_id LIKE '%@chatroom%'
+                        GROUP BY chat_id
+                        ORDER BY chat_id
+                        """
                     ).fetchall()
                     for row in rows:
                         chat_id = row["chat_id"]
-                        cnt_row = conn.execute(
-                            "SELECT COUNT(DISTINCT sender_id) as cnt FROM messages WHERE chat_id=?",
-                            (chat_id,),
-                        ).fetchone()
                         groups.append({
                             "chat_id": chat_id,
                             "group_name": group_names.get(chat_id, chat_id),
-                            "member_count": cnt_row["cnt"] if cnt_row else 0,
+                            "member_count": row["cnt"] if row else 0,
                         })
                 else:
                     # Specific group names — match against known chat_ids
                     wanted = [g.strip() for g in groups_raw.split(",") if g.strip()]
-                    # Get all chatroom IDs from messages
+                    # Get all chatroom IDs from messages with member counts in one query
                     all_chats = conn.execute(
-                        "SELECT DISTINCT chat_id FROM messages WHERE chat_id LIKE '%@chatroom%'"
+                        """
+                        SELECT chat_id, COUNT(DISTINCT sender_id) as cnt
+                        FROM messages
+                        WHERE chat_id LIKE '%@chatroom%'
+                        GROUP BY chat_id
+                        """
                     ).fetchall()
-                    all_ids = [r["chat_id"] for r in all_chats]
+                    all_ids = {r["chat_id"]: r["cnt"] for r in all_chats}
                     for name in wanted:
                         # Try exact match first, then substring
                         chat_id = name
@@ -1258,16 +1267,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             if name.lower() in cid.lower():
                                 chat_id = cid
                                 break
-                        cnt_row = conn.execute(
-                            "SELECT COUNT(DISTINCT sender_id) as cnt FROM messages WHERE chat_id=?",
-                            (chat_id,),
-                        ).fetchone()
                         # Resolve display name from persisted mapping, fallback to configured name
                         display_name = group_names.get(chat_id) or name
                         groups.append({
                             "chat_id": chat_id,
                             "group_name": display_name,
-                            "member_count": cnt_row["cnt"] if cnt_row else 0,
+                            "member_count": all_ids.get(chat_id, 0),
                         })
 
                 conn.close()
