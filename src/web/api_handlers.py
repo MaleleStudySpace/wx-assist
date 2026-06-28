@@ -4300,9 +4300,15 @@ def handle_oa_digest_run(params, config: AssistantConfig):
             oa_nid = None
             try:
                 from src.assistant.outbox import Outbox
+                import json as _json
                 outbox = Outbox()
                 oa_title = f"📰 {group.name} — 公众号摘要"
-                oa_content = f"公众号组: {group.name}\n文章数: {result.get('articles_count', 0)} 篇\n\n{result['digest_text']}"
+                oa_content = _json.dumps({
+                    "group": group.name,
+                    "articles_count": result.get("articles_count", 0),
+                    "digest": result['digest_text'],
+                    "display": f"公众号组: {group.name}\n文章数: {result.get('articles_count', 0)} 篇\n\n{result['digest_text']}",
+                }, ensure_ascii=False)
                 oa_nid = outbox.add(
                     notif_type="oa_digest",
                     chat_id=group_id,

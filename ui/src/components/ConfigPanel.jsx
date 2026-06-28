@@ -1,6 +1,6 @@
 ﻿import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle, Warning, FloppyDisk, Info, DownloadSimple, UploadSimple, CircleNotch, MagnifyingGlass, Lightning, PaperPlaneTilt, QrCode, SignOut, TestTube, ChatCircle, Trash, CaretDown, CaretRight } from '@phosphor-icons/react'
+import { CheckCircle, Warning, FloppyDisk, Info, DownloadSimple, UploadSimple, CircleNotch, MagnifyingGlass, Lightning, PaperPlaneTilt, QrCode, SignOut, TestTube, ChatCircle, Trash, CaretDown, CaretRight, X } from '@phosphor-icons/react'
 import { QRCodeSVG } from 'qrcode.react'
 import { spring, Field, Toggle, Select, Input, API_BASE } from './SharedComponents'
 import ChatDrawer from './ChatDrawer'
@@ -888,14 +888,18 @@ function PushRecordCard({ record }) {
   const rawTime = record.push_at || record.created_at || ''
   const displayTime = rawTime.replace('T', ' ')
 
-  // ── Parse keyword_alert content ──
-  // Format: "群: xxx\n发送人: xxx\n关键词: xxx\n消息内容:\n正文"
-  // Legacy format: "命中关键词:" instead of "关键词:"
+  // ── Parse JSON content (new format) or fall back to plain text ──
+  let parsed = null
+  if (rawContent.startsWith('{')) {
+    try { parsed = JSON.parse(rawContent) } catch {}
+  }
+
+  // Legacy plain text parsing (backwards compat, old DB entries)
   let kwSender = ''
   let kwKeywords = ''
   let kwBody = ''
-  if (record.type === 'keyword_alert') {
-    const lines = content.split('\n')
+  if (record.type === 'keyword_alert' && !parsed) {
+    const lines = rawContent.split('\n')
     let bodyStart = -1
     lines.forEach((line, i) => {
       if (line.startsWith('[发送人]')) kwSender = line.replace('[发送人]', '').trim()
@@ -903,22 +907,14 @@ function PushRecordCard({ record }) {
       if (line.startsWith('[关键词]')) kwKeywords = line.replace('[关键词]', '').trim()
       else if (line.startsWith('关键词:')) kwKeywords = line.replace('关键词:', '').trim()
       else if (line.startsWith('命中关键词:')) kwKeywords = line.replace('命中关键词:', '').trim()
-      // Body starts after [消息] prefix line — merge same-line content too
       if (line.startsWith('[消息]')) {
         const rest = line.replace('[消息]', '').trim()
-        if (rest) {
-          kwBody = rest
-          bodyStart = -1 // already got the body from this line
-        } else {
-          bodyStart = i + 1 // content on subsequent lines
-        }
-      } else if (line.startsWith('消息内容:')) {
-        bodyStart = i + 1
-      }
+        if (rest) { kwBody = rest; bodyStart = -1 }
+        else { bodyStart = i + 1 }
+      } else if (line.startsWith('消息内容:')) { bodyStart = i + 1 }
     })
     if (bodyStart >= 0) {
       kwBody = lines.slice(bodyStart).join('\n').trim()
-      // Remove wxid_xxx: prefix lines from body (WeChat raw format artifact)
       kwBody = kwBody.replace(/^wxid_[a-zA-Z0-9_]+:\s*\n?/m, '').trim()
     }
   }
@@ -938,7 +934,7 @@ function PushRecordCard({ record }) {
   }
 
   // ── Expand/collapse logic ──
-  const mainContent = record.type === 'keyword_alert' ? kwBody : content
+  const mainContent = record.type === 'keyword_alert' ? kwBody : rawContent
   const needsExpand = mainContent.length > 100
   const displayContent = expanded ? mainContent : (needsExpand ? mainContent.slice(0, 100) + '...' : mainContent)
 
@@ -969,32 +965,21 @@ function PushRecordCard({ record }) {
 
       {/* Row 3: type-specific content */}
       <div className="text-[12px] text-text-muted leading-relaxed">
-        {record.type === 'keyword_alert' ? (
-          <>
-            {kwSender && (
-              <div>发送人: <span className="text-text-main/80">{kwSender}</span></div>
-            )}
-            {kwKeywords && (
-              <div className="flex items-center gap-1">
-                关键词: <span className="text-[11px] px-1.5 py-px rounded bg-amber-500/[0.10] text-amber-600 dark:text-amber-400 font-medium">{kwKeywords}</span>
-              </div>
-            )}
-            {kwBody && (
-              <div className="mt-1">
-                消息内容:
-                <div className="mt-0.5">
-                  <span className="text-text-main/70 whitespace-pre-wrap">{displayContent}</span>
-                  {needsExpand && (
-                    <button onClick={() => setExpanded(!expanded)}
-                      className="float-right text-[11px] text-brand-green-hover dark:text-brand-green font-medium hover:underline cursor-pointer ml-2">
-                      {expanded ? '收起' : '展开'}
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </>
-        ) : (
+        {parsed ? (() => {
+          if (record.type === 'keyword_alert') {
+            return <div className="space-y-1"><div className="font-medium text-text-main/90">{parsed.sender}</div><div className="bg-bg-inset rounded-lg p-2.5 border border-border-main/40 text-text-main/80 whitespace-pre-wrap">{parsed.message}</div><div className="flex flex-wrap gap-1">{(parsed.keywords || []).map((kw,i) => <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-status-warn-soft text-status-warn font-medium">{kw}</span>)}</div></div>
+          }
+          if (record.type === 'group_digest') {
+            return <div className="space-y-1"><div className="font-medium text-text-main/90">{parsed.group}</div><div className="bg-bg-inset rounded-lg p-2.5 border border-border-main/40 text-text-main/80 max-h-48 overflow-y-auto">{parsed.digest}</div><div className="text-text-muted">{parsed.msg_count ?? 0} 条 · 近{parsed.lookback_hours}h</div></div>
+          }
+          if (record.type === 'oa_digest') {
+            return <div className="space-y-1"><div className="font-medium text-text-main/90">{parsed.group}</div><div className="bg-bg-inset rounded-lg p-2.5 border border-border-main/40 text-text-main/80 max-h-48 overflow-y-auto">{parsed.digest}</div><div className="text-text-muted">{parsed.articles_count ?? 0} 篇文章</div></div>
+          }
+          if (record.type === 'oa_article_alert') {
+            return <div className="space-y-1"><div className="font-medium text-text-main/90">{parsed.article_title || parsed.title}</div><div className="text-text-muted">{parsed.group}{parsed.time ? ' · ' + parsed.time : ''}</div>{parsed.digest && <div className="text-text-muted line-clamp-2">{parsed.digest}</div>}{parsed.url && <a href={parsed.url} target='_blank' className='text-brand-green hover:underline break-all inline-block mt-0.5'>{parsed.url}</a>}</div>
+          }
+          return <div className="text-text-main/80">{parsed.display || displayContent}</div>
+        })() : (
           <>
             {/* Group digest / OA digest: summary content */}
             <span className="text-text-main/70">{displayContent}</span>
@@ -1186,7 +1171,7 @@ function PushSection() {
                   setTestResult('success')
                   setPushModalVisible(false)
                 } else if (currentEvent === 'error') {
-                  setTestResult(data.detail || data.error || '推送失败')
+                  setTestResult(data.error || data.detail || '推送失败')
                   // 不自动关闭弹窗，让用户看到错误后手动关闭
                 }
               } catch {}
