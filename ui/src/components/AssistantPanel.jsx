@@ -237,6 +237,8 @@ export default function AssistantPanel() {
       digest_groups: [],
       notification_queue: { enabled: true, retention_hours: 24 },
       outbox_retention_hours: 24,
+      default_system_prompt: '',
+      style_presets: {},
     }
   }
 
@@ -1467,7 +1469,7 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                             <div>
                               <label className="text-xs text-text-muted mb-1 block">当前默认 Prompt（只读参考）</label>
                               <div className="p-2 rounded-lg bg-bg-inset border border-border-main text-xs text-text-muted max-h-20 overflow-y-auto whitespace-pre-wrap">
-                                你是微信群聊AI助手，帮助用户回顾和查找群聊消息。用中文回答，简洁自然。基于群聊记录回答问题。引用消息时用"昵称说：..."的格式。可以帮用户查找某人说的话、总结讨论、找特定话题的消息。如果用户问的内容不在提供的记录中，坦诚说明。不要编造不存在的消息。
+                                {config.default_system_prompt || '（暂无默认提示词）'}
                               </div>
                             </div>
                             {/* 自定义 Prompt 输入框（可编辑，保存后完全替代默认） */}
@@ -1476,7 +1478,7 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                               <textarea
                                 value={values.profile?.custom_prompt || ''}
                                 onChange={e => onProfileChange({ custom_prompt: e.target.value })}
-                                placeholder="修改后将完全替代默认 System Prompt。留空则使用默认。例如：你是一个项目进度追踪助手，只输出待办事项和截止时间..."
+                                placeholder={values.profile?.custom_prompt ? '' : (config.default_system_prompt || '修改后将完全替代默认 System Prompt...')}
                                 rows={3}
                                 className="w-full bg-bg-main border border-border-main rounded-xl px-4 py-2.5 text-sm text-text-main
                                   placeholder:text-text-muted/65 resize-none
@@ -1648,7 +1650,7 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
                 </div>
                 <ProfileInput label="关注点（逗号分隔）" value={(draft.profile?.focus || []).join(', ')} placeholder="新需求, 报价, 截止时间" onChange={v => onDraftChange({ ...draft, profile: { ...draft.profile, focus: v.split(',').map(s => s.trim()).filter(Boolean) } })} />
                 <ProfileInput label="忽略内容（逗号分隔）" value={(draft.profile?.ignore || []).join(', ')} placeholder="闲聊, 表情, 广告" onChange={v => onDraftChange({ ...draft, profile: { ...draft.profile, ignore: v.split(',').map(s => s.trim()).filter(Boolean) } })} />
-                {/* 摘要风格 — preset chips */}
+                {/* 摘要风格 — preset chips + 自定义 */}
                 <div>
                   <label className="text-xs text-text-muted block mb-1.5">摘要风格</label>
                   <div className="flex flex-wrap gap-1.5">
@@ -1657,6 +1659,7 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
                       { key: '行动项优先', label: '行动项优先' },
                       { key: '完整复盘', label: '完整复盘' },
                       { key: '极简速览', label: '极简速览' },
+                      { key: 'custom', label: '自定义' },
                     ].map(s => (
                       <button
                         key={s.key}
@@ -1670,20 +1673,22 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
                     ))}
                   </div>
                 </div>
-                {/* 自定义摘要指令 — completely replaces system prompt */}
-                <div>
-                  <label className="text-xs text-text-muted font-medium mb-1.5">自定义摘要指令</label>
-                  <textarea
-                    value={draft.profile?.custom_prompt || ''}
-                    onChange={e => onDraftChange({ ...draft, profile: { ...draft.profile, custom_prompt: e.target.value } })}
-                    placeholder="填写后将完全替代默认 System Prompt，自行控制AI角色和输出格式。例如：你是一个项目进度追踪助手，只输出待办事项和截止时间..."
-                    rows={3}
-                    className="w-full bg-bg-main border border-border-main rounded-xl px-4 py-2.5 text-sm text-text-main
-                      placeholder:text-text-muted/65 resize-none
-                      focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/15"
-                  />
-                  <p className="text-xs text-status-warn mt-1">⚠ 填写后完全替代默认摘要指令，请确保指令完整</p>
-                </div>
+                {/* 自定义摘要指令 — 仅选中自定义时显示 */}
+                {(draft.profile?.style || '') === 'custom' && (
+                  <div>
+                    <label className="text-xs text-text-muted font-medium mb-1.5">自定义摘要指令</label>
+                    <textarea
+                      value={draft.profile?.custom_prompt || ''}
+                      onChange={e => onDraftChange({ ...draft, profile: { ...draft.profile, custom_prompt: e.target.value } })}
+                      placeholder={draft.profile?.custom_prompt ? '' : (config.default_system_prompt || '输入自定义摘要指令...')}
+                      rows={3}
+                      className="w-full bg-bg-main border border-border-main rounded-xl px-4 py-2.5 text-sm text-text-main
+                        placeholder:text-text-muted/65 resize-none
+                        focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/15"
+                    />
+                    <p className="text-xs text-status-warn mt-1">⚠ 填写后完全替代默认摘要指令，请确保指令完整</p>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}

@@ -220,7 +220,12 @@ function GroupEditor({ group, accounts, onSave, onCancel }) {
   const [name, setName] = useState(group?.name || '')
   const [cronExpr, setCronExpr] = useState(group?.cron_expr || '')
   const [template, setTemplate] = useState(group?.digest_template || 'default')
-  const [customPrompt, setCustomPrompt] = useState(group?.custom_prompt || '')
+  const [customPrompt, setCustomPrompt] = useState(() => {
+    if (group?.digest_template === 'custom' && !group?.custom_prompt) {
+      return DEFAULT_CUSTOM_PROMPT
+    }
+    return group?.custom_prompt || ''
+  })
   const [lookback, setLookback] = useState(group?.lookback_hours || 24)
   const [lookbackMode, setLookbackMode] = useState(group?.lookback_mode || 'auto')
   const [pushTarget, setPushTarget] = useState(group?.push_target === 'ilink')
@@ -1052,14 +1057,14 @@ export default function OATab() {
       const data = await res.json()
       if (data.ok && data.digest_text) {
         setLastDigest({ groupId, text: data.digest_text, articlesCount: data.articles_count || 0 })
-        setDigestProgress('')
+        setDigestProgress(`✅ 摘要生成完成（${data.articles_count || 0} 篇文章）`)
+        setTimeout(() => setDigestProgress(''), 3000)
       } else if (!data.ok && data.error) {
         setDigestProgress(`⚠ ${data.error}`)
         setTimeout(() => setDigestProgress(''), 4000)
       }
     } catch {}
     setDigestRunning('')
-    setDigestProgress('')
   }
 
   async function handleSearch() {

@@ -124,6 +124,9 @@ def _default_config() -> AssistantConfig:
 
 def _config_to_dict(cfg: AssistantConfig) -> dict:
     """Serialize AssistantConfig to JSON-safe dict."""
+    # Import the digest system prompt for the frontend to reference
+    from .digest import DIGEST_SYSTEM_PROMPT, STYLE_PRESETS
+
     result = {
         "version": cfg.version,
         "assistant_enabled": cfg.assistant_enabled,
@@ -131,6 +134,8 @@ def _config_to_dict(cfg: AssistantConfig) -> dict:
         "alert_groups": [],
         "oa_monitor_groups": [],
         "digest_groups": [],
+        "default_system_prompt": DIGEST_SYSTEM_PROMPT,
+        "style_presets": STYLE_PRESETS,
         "notification_queue": {
             "enabled": cfg.notification_queue.enabled,
             "retention_hours": cfg.notification_queue.retention_hours,

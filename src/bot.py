@@ -386,8 +386,8 @@ class Bot:
                 pass
 
             if asst_cfg.assistant_enabled:
+                # Alert engine — message-triggered, no start() needed
                 assistant_alert = AlertEngine(asst_cfg, outbox)
-                assistant_alert.start()
                 try:
                     from src.web.server import register_assistant_alert
                     register_assistant_alert(assistant_alert)
@@ -396,14 +396,17 @@ class Bot:
 
                 # OA Monitor — independent polling for gh_xxx accounts
                 if asst_cfg.oa_monitor_groups:
-                    from src.assistant.oa_monitor import OAMonitorEngine
-                    oa_monitor = OAMonitorEngine(asst_cfg, outbox)
-                    oa_monitor.start()
                     try:
-                        from src.web.server import register_oa_monitor
-                        register_oa_monitor(oa_monitor)
-                    except Exception:
-                        pass
+                        from src.assistant.oa_monitor import OAMonitorEngine
+                        oa_monitor = OAMonitorEngine(asst_cfg, outbox)
+                        oa_monitor.start()
+                        try:
+                            from src.web.server import register_oa_monitor
+                            register_oa_monitor(oa_monitor)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.warning("OA Monitor init failed (continuing without): %s", e)
 
                 logger.info("Assistant: alert engine + OA monitor + digest scheduler started")
             else:
