@@ -3079,20 +3079,50 @@ def _get_member_to_groups_index(client) -> dict[str, set[str]]:
 
 _group_member_count_cache: dict[str, tuple[int, float]] = {}
 _GROUP_MEMBER_COUNT_TTL = 300  # 5 minutes
+_MEMBER_COUNTS_FILE = Path("data/member_counts.json")
+
+
+def _load_member_counts_cache() -> dict[str, int]:
+    """Load persisted member counts from JSON file."""
+    if not _MEMBER_COUNTS_FILE.exists():
+        return {}
+    try:
+        return json.loads(_MEMBER_COUNTS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_member_counts_cache(counts: dict[str, int]) -> None:
+    """Persist member counts to JSON file."""
+    try:
+        _MEMBER_COUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _MEMBER_COUNTS_FILE.write_text(
+            json.dumps(counts, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+    except OSError:
+        pass  # Non-critical, continue without persisting
 
 
 def handle_group_member_counts(params, config: AssistantConfig):
     """GET /api/groups/member-counts — Batch get real member counts for all chatrooms.
 
     Returns {chatroom_id: member_count} using WCDB DLL with 5-min cache.
-    Note: This API is slow (~2s) due to per-group DLL calls. Frontend loads it
-    async after initial render to avoid blocking page display.
+    First tries to load from persisted cache (data/member_counts.json),
+    then falls back to WCDB queries and updates the cache.
     """
     client = get_wcdb_client()
     if not client:
-        return {"ok": False, "error": "WCDB not available"}
+        # Fallback: return persisted cache if available
+        return {"ok": True, "counts": _load_member_counts_cache(), "from_cache": True}
 
     now = time.time()
+
+    # Load persisted cache on first call
+    if not _group_member_count_cache:
+        persisted = _load_member_counts_cache()
+        for chat_id, count in persisted.items():
+            _group_member_count_cache[chat_id] = (count, 0)  # timestamp=0 means persistent
 
     # Check if overall cache is still valid
     cache_ts = _group_member_count_cache.get("_ts", (0, 0))[0]
@@ -3125,6 +3155,8 @@ def handle_group_member_counts(params, config: AssistantConfig):
                 counts[chatroom_id] = 0
 
         _group_member_count_cache["_ts"] = (now, now)
+        # Persist to disk so next restart doesn't need DLL queries
+        _save_member_counts_cache(counts)
         return {"ok": True, "counts": counts}
     except Exception as e:
         return {"ok": False, "error": str(e)}

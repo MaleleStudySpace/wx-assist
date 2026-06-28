@@ -193,19 +193,27 @@ export default function AssistantPanel() {
         setConfig(normalizeConfig(configData.config || defaultConfig()))
         if (groupsData.ok) {
           setGroups(groupsData.groups || [])
-          // Fetch real member counts from WCDB and merge
-          try {
-            const countsRes = await fetch(`${API_BASE}/api/groups/member-counts`)
-            const countsData = await countsRes.json()
-            if (countsData.ok && countsData.counts) {
-              setGroups(prev => prev.map(g => ({
-                ...g,
-                member_count: countsData.counts[g.chat_id] ?? g.member_count,
-              })))
-            }
-          } catch {
-            // Fallback: keep original counts from messages.db
-          }
+          // === 性能优化：禁用 WCDB 实时成员数查询 ===
+          // 原因：wcdb_api.dll 不是线程安全的，每次 DLL 调用需串行排队。
+          // 对每个群调用 get_group_member_count() 会造成 N×100ms 延迟，
+          // 群多时首次加载需数秒甚至卡顿。member_count 非关键信息，
+          // 当前使用 messages.db 的统计（基于历史消息的粗略值）已足够。
+          // 后续如需启用真实成员数，可考虑：
+          // 1. 后台定时预计算并持久化到 data/member_counts.json
+          // 2. 用户点击群详情时再异步加载
+          // ---
+          // try {
+          //   const countsRes = await fetch(`${API_BASE}/api/groups/member-counts`)
+          //   const countsData = await countsRes.json()
+          //   if (countsData.ok && countsData.counts) {
+          //     setGroups(prev => prev.map(g => ({
+          //       ...g,
+          //       member_count: countsData.counts[g.chat_id] ?? g.member_count,
+          //     })))
+          //   }
+          // } catch {
+          //   // Fallback: keep original counts from messages.db
+          // }
         }
       } catch {
         setConfig(defaultConfig())
