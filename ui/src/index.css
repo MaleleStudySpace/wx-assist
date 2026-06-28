@@ -1,0 +1,287 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Expose custom theme variables to Tailwind */
+  --color-bg-main: var(--bg-main);
+  --color-bg-card: var(--bg-card);
+  --color-bg-raised: var(--bg-raised);
+  --color-bg-inset: var(--bg-inset);
+  --color-text-main: var(--text-main);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-border-main: var(--border-main);
+  --color-border-strong: var(--border-strong);
+  /* Brand green: driven by CSS var so light/dark modes differ.
+     Light: calm teal-green #1a8a5e. Dark: softer green #2dd4a0. */
+  --color-brand-green: var(--brand-green);
+  --color-brand-green-hover: var(--brand-green-hover);
+  --color-brand-green-light: var(--brand-green-light);
+
+  /* Semantic status colors */
+  --color-status-error: var(--status-error);
+  --color-status-error-soft: var(--status-error-soft);
+  --color-status-warn: var(--status-warn);
+  --color-status-warn-soft: var(--status-warn-soft);
+  --color-status-info: var(--status-info);
+  --color-status-info-soft: var(--status-info-soft);
+}
+
+:root {
+  /* Light Mode */
+  --bg-main: #ffffff;
+  --bg-card: #fafafa;
+  --bg-raised: #f0f0f0;
+  --bg-inset: #e8e8e8;
+  --text-main: #0d0d0d;
+  --text-secondary: #444444;
+  --text-muted: #707070;
+  --border-main: rgba(0, 0, 0, 0.12);
+  --border-strong: rgba(0, 0, 0, 0.18);
+  --brand-green-light: #d4fae8;
+
+  /* Brand green light mode: calm teal-green, not eye-burning */
+  --brand-green: #1a8a5e;
+  --brand-green-hover: #15704c;
+
+  /* Semantic status colors */
+  --status-error: #e5484d;
+  --status-error-soft: rgba(229, 72, 77, 0.08);
+  --status-warn: #c37d0d;
+  --status-warn-soft: rgba(195, 125, 13, 0.08);
+  --status-info: #3772cf;
+  --status-info-soft: rgba(55, 114, 207, 0.08);
+
+  /* Avatar fallback colors */
+  --avatar-group-bg: rgba(55, 114, 207, 0.12);
+  --avatar-group-fg: #3772cf;
+  --avatar-private-bg: rgba(139, 115, 85, 0.12);
+  --avatar-private-fg: #8B7355;
+}
+
+.dark {
+  /* Dark Mode */
+  --bg-main: #0a0a0a;
+  --bg-card: #111111;
+  --bg-raised: #181818;
+  --bg-inset: #1e1e1e;
+  --text-main: #e8e8e8;
+  --text-secondary: #b8b8b8;
+  --text-muted: #a3a3a3;
+  --border-main: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.10);
+  --brand-green-light: rgba(24, 226, 153, 0.15);
+
+  /* Brand green dark mode: keep green identity but softer than #18E299 */
+  --brand-green: #2dd4a0;
+  --brand-green-hover: #22b88a;
+
+  /* Semantic status colors (slightly adjusted for dark bg) */
+  --status-error: #f87171;
+  --status-error-soft: rgba(248, 113, 113, 0.10);
+  --status-warn: #fbbf24;
+  --status-warn-soft: rgba(251, 191, 36, 0.10);
+  --status-info: #60a5fa;
+  --status-info-soft: rgba(96, 165, 250, 0.10);
+
+  /* Avatar fallback colors */
+  --avatar-group-bg: rgba(96, 165, 250, 0.14);
+  --avatar-group-fg: #60a5fa;
+  --avatar-private-bg: rgba(180, 142, 98, 0.14);
+  --avatar-private-fg: #c89b62;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  min-height: 100vh;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* ── Readability guardrails ──────────────────────────────────────────────
+   Text scale:
+   - text-main: primary readable content
+   - text-secondary: labels, secondary body text, metadata that still matters
+   - text-muted: low-priority helper text only; contrast is AA-safe in light/dark
+
+   Avoid combining text-xs + text-muted for important controls or explanations.
+   Use text-secondary for labels/buttons, and reserve text-muted for hints. */
+@utility text-readable-muted {
+  color: var(--text-muted);
+  font-size: 0.8125rem; /* 13px minimum for muted copy */
+  line-height: 1.35;
+}
+
+@utility text-readable-label {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  font-weight: 500;
+}
+
+/* Customized sleek scrollbar — global + Tailwind utility */
+/* All scrollable containers get thin themed scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+  transition: background 0.2s;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--brand-green); }
+
+/* Tailwind utility for explicit thin scrollbar */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+  &::-webkit-scrollbar { width: 6px; height: 6px; }
+  &::-webkit-scrollbar-track { background: transparent; }
+  &::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 9999px; }
+  &::-webkit-scrollbar-thumb:hover { background: var(--brand-green); }
+}
+
+/* ── Native form controls: select, input[type=number] ─── */
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px !important;
+  cursor: pointer;
+}
+select:focus {
+  outline: none;
+  border-color: var(--brand-green) !important;
+  box-shadow: 0 0 0 2px rgba(24, 226, 153, 0.12);
+}
+
+/* Number input: hide ugly default spinners */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* ── Feature Guide: highlight pulse + animations ── */
+
+/* Highlight ring around targeted elements */
+.guide-highlight {
+  position: relative;
+  z-index: 10;
+  border-radius: 12px;
+}
+.guide-highlight::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  border: 2px solid var(--brand-green);
+  box-shadow: 0 0 12px rgba(24,226,153,0.45), 0 0 24px rgba(24,226,153,0.1);
+  animation: hlPulse 2s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 20;
+}
+@keyframes hlPulse {
+  0%, 100% { opacity: 0.4; box-shadow: 0 0 8px rgba(24,226,153,0.45), 0 0 16px rgba(24,226,153,0.08); }
+  50% { opacity: 1; box-shadow: 0 0 16px rgba(24,226,153,0.45), 0 0 32px rgba(24,226,153,0.15); }
+}
+
+/* Bounce when highlight first appears */
+.guide-highlight-active {
+  animation: elBounce 0.6s cubic-bezier(0.16,1,0.3,1);
+}
+@keyframes elBounce {
+  0% { transform: scale(1); }
+  30% { transform: scale(1.03); }
+  60% { transform: scale(0.99); }
+  100% { transform: scale(1); }
+}
+
+/* Sidebar nav pulse when step activates a tab */
+.nav-item-guide-pulse {
+  animation: navPulse 2.5s ease-out;
+}
+@keyframes navPulse {
+  0% { box-shadow: 0 0 0 0 rgba(24,226,153,0); }
+  12% { box-shadow: 0 0 0 8px rgba(24,226,153,0.35); }
+  25% { box-shadow: 0 0 0 4px rgba(24,226,153,0.18); }
+  40% { box-shadow: 0 0 0 10px rgba(24,226,153,0.25); }
+  100% { box-shadow: 0 0 0 0 rgba(24,226,153,0); }
+}
+
+/* Page enter animation */
+@keyframes pageIn {
+  from { opacity: 0; transform: translateX(28px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* Typing dots for AI drawer */
+@keyframes typingBlink {
+  0%, 60%, 100% { opacity: 0.2; }
+  30% { opacity: 1; }
+}
+
+/* Ping animation for welcome badge dot */
+@keyframes ping {
+  0% { transform: scale(1); opacity: 0.6; }
+  75%, 100% { transform: scale(2.5); opacity: 0; }
+}
+
+/* Dashboard: pulse rings around Robot icon — running state */
+@keyframes dashPulse1 {
+  0% { transform: scale(1); opacity: 0.6; box-shadow: 0 0 0 0 rgba(24,226,153,0.3); }
+  70% { transform: scale(1.6); opacity: 0; box-shadow: 0 0 20px 4px rgba(24,226,153,0); }
+  100% { transform: scale(1.6); opacity: 0; box-shadow: 0 0 20px 4px rgba(24,226,153,0); }
+}
+@keyframes dashPulse2 {
+  0% { transform: scale(1); opacity: 0.4; box-shadow: 0 0 0 0 rgba(24,226,153,0.2); }
+  70% { transform: scale(2.0); opacity: 0; box-shadow: 0 0 28px 6px rgba(24,226,153,0); }
+  100% { transform: scale(2.0); opacity: 0; box-shadow: 0 0 28px 6px rgba(24,226,153,0); }
+}
+/* Dashboard: subtle pulse — stopped/idle state */
+@keyframes dashPulseIdle {
+  0% { transform: scale(1); opacity: 0.2; }
+  50% { transform: scale(1.4); opacity: 0; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
+/* Dashboard: breathing glow behind service card */
+@keyframes dashboardGlow {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.5; }
+  33% { transform: translate(5%, -8%) scale(1.05); opacity: 1; }
+  66% { transform: translate(-3%, 5%) scale(0.98); opacity: 0.7; }
+}
+
+/* Register as Tailwind utilities so they survive tree-shaking */
+@utility animate-dash-pulse-1 {
+  animation: dashPulse1 2s ease-out infinite;
+}
+@utility animate-dash-pulse-2 {
+  animation: dashPulse2 3s ease-out infinite;
+  animation-delay: 1s;
+}
+@utility animate-dash-pulse-idle {
+  animation: dashPulseIdle 3.5s ease-out infinite;
+}
+@utility animate-dashboard-glow {
+  animation: dashboardGlow 8s ease-in-out infinite;
+}
+
+/* Reduced motion: disable all guide + dashboard animations */
+@media (prefers-reduced-motion: reduce) {
+  .guide-highlight::after { animation: none !important; opacity: 1; }
+  .guide-highlight-active { animation: none !important; }
+  .nav-item-guide-pulse { animation: none !important; }
+  .animate-dash-pulse-1, .animate-dash-pulse-2, .animate-dash-pulse-idle { animation: none !important; opacity: 0 !important; }
+  .animate-dashboard-glow { animation: none !important; }
+}

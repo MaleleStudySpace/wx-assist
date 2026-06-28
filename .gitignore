@@ -1,0 +1,89 @@
+# Environment
+.env
+.env.*
+
+# Data — ALL runtime data (databases, configs, caches, exports)
+data/
+!data/.gitkeep
+
+# Chat dump files (contain real user data)
+msgs.json
+sessions.json
+test_msgs.json
+
+# Node.js
+node_modules/
+package-lock.json
+
+# Logs
+*.log
+wx4py.log
+
+# Python
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+.worktrees/
+dist/
+build/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Cached WeChat assets
+wechatdata/
+
+# Screenshot references
+wxid2p/
+
+# Model weights (large binaries)
+skill/**/*.bin
+skill/**/*.safetensors
+
+# Runtime training artifacts
+TRAIN_DONE.flag
+
+# Dev tools (all tools are dev-only, not production)
+tools/
+
+# Claude Code & worktrees
+.claude/
+.worktrees/
+
+# Claude session memory
+memory/
+
+# === Binary / Decryption files ===
+
+# DLL binaries (closed-source, compliance risk)
+lib/*.dll
+lib/*.dll.bak
+
+# WASM decryption internals (keys, states, binaries, debug scripts — all local-only)
+lib/wasm/
+
+# Compiled executable
+src/webot.exe
+
+# C build artifacts
+src/wechat/native/*.c
+src/wechat/native/*.exe
+src/wechat/native/*.dll
+
+# Internal docs
+docs/
+
+# Build artifacts
+build/
+*.spec
+
+# PyInstaller output
+dist/
