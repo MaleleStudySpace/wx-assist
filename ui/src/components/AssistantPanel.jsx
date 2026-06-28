@@ -1775,6 +1775,10 @@ function ProfileInput({ label, value, placeholder, onChange }) {
 
 function NotificationCard({ notification, onAck, onIgnore }) {
   const statusColor = statusColors[notification.status] || '#a0aec0'
+  const [expanded, setExpanded] = useState(false)
+  const rawContent = notification.content || ''
+  const isLong = rawContent.length > 200
+  const displayContent = expanded ? rawContent : (isLong ? rawContent.slice(0, 200) + '...' : rawContent)
   return (
     <div className="bg-bg-raised/40 border border-border-main rounded-xl p-4 transition-all hover:border-border-main/80">
       <div className="flex items-start justify-between gap-3">
@@ -1791,6 +1795,12 @@ function NotificationCard({ notification, onAck, onIgnore }) {
           </div>
           <p className="text-sm text-text-main font-medium truncate">{notification.title || '无标题'}</p>
           <p className="text-xs text-text-muted mt-0.5">{notification.group_name || notification.chat_id || '未知群聊'}</p>
+          <pre className="whitespace-pre-wrap text-sm text-text-main/75 mt-3 font-sans leading-relaxed">{displayContent}</pre>
+          {isLong && (
+            <button onClick={() => setExpanded(!expanded)} className="mt-1 text-xs text-brand-green hover:underline cursor-pointer font-medium">
+              {expanded ? '收起' : '展开全部'}
+            </button>
+          )}
         </div>
         {notification.status === 'pending' && (
           <div className="flex gap-1.5 shrink-0">
@@ -1799,7 +1809,6 @@ function NotificationCard({ notification, onAck, onIgnore }) {
           </div>
         )}
       </div>
-      <pre className="whitespace-pre-wrap text-sm text-text-main/75 mt-3 font-sans leading-relaxed">{notification.content}</pre>
     </div>
   )
 }
