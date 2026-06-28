@@ -4302,7 +4302,7 @@ def handle_oa_digest_run(params, config: AssistantConfig):
                 from src.assistant.outbox import Outbox
                 import json as _json
                 outbox = Outbox()
-                oa_title = f"📰 {group.name} — 公众号摘要"
+                oa_title = f"📰 {group.name} · 公众号摘要"
                 oa_content = _json.dumps({
                     "group": group.name,
                     "articles_count": result.get("articles_count", 0),
@@ -4329,8 +4329,9 @@ def handle_oa_digest_run(params, config: AssistantConfig):
                     from src.wechat.ilink_push import get_ilink_push, format_for_wechat
                     ilink = get_ilink_push()
                     if ilink.is_available():
-                        title = f"📰 {group.name} — 公众号摘要"
-                        content = f"公众号组: {group.name}\n文章数: {result.get('articles_count', 0)} 篇\n\n{result['digest_text']}"
+                        title = f"📰 {group.name} · 公众号摘要"
+                        ac = result.get('articles_count', 0)
+                        content = f"📄 {ac} 篇文章\n\n{result['digest_text']}"
                         msg = format_for_wechat(title, content)
                         push_result = ilink.send_message(msg)
                         push_ok = push_result.get("success", False)

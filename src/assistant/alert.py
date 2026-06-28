@@ -115,17 +115,16 @@ class AlertEngine:
 
             if matched:
                 import json as _json
-                title = "关键词命中"
+                title = f"🔑 关键词命中 · {group_name}"
                 notif_content = _json.dumps({
                     "group": group_name,
                     "sender": sender_name,
                     "keywords": matched,
                     "message": content,
                     "display": (
-                        f"[群] {group_name}\n"
-                        f"[发送人] {sender_name}\n"
-                        f"[关键词] {', '.join(matched)}\n"
-                        f"[消息] {content}"
+                        f"👤 **{sender_name}**\n"
+                        f"💬 {content}\n"
+                        + "🏷️ " + " ".join(f"`{kw}`" for kw in matched)
                     ),
                 }, ensure_ascii=False)
                 nid = self._outbox.add(
