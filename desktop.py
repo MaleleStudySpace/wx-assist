@@ -58,7 +58,6 @@ def start_bot():
         config = load_config()
         update_status(
             wechat_backend=config.wechat_backend,
-            ai_backend=config.ai_backend,
         )
         from src.bot import Bot
         bot = Bot(config)
