@@ -1,6 +1,9 @@
 """LLM interaction logger — records full request/response for observability.
 
-Writes two log lines per LLM call:
+Writes to a dedicated log file (data/llm.log) separate from the main bot.log,
+so LLM traffic can be inspected independently.
+
+Two log lines per LLM call:
   1. [LLM] summary line — compact, always visible in the log viewer
   2. [LLM-DETAIL] JSON line — full prompts + response, parsed by frontend
      for collapsible display.
@@ -13,10 +16,56 @@ import logging
 import re
 import threading
 import time
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
+# ── Dedicated LLM log file ─────────────────────────────────────────────
+# Separate from the main bot.log so LLM traffic can be reviewed independently.
+
+_LLM_LOG_PATH = Path("data/llm.log")
+_LLM_LOG_MAX_BYTES = 10 * 1024 * 1024   # 10 MB per file
+_LLM_LOG_BACKUP_COUNT = 3                # keep 3 rotated files
+
+_llm_logger: logging.Logger | None = None
+_llm_logger_lock = threading.Lock()
+
+
+def _get_llm_logger() -> logging.Logger:
+    """Get or create the dedicated LLM logger with its own file handler."""
+    global _llm_logger
+    if _llm_logger is not None:
+        return _llm_logger
+
+    with _llm_logger_lock:
+        if _llm_logger is not None:
+            return _llm_logger
+
+        lg = logging.getLogger("llm")
+        lg.setLevel(logging.DEBUG)
+        lg.propagate = False  # Don't duplicate to root logger / bot.log
+
+        # Ensure data/ exists
+        _LLM_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        handler = RotatingFileHandler(
+            str(_LLM_LOG_PATH),
+            maxBytes=_LLM_LOG_MAX_BYTES,
+            backupCount=_LLM_LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+        fmt = "%(asctime)s %(message)s"
+        datefmt = "%Y-%m-%d %H:%M:%S"
+        handler.setFormatter(logging.Formatter(fmt, datefmt))
+        lg.addHandler(handler)
+
+        _llm_logger = lg
+        return _llm_logger
+
+
+# Also keep a module-level logger for the summary line (goes to bot.log too)
 logger = logging.getLogger(__name__)
 
-# ── Thread-safe interaction counter ──────────────────────────────────
+# ── Thread-safe interaction counter ──────────────────────────────────────
 _counter = 0
 _counter_lock = threading.Lock()
 
@@ -29,7 +78,7 @@ def _next_id() -> str:
         return f"llm_{ts}_{_counter:04d}"
 
 
-# ── Secret masking ──────────────────────────────────────────────────
+# ── Secret masking ──────────────────────────────────────────────────────
 
 _SECRET_PATTERNS = [
     # Bearer tokens:  Authorization: Bearer sk-xxxxx
@@ -57,7 +106,7 @@ def _truncate(text: str, max_len: int = 0) -> str:
     return text
 
 
-# ── Core logging function ───────────────────────────────────────────
+# ── Core logging function ───────────────────────────────────────────────
 
 def log_llm_interaction(
     backend: str,
@@ -77,7 +126,11 @@ def log_llm_interaction(
         backend: "deepseek" | "claude" | "oa_digest"
         call_type: "chat" | "proactive_chat" | "summarize_direct" |
                    "summarize_chunk" | "merge_summaries" |
-                   "consolidate_memory" | "oa_digest"
+                   "consolidate_memory" | "oa_digest" |
+                   "group_digest" | "group_digest_memory" |
+                   "ai_chat_stream" | "ai_chat_compress" |
+                   "ai_chat_precompress" | "sns_ai_summarize" |
+                   "sns_precompress" | "provider_detect"
         model: Model identifier string.
         system_prompt: Full system prompt sent to the LLM.
         user_prompt: Full user prompt sent to the LLM.
@@ -133,6 +186,9 @@ def log_llm_interaction(
     # the log file is read back by the server and re-serialized as JSON.
     # Chinese characters become \uXXXX escapes which are universally safe.
     detail_json = json.dumps(detail, ensure_ascii=True)
+
+    # Write detail to BOTH the main bot.log AND the dedicated llm.log
     logger.info("[LLM-DETAIL] %s", detail_json)
+    _get_llm_logger().info("[LLM-DETAIL] %s", detail_json)
 
     return interaction_id

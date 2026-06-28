@@ -8,6 +8,7 @@ from datetime import datetime
 from .config import AssistantConfig, DigestGroup, OAGroup, save_assistant_config
 from .digest import filter_messages, build_digest_prompt, generate_memory_update_prompt, DIGEST_SYSTEM_PROMPT, STYLE_PRESETS
 from .outbox import Outbox
+from ..utils.llm_logger import log_llm_interaction
 
 logger = logging.getLogger(__name__)
 
@@ -329,28 +330,97 @@ class DigestScheduler:
                     len(system_prompt), len(prompt), dg.group_name)
 
         try:
+            llm_start = time.monotonic()
             digest_text = self._summarizer._call_digest_api(
                 system_prompt,
                 [{"role": "user", "content": prompt}],
             ) or "摘要生成失败"
+            llm_latency = (time.monotonic() - llm_start) * 1000
+            log_llm_interaction(
+                backend=getattr(self._summarizer, "_backend_name", "unknown"),
+                call_type="group_digest",
+                model=getattr(self._summarizer, "model", "unknown"),
+                system_prompt=system_prompt,
+                user_prompt=prompt,
+                response=digest_text,
+                latency_ms=llm_latency,
+                extra={
+                    "group_id": dg.group_id,
+                    "group_name": dg.group_name,
+                    "chat_id": chat_id,
+                    "msg_count": len(filtered),
+                    "unread_only": dg.unread_only,
+                    "lookback_hours": dg.lookback_hours,
+                    "has_custom_prompt": bool(has_custom),
+                },
+            )
             logger.info("[DIGEST] Step 4/7: LLM call success for '%s' — result len=%d, preview=%s",
                          dg.group_name, len(digest_text), digest_text[:100].replace('\n', ' '))
         except Exception as e:
+            llm_latency = (time.monotonic() - llm_start) * 1000 if "llm_start" in locals() else 0
+            log_llm_interaction(
+                backend=getattr(self._summarizer, "_backend_name", "unknown"),
+                call_type="group_digest",
+                model=getattr(self._summarizer, "model", "unknown"),
+                system_prompt=system_prompt,
+                user_prompt=prompt,
+                response=f"[Error: {e}]",
+                latency_ms=llm_latency,
+                extra={
+                    "group_id": dg.group_id,
+                    "group_name": dg.group_name,
+                    "chat_id": chat_id,
+                    "msg_count": len(filtered),
+                    "error": str(e),
+                },
+            )
             logger.error("[DIGEST] Step 4/7: LLM call failed for '%s': %s", dg.group_name, e)
             digest_text = f"摘要生成失败: {e}"
 
         # 5. Update memory
+        mem_system_prompt = "你是一个群聊记忆助手，负责记录群聊摘要要点。用中文，≤500字。"
         try:
             mem_prompt = generate_memory_update_prompt(dg.memory, digest_text)
+            mem_start = time.monotonic()
             new_memory = self._summarizer._call_chat_api(
-                "你是一个群聊记忆助手，负责记录群聊摘要要点。用中文，≤500字。",
+                mem_system_prompt,
                 [{"role": "user", "content": mem_prompt}],
+            )
+            mem_latency = (time.monotonic() - mem_start) * 1000
+            log_llm_interaction(
+                backend=getattr(self._summarizer, "_backend_name", "unknown"),
+                call_type="group_digest_memory",
+                model=getattr(self._summarizer, "model", "unknown"),
+                system_prompt=mem_system_prompt,
+                user_prompt=mem_prompt,
+                response=new_memory or "",
+                latency_ms=mem_latency,
+                extra={
+                    "group_id": dg.group_id,
+                    "group_name": dg.group_name,
+                    "existing_memory_len": len(dg.memory or ""),
+                },
             )
             dg.memory = new_memory[:500] if new_memory else dg.memory
             save_assistant_config(self._config)
             logger.info("[DIGEST] Step 5/7: Memory updated for '%s' (%d → %d chars)",
                          dg.group_name, len(dg.memory or ""), len(new_memory or ""))
         except Exception as e:
+            mem_latency = (time.monotonic() - mem_start) * 1000 if "mem_start" in locals() else 0
+            log_llm_interaction(
+                backend=getattr(self._summarizer, "_backend_name", "unknown"),
+                call_type="group_digest_memory",
+                model=getattr(self._summarizer, "model", "unknown"),
+                system_prompt=mem_system_prompt,
+                user_prompt=generate_memory_update_prompt(dg.memory, digest_text) if dg.memory else "",
+                response=f"[Error: {e}]",
+                latency_ms=mem_latency,
+                extra={
+                    "group_id": dg.group_id,
+                    "group_name": dg.group_name,
+                    "error": str(e),
+                },
+            )
             logger.warning("[DIGEST] Step 5/7: Memory update failed for '%s': %s", dg.group_name, e)
 
         # 6. Push to outbox
