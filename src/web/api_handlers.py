@@ -180,9 +180,7 @@ def get_wcdb_client():
 
 def handle_fav_list(params, config: AssistantConfig):
     """GET /api/fav/list — List favorites"""
-    logger.info("[API-TRACE] handle_fav_list ENTER thread=%s", threading.current_thread().name)
     reader = _get_wcdb_fav_reader()
-    logger.info("[API-TRACE] handle_fav_list got reader=%s", reader is not None)
     if not reader:
         return {"ok": False, "error": "WCDB not available"}
 
@@ -192,10 +190,8 @@ def handle_fav_list(params, config: AssistantConfig):
         limit = int(params.get("limit", [200])[0]) if params.get("limit") else 200
         offset = int(params.get("offset", [0])[0]) if params.get("offset") else 0
 
-        # Use test module's working get_items method
-        logger.info("[API-TRACE] /api/fav/list: calling get_items thread=%s", threading.current_thread().name)
         items = reader.get_items(limit=limit, offset=offset)
-        logger.info("[API-TRACE] /api/fav/list: get_items took %.0fms, got %d items",
+        logger.debug("[API-TRACE] /api/fav/list: get_items took %.0fms, got %d items",
                     (time.monotonic() - t0) * 1000, len(items) if items else 0)
 
         # ── Build tag mapping (fav_local_id -> [tag_info]) ──
@@ -1472,9 +1468,8 @@ def handle_chat_image(params, config):
 
 def handle_chat_sessions(params, config: AssistantConfig):
     """GET /api/chat/sessions — List chat sessions with optional keyword search."""
-    logger.info("[API-TRACE] handle_chat_sessions ENTER thread=%s", threading.current_thread().name)
     client = get_wcdb_client()
-    logger.info("[API-TRACE] handle_chat_sessions got client=%s", client is not None)
+    logger.debug("[API-TRACE] handle_chat_sessions got client=%s", client is not None)
     if not client:
         return {"ok": False, "error": "WCDB not available"}
 
@@ -1483,7 +1478,7 @@ def handle_chat_sessions(params, config: AssistantConfig):
         keyword = params.get("keyword", [""])[0] if params.get("keyword") else ""
 
         # Get recent sessions
-        logger.info("[API-TRACE] /api/chat/sessions: calling get_sessions thread=%s", threading.current_thread().name)
+        logger.debug("[API-TRACE] /api/chat/sessions: calling get_sessions thread=%s", threading.current_thread().name)
         sessions = client.get_sessions(limit=500)
         logger.info("[API-TRACE] /api/chat/sessions: get_sessions took %.0fms, got %d sessions",
                     (time.monotonic() - t0) * 1000, len(sessions) if sessions else 0)
