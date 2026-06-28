@@ -302,14 +302,31 @@ export default function App() {
                 transition={{ duration: 0.2 }}
                 className="p-8"
               >
-                {activeTab === 'dashboard' && <Dashboard status={status} onTabChange={setActiveTab} />}
-                {activeTab === 'config' && <ConfigPanel activeSection={configSection} onNavigate={setConfigSection} />}
-                {activeTab === 'assistant' && <AssistantPanel />}
-                {activeTab === 'chats' && <ChatTab />}
-                {activeTab === 'favorites' && <FavoritesTab />}
-                {activeTab === 'moments' && <MomentsTab />}
-                {activeTab === 'oa' && <OATab />}
-                {activeTab === 'logs' && <LogViewer />}
+                {/* Keep all tabs mounted to avoid 3s re-mount on tab switch */}
+                <div style={{ display: activeTab === 'dashboard' ? '' : 'none' }}>
+                  <Dashboard status={status} onTabChange={setActiveTab} />
+                </div>
+                <div style={{ display: activeTab === 'config' ? '' : 'none' }}>
+                  <ConfigPanel activeSection={configSection} onNavigate={setConfigSection} />
+                </div>
+                <div style={{ display: activeTab === 'assistant' ? '' : 'none' }}>
+                  <AssistantPanel />
+                </div>
+                <div style={{ display: activeTab === 'chats' ? '' : 'none' }}>
+                  <ChatTab />
+                </div>
+                <div style={{ display: activeTab === 'favorites' ? '' : 'none' }}>
+                  <FavoritesTab />
+                </div>
+                <div style={{ display: activeTab === 'moments' ? '' : 'none' }}>
+                  <MomentsTab />
+                </div>
+                <div style={{ display: activeTab === 'oa' ? '' : 'none' }}>
+                  <OATab />
+                </div>
+                <div style={{ display: activeTab === 'logs' ? '' : 'none' }}>
+                  <LogViewer />
+                </div>
               </motion.div>
             </AnimatePresence>
           </>
