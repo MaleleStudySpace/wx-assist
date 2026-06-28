@@ -882,7 +882,7 @@ function PushRecordCard({ record }) {
   const typeBadge = PUSH_TYPE_BADGE[record.type] || 'bg-bg-raised text-text-muted border-border-main'
   const typeIcon = PUSH_TYPE_ICONS[record.type] || '📌'
   const groupName = record.group_name || record.chat_id || ''
-  const content = record.content || ''
+  const rawContent = record.content || ''
 
   // Format time: remove T between date and time
   const rawTime = record.push_at || record.created_at || ''
