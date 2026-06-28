@@ -53,47 +53,35 @@ class AlertEngine:
         sender_name = msg.get("sender_name", "")
         timestamp = msg.get("timestamp", 0)
 
-        logger.info("Alert check: group_name=%r chat_id=%r content=%r", group_name, chat_id, content[:30] if content else "")
+        logger.debug("Alert check: group_name=%r chat_id=%r content=%r", group_name, chat_id, content[:30] if content else "")
 
         if not group_name or not content:
-            logger.info("Alert: skipping msg with empty group_name=%r or content=%r", group_name, content[:30] if content else "")
+            logger.debug("Alert: skipping msg with empty group_name=%r or content=%r", group_name, content[:30] if content else "")
             return None
 
         # ── Age gate: skip old messages ──────────────────────────────
         msg_age = int(time.time()) - timestamp
         if msg_age > ALERT_MAX_AGE_SEC:
-            logger.info("Alert: msg too old (age=%ds, max=%ds) from '%s'", msg_age, ALERT_MAX_AGE_SEC, group_name)
+            logger.debug("Alert: msg too old (age=%ds, max=%ds) from '%s'", msg_age, ALERT_MAX_AGE_SEC, group_name)
             return None
 
         # ── Keyword matching ─────────────────────────────────────────
         now = time.time()
 
-        # Log all configured alert groups for debugging
-        logger.info("Alert: checking %d alert groups", len(self._config.alert_groups))
-        for i, ag in enumerate(self._config.alert_groups):
-            logger.info("Alert group[%d]: name=%r chat_id=%r keywords=%r enabled=%s",
-                i, ag.group_name, ag.chat_id, ag.keywords, ag.enabled)
-
+        logger.debug("Alert: checking %d groups for %s", len(self._config.alert_groups), group_name)
         for ag in self._config.alert_groups:
             if not ag.enabled:
-                logger.info("Alert: group %s disabled, skipping", ag.group_name or ag.chat_id)
                 continue
 
             # Group identity match
             group_matched = False
             if ag.chat_id and chat_id:
                 group_matched = ag.chat_id == chat_id
-                logger.info("Alert: chat_id match ag.chat_id=%r vs msg.chat_id=%r => %s", ag.chat_id, chat_id, group_matched)
             elif ag.group_name:
-                # Exact match (case-insensitive) — substring matching is too
-                # broad and causes false positives on short group names.
                 group_matched = ag.group_name.lower() == group_name.lower()
-                logger.info("Alert: group_name match ag=%r vs msg=%r => %s", ag.group_name, group_name, group_matched)
             if not group_matched:
-                logger.info("Alert: group not matched, skipping")
                 continue
             if not ag.keywords:
-                logger.info("Alert: group has no keywords, skipping")
                 continue
 
             content_lower = content.lower()
@@ -105,7 +93,7 @@ class AlertEngine:
                     cooldown_key = (chat_id or group_name, kw_lower)
                     last = self._last_triggered.get(cooldown_key, 0)
                     if now - last < ALERT_COOLDOWN_SEC:
-                        logger.info(
+                        logger.debug(
                             "Alert cooldown: '%s' in '%s' skipped (%.0fs ago)",
                             kw, group_name, now - last,
                         )
