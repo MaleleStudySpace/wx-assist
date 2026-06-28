@@ -308,13 +308,22 @@ class ILinkPush:
 
                 resp = requests.post(url, json=payload, headers=headers, timeout=API_TIMEOUT_SEC)
                 resp.raise_for_status()
+                # iLink sendmessage 成功返回空字符串，失败返回 JSON
+                # 所以先检查空响应（成功情况）
+                if not resp.text or not resp.text.strip():
+                    self._last_send_time = time.monotonic()
+                    logger.info("iLink message sent successfully (%d chars) [empty response]", len(text))
+                    return {"success": True}
+
                 data = resp.json()
+                logger.info("iLink sendmessage response (non-empty): %s", data)
 
                 ret = data.get("ret")
                 errcode = data.get("errcode")
                 errmsg = data.get("errmsg")
 
-                # Success: {} or { ret: 0 } AND no error code
+                # Success: ret=0 or empty body with no error code
+                # iLink API 返回空 {} 也算成功（已通过实测确认）
                 if (ret is None or ret == 0) and (errcode is None or errcode == 0):
                     self._last_send_time = time.monotonic()
                     logger.info("iLink message sent successfully (%d chars)", len(text))
