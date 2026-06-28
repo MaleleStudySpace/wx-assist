@@ -1186,12 +1186,8 @@ function PushSection() {
                   setTestResult('success')
                   setPushModalVisible(false)
                 } else if (currentEvent === 'error') {
-                  const errorMsg = data.detail && data.detail.includes('errcode=-14')
-                    ? '推送会话已失效。请先给助手发送一条消息激活；如仍失败，请重新扫码绑定。'
-                    : (data.detail || data.error || '推送失败')
-                  setTestResult(errorMsg)
-                  // Show error in modal for 3s then auto-close
-                  setTimeout(() => setPushModalVisible(false), 3000)
+                  setTestResult(data.detail || data.error || '推送失败')
+                  // 不自动关闭弹窗，让用户看到错误后手动关闭
                 }
               } catch {}
             }

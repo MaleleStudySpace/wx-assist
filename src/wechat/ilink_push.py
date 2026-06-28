@@ -340,7 +340,7 @@ class ILinkPush:
                         delay = SEND_RETRY_DELAYS[attempt] if attempt < len(SEND_RETRY_DELAYS) else 12.0
                         logger.warning("iLink rate limited, retry %d/%d in %.1fs", attempt + 1, SEND_MAX_RETRIES, delay)
                         if progress_callback:
-                            progress_callback(attempt + 1, SEND_MAX_RETRIES, delay, f"限流，{delay:.0f}秒后重试")
+                            progress_callback(attempt + 1, SEND_MAX_RETRIES, delay, f"请求超时，{delay:.0f}秒后第{attempt+1}次重试")
                         time.sleep(delay)
                         continue
                     self._last_send_time = time.monotonic()
