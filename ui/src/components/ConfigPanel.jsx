@@ -898,10 +898,23 @@ function PushRecordCard({ record }) {
     const lines = content.split('\n')
     let bodyStart = -1
     lines.forEach((line, i) => {
-      if (line.startsWith('发送人:')) kwSender = line.replace('发送人:', '').trim()
-      if (line.startsWith('关键词:')) kwKeywords = line.replace('关键词:', '').trim()
-      if (line.startsWith('命中关键词:')) kwKeywords = line.replace('命中关键词:', '').trim()
-      if (line.startsWith('消息内容:')) bodyStart = i + 1
+      if (line.startsWith('[发送人]')) kwSender = line.replace('[发送人]', '').trim()
+      else if (line.startsWith('发送人:')) kwSender = line.replace('发送人:', '').trim()
+      if (line.startsWith('[关键词]')) kwKeywords = line.replace('[关键词]', '').trim()
+      else if (line.startsWith('关键词:')) kwKeywords = line.replace('关键词:', '').trim()
+      else if (line.startsWith('命中关键词:')) kwKeywords = line.replace('命中关键词:', '').trim()
+      // Body starts after [消息] prefix line — merge same-line content too
+      if (line.startsWith('[消息]')) {
+        const rest = line.replace('[消息]', '').trim()
+        if (rest) {
+          kwBody = rest
+          bodyStart = -1 // already got the body from this line
+        } else {
+          bodyStart = i + 1 // content on subsequent lines
+        }
+      } else if (line.startsWith('消息内容:')) {
+        bodyStart = i + 1
+      }
     })
     if (bodyStart >= 0) {
       kwBody = lines.slice(bodyStart).join('\n').trim()
@@ -1173,8 +1186,12 @@ function PushSection() {
                   setTestResult('success')
                   setPushModalVisible(false)
                 } else if (currentEvent === 'error') {
-                  setTestResult(data.detail || data.error || '推送失败')
-                  // 不自动关闭弹窗，让用户看到错误后手动关闭
+                  const errorMsg = data.detail && data.detail.includes('errcode=-14')
+                    ? '推送会话已失效。请先给助手发送一条消息激活；如仍失败，请重新扫码绑定。'
+                    : (data.detail || data.error || '推送失败')
+                  setTestResult(errorMsg)
+                  // Show error in modal for 3s then auto-close
+                  setTimeout(() => setPushModalVisible(false), 3000)
                 }
               } catch {}
             }
@@ -1268,17 +1285,28 @@ function PushSection() {
                   <div className="p-6">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-brand-green-light flex items-center justify-center">
-                          <CircleNotch size={16} className="animate-spin text-brand-green" />
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center"
+                          style={{ background: testResult && testResult !== 'success' ? 'var(--status-error-soft, rgba(239,68,68,0.15))' : 'var(--brand-green-light, rgba(16,185,129,0.15))' }}>
+                          {testResult && testResult !== 'success' ? (
+                            <X size={16} className="text-status-error" />
+                          ) : (
+                            <CircleNotch size={16} className="animate-spin text-brand-green" />
+                          )}
                         </div>
                         <div>
-                          <p className="text-sm font-semibold text-text-main">正在推送测试消息</p>
-                          <p className="text-xs text-text-muted mt-0.5">iLink 限流保护中，请稍候...</p>
+                          <p className="text-sm font-semibold text-text-main">
+                            {testResult && testResult !== 'success' ? '推送测试失败' : '正在推送测试消息'}
+                          </p>
+                          {testResult && testResult !== 'success' ? (
+                            <p className="text-xs text-status-error mt-0.5">{testResult}</p>
+                          ) : (
+                            <p className="text-xs text-text-muted mt-0.5">iLink 限流保护中，请稍候...</p>
+                          )}
                         </div>
                       </div>
                       <button
                         onClick={() => setPushModalVisible(false)}
-                        className="text-text-muted hover:text-text-main cursor-pointer p-1 rounded-lg hover:bg-bg-raised transition-colors"
+                        className="text-text-muted hover:text-text-main cursor-pointer p-1.5 rounded-lg hover:bg-bg-raised transition-colors"
                         title="关闭"
                       >
                         <X size={18} />
@@ -1287,7 +1315,7 @@ function PushSection() {
 
                     {/* 重试进度列表 */}
                     <div className="space-y-2">
-                      {pushProgress.length === 0 && (
+                      {pushProgress.length === 0 && !(testResult && testResult !== 'success') && (
                         <div className="flex items-center gap-2 py-2">
                           <div className="w-4 h-4 rounded-full border-2 border-border-strong border-t-brand-green animate-spin" />
                           <span className="text-xs text-text-muted">连接推送服务中...</span>
@@ -1317,6 +1345,18 @@ function PushSection() {
                         </div>
                       ))}
                     </div>
+
+                    {/* 错误时底部关闭按钮 */}
+                    {testResult && testResult !== 'success' && (
+                      <div className="mt-4 pt-3 border-t border-border-main/40">
+                        <button
+                          onClick={() => setPushModalVisible(false)}
+                          className="w-full py-2 rounded-xl bg-bg-raised hover:bg-bg-inset text-text-main text-sm font-medium transition-colors cursor-pointer"
+                        >
+                          关闭
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1533,6 +1573,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
           ai_provider_api_key: form.ai_provider_api_key,
           ai_provider_type: form.ai_provider_type,
           ai_provider_model: form.ai_provider_model,
+          ai_provider_extra_body: form.ai_provider_extra_body || '',
         })
       })
       const data = await res.json()
@@ -1655,6 +1696,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
           ai_provider_api_key: form.ai_provider_api_key,
           ai_provider_type: form.ai_provider_type,
           ai_provider_model: form.ai_provider_model,
+          ai_provider_extra_body: form.ai_provider_extra_body || '',
           bot_display_name: form.bot_display_name,
           wechat_backend: form.wechat_backend,
           wechat_groups: form.wechat_groups,

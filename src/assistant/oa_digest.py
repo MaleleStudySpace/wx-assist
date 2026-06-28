@@ -257,6 +257,7 @@ class OADigestService:
         group_id: str,
         scrape_full: bool = True,
         max_content_chars: int = 8000,
+        force: bool = False,
     ) -> dict:
         """Generate a digest for an OA group.
 
@@ -264,6 +265,7 @@ class OADigestService:
             group_id: The group to generate digest for
             scrape_full: Whether to scrape full article content
             max_content_chars: Max chars per article for LLM input
+            force: If True, skip dedup filter (allow re-generating already-digested articles)
 
         Returns:
             dict with: success, group_id, articles_count, digest_text, errors
@@ -331,13 +333,20 @@ class OADigestService:
                 "errors": [],
             }
 
-        # Deduplicate
-        before_dedup = len(all_articles)
-        new_articles = self._history.get_undigested(all_articles)
-        logger.info(
-            "[OA-DIGEST] Dedup: %d total → %d new articles (history has %d entries)",
-            before_dedup, len(new_articles), len(self._history._urls),
-        )
+        # Deduplicate — skip if force=True to allow re-generation
+        if force:
+            new_articles = all_articles
+            logger.info(
+                "[OA-DIGEST] Force mode: skipping dedup, using all %d articles",
+                len(all_articles),
+            )
+        else:
+            before_dedup = len(all_articles)
+            new_articles = self._history.get_undigested(all_articles)
+            logger.info(
+                "[OA-DIGEST] Dedup: %d total → %d new articles (history has %d entries)",
+                before_dedup, len(new_articles), len(self._history._urls),
+            )
         if not new_articles:
             return {
                 "success": True,

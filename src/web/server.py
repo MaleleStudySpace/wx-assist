@@ -1058,6 +1058,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "ai_provider_api_key": raw.get("AI_PROVIDER_API_KEY", ""),
                     "ai_provider_type": raw.get("AI_PROVIDER_TYPE", "auto"),
                     "ai_provider_model": raw.get("AI_PROVIDER_MODEL", ""),
+                    "ai_provider_extra_body": raw.get("AI_PROVIDER_EXTRA_BODY", ""),
                     "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                     "memory_consolidation_enabled": raw.get("MEMORY_CONSOLIDATION_ENABLED", "false").lower() == "true",
                     "trigger_keywords": [
@@ -1126,6 +1127,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         "AI_PROVIDER_API_KEY": config.get("ai_provider_api_key"),
                         "AI_PROVIDER_TYPE": config.get("ai_provider_type"),
                         "AI_PROVIDER_MODEL": config.get("ai_provider_model"),
+                        "AI_PROVIDER_EXTRA_BODY": config.get("ai_provider_extra_body"),
                         "WECHAT_BACKEND": config.get("wechat_backend"),
                         "MEMORY_CONSOLIDATION_ENABLED": str(config.get("memory_consolidation_enabled", False)).lower(),
                         "TRIGGER_KEYWORDS": ",".join(config.get("trigger_keywords", [])) if config.get("trigger_keywords") else None,
@@ -1446,6 +1448,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     config.ai_provider_type = data["ai_provider_type"]
                 if data.get("ai_provider_model"):
                     config.ai_provider_model = data["ai_provider_model"]
+                if data.get("ai_provider_extra_body") is not None:
+                    config.ai_provider_extra_body = data["ai_provider_extra_body"]
 
                 # Create summarizer
                 summarizer = create_summarizer(config)
@@ -2028,7 +2032,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         "attempt": attempt,
                         "max_retries": max_retries,
                         "delay": delay,
-                        "message": f"请求超时，{delay:.0f}秒后第{attempt}次重试",
+                        "message": f"推送请求未响应，{delay:.0f}秒后第{attempt}次重试",
                         "raw": error,
                     })
 
@@ -2042,11 +2046,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     _send_sse("success", {"message": "测试消息发送成功，请检查微信"})
                 else:
                     raw_error = result.get("error", "")
-                    friendly = "推送失败，请尝试先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
+                    friendly = "推送失败，请尝试先给助手主动发送一条消息激活；如果仍失败，请重新扫码绑定。"
                     if "session_expired" in raw_error or "errcode=-14" in raw_error:
-                        friendly = "推送会话已失效，请先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
+                        friendly = "推送会话已失效（同一微信号在其他设备登录导致令牌失效）。请先给助手发送一条消息激活；如果仍失败，请重新扫码绑定。"
                     elif "rate-limited" in raw_error:
-                        friendly = "推送请求被限流，3 次重试后仍失败。请稍后再试，或先给助手主动发送一条消息。"
+                        friendly = "推送请求被限流，3 次重试后仍失败。请稍后再试，或先给助手主动发送一条消息激活。"
                     update_status(ai_ok=False, ai_verified=False, error=friendly)
                     _send_sse("error", {
                         "error": friendly,
@@ -2953,6 +2957,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
             status_code: HTTP status code (default 200). Use 400 for
                 client errors, 500 for server errors.
         """
+        req_elapsed = (time.monotonic() - req_t0) * 1000 if 'req_t0' in dir() else 0
+        if req_elapsed > 200:
+            logger.info("[REQ-TRACE] %s %s → %d (%.0fms)", self.command, self.path, status_code, req_elapsed)
         body = json.dumps(obj, ensure_ascii=False, default=str)
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")

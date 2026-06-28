@@ -2295,8 +2295,10 @@ def _download_chat_media(messages: list[dict], export_dir: str, talker: str, my_
 
     images_dir = os.path.join(export_dir, "images")
     voice_dir = os.path.join(export_dir, "voice")
+    videos_dir = os.path.join(export_dir, "videos")
     os.makedirs(images_dir, exist_ok=True)
     os.makedirs(voice_dir, exist_ok=True)
+    os.makedirs(videos_dir, exist_ok=True)
 
     # Auto-detect data_dir and wxid from WCDB client config (primary) or env (fallback)
     from src.wechat.v2_cache_decrypt import V2CacheManager
@@ -2691,6 +2693,7 @@ def handle_chat_export(params, config: AssistantConfig):
         start_time = int(body.get("start_time", 0) or 0)
         end_time = int(body.get("end_time", 0) or 0)
         dry_run = body.get("dry_run", False) or params.get("dry_run", [""])[0] == "true"
+        media_types = body.get("media_types", None) or None
 
         if not talker:
             return {"ok": False, "error": "Missing talker parameter"}
@@ -2742,6 +2745,36 @@ def handle_chat_export(params, config: AssistantConfig):
                     continue
                 filtered.append(m)
             all_messages = filtered
+
+        # Media type filtering (images: localType=3, videos: localType=43, voices: localType=34)
+        if media_types and isinstance(media_types, dict):
+            # Default to all types if not specified
+            include_images = media_types.get("images", True)
+            include_voices = media_types.get("voices", True)
+            include_videos = media_types.get("videos", True)
+            include_links = media_types.get("links", True)
+            # localType mapping: images→3, voices→34, videos→43
+            allowed_local_types = set()
+            if include_images:
+                allowed_local_types.add(3)
+            if include_voices:
+                allowed_local_types.add(34)
+            if include_videos:
+                allowed_local_types.add(43)
+            if include_links:
+                allowed_local_types.add(49)  # appmsg/link card
+            # Always include text (type 1) — but only if at least one media type is deselected
+            any_unchecked = not (include_images and include_voices and include_videos and include_links)
+            if any_unchecked:
+                filtered = []
+                for m in all_messages:
+                    lt = int(m.get("local_type", m.get("localType", 1)) or 1)
+                    if lt == 1:
+                        filtered.append(m)  # always include text
+                    elif lt in allowed_local_types:
+                        filtered.append(m)
+                    # else: exclude this media type
+                all_messages = filtered
 
         # Count media (images: localType=3, videos: localType=43, voices: localType=34)
         image_count = sum(1 for m in all_messages if int(m.get("local_type", m.get("localType", 1))) == 3)
@@ -4251,7 +4284,7 @@ def handle_oa_digest_run(params, config: AssistantConfig):
             return {"ok": False, "error": "AI未配置，请先在设置中配置AI提供商（API Key）"}
         except Exception as e:
             logger.warning("[OA-DIGEST] Summarizer creation failed: %s (will try fallback)", e)
-        result = service.generate_digest(group_id)
+        result = service.generate_digest(group_id, force=True)
         # Normalize response to use "ok" instead of "success"
         result["ok"] = result.pop("success", True)
         broadcast_event("oa_digest_progress", {
@@ -4297,7 +4330,6 @@ def handle_oa_digest_run(params, config: AssistantConfig):
                         push_ok = push_result.get("success", False)
                         push_err = push_result.get("error", "") if not push_ok else ""
                         result["ilink_push"] = "success" if push_ok else f"failed: {push_err}"
-                        # Update push audit in outbox
                         if oa_nid:
                             try:
                                 from src.assistant.outbox import Outbox
@@ -4309,6 +4341,28 @@ def handle_oa_digest_run(params, config: AssistantConfig):
                                 )
                             except Exception:
                                 pass
+                    else:
+                        # iLink configured but not available
+                        if oa_nid:
+                            try:
+                                from src.assistant.outbox import Outbox
+                                outbox = Outbox()
+                                outbox.update_push_result(
+                                    oa_nid, "ilink", "failed", "iLink推送通道未绑定或已断开",
+                                )
+                            except Exception:
+                                pass
+                else:
+                    # No iLink push target — still record in outbox for history tracking
+                    if oa_nid:
+                        try:
+                            from src.assistant.outbox import Outbox
+                            outbox = Outbox()
+                            outbox.update_push_result(
+                                oa_nid, "local", "skipped", "未配置微信推送通道",
+                            )
+                        except Exception:
+                            pass
                         # Broadcast push result to WebSocket clients
                         try:
                             broadcast_event("oa_digest_push_result", {
