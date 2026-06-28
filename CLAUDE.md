@@ -162,6 +162,48 @@ src/web/server.py 中 _onboarding_data 字典的两个已删除功能字段。
 
 ---
 
+## 每次提交后的验收部署要求
+
+每次执行 `git commit` 后，必须立即重新部署当前源码模式的后端和前端，方便用户验收。
+
+### 后端重启
+
+1. 停止本会话中已启动的旧后端后台任务（如果有）。
+2. 重新启动后端：
+
+```powershell
+$env:PYTHONPATH='.'
+D:\Python313\python.exe -c "from src.web.server import start_web_server; import time, sys; t = start_web_server(); print('Server started' if t else 'Failed'); sys.stdout.flush(); import time; [time.sleep(1) for _ in iter(int,1)]"
+```
+
+3. 验证：
+
+```powershell
+Invoke-WebRequest -Uri 'http://127.0.0.1:17327/api/status'
+```
+
+要求返回：`running:true`, `db_ok:true`, `error:""`。
+
+### 前端重启
+
+1. 停止本会话中已启动的旧前端 dev server（如果有）。
+2. 重新启动前端：
+
+```powershell
+cd C:\Users\74062\Desktop\wx-assist\ui
+D:\nodejs\npm.cmd run dev -- --host 127.0.0.1
+```
+
+3. 验证 `http://127.0.0.1:15173/` 返回 200。
+
+### 注意
+
+- 若后端代码未变，可以说明“无需重启后端”；但用户明确要求验收时，仍优先重启。
+- 若前端代码未变，可以说明“无需重启前端”；但用户明确要求验收时，仍优先重启。
+- 重启后必须把两个地址明确告诉用户：后端 `http://127.0.0.1:17327`，前端 `http://127.0.0.1:15173`。
+
+---
+
 ## 工具与依赖
 
 | 工具 | 路径 |
