@@ -306,6 +306,46 @@ def _read_recent_logs():
         return {"ok": False, "logs": [], "error": str(e)}
 
 
+def _read_recent_llm_logs():
+    """Read the last 200 LLM log entries from data/llm.log.
+
+    Each [LLM-DETAIL] line is a JSON object with full request/response.
+    Returns JSON-serializable list of parsed entries.
+    """
+    import json as _json
+    log_path = Path("data/llm.log")
+    if not log_path.exists():
+        return {"ok": True, "logs": [], "message": "LLM 日志文件尚未创建"}
+    try:
+        TAIL_BYTES = 512 * 1024  # 512KB — LLM detail lines are larger
+        file_size = log_path.stat().st_size
+        with open(log_path, "rb") as f:
+            if file_size > TAIL_BYTES:
+                f.seek(file_size - TAIL_BYTES)
+                f.readline()  # skip partial line
+            raw = f.read()
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+
+        entries = []
+        for line in lines[-500:]:
+            # Only parse [LLM-DETAIL] lines (JSON)
+            idx = line.find("[LLM-DETAIL] ")
+            if idx < 0:
+                continue
+            json_str = line[idx + len("[LLM-DETAIL] "):]
+            try:
+                entry = _json.loads(json_str)
+                entries.append(entry)
+            except _json.JSONDecodeError:
+                # Skip malformed lines
+                continue
+
+        # Return last 200 entries (newest last → reverse for display)
+        return {"ok": True, "logs": entries[-200:]}
+    except Exception as e:
+        return {"ok": False, "logs": [], "error": str(e)}
+
+
 def _can_import(module_name: str) -> bool:
     try:
         __import__(module_name)
@@ -1445,6 +1485,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
         # ── API: Get logs ────────────────────────────────────────────
         if self.path == "/api/logs":
             self.send_json(_read_recent_logs())
+            return
+
+        # ── API: Get LLM logs ──────────────────────────────────────────
+        if self.path == "/api/llm-logs":
+            self.send_json(_read_recent_llm_logs())
             return
 
         # ── API: macOS WeChat automation diagnostics ─────────────────

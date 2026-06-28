@@ -1064,14 +1064,41 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
     token_budget = summarizer.token_budget
     if context_tokens > 0.7 * token_budget:
         logger.info("[SNS_SUMMARIZE] Context too large (%d tokens), pre-compressing", context_tokens)
+        sns_precompress_sys = "请将以下朋友圈内容分类归纳为一段简要摘要，保留关键信息和要点："
         try:
+            sns_pre_start = time.monotonic()
             compressed = summarizer._call_chat_api(
-                "请将以下朋友圈内容分类归纳为一段简要摘要，保留关键信息和要点：",
+                sns_precompress_sys,
                 [{"role": "user", "content": context_text}],
+            )
+            sns_pre_latency = (time.monotonic() - sns_pre_start) * 1000
+            log_llm_interaction(
+                backend=summarizer._backend_name,
+                call_type="sns_precompress",
+                model=summarizer.model,
+                system_prompt=sns_precompress_sys,
+                user_prompt=context_text[:500],
+                response=compressed,
+                latency_ms=sns_pre_latency,
+                extra={
+                    "original_tokens": context_tokens,
+                    "budget": token_budget,
+                },
             )
             context_text = f"[朋友圈内容摘要]\n{compressed}"
             logger.info("[SNS_SUMMARIZE] Pre-compress done, new text_len=%d", len(context_text))
         except Exception as e:
+            sns_pre_latency = (time.monotonic() - sns_pre_start) * 1000 if "sns_pre_start" in locals() else 0
+            log_llm_interaction(
+                backend=summarizer._backend_name,
+                call_type="sns_precompress",
+                model=summarizer.model,
+                system_prompt=sns_precompress_sys,
+                user_prompt=context_text[:500],
+                response=f"[Error: {e}]",
+                latency_ms=sns_pre_latency,
+                extra={"original_tokens": context_tokens, "error": str(e)},
+            )
             logger.warning("[SNS_SUMMARIZE] Pre-compress failed: %s", e)
 
     # Build system prompt + user message

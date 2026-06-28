@@ -13,10 +13,13 @@ URL normalization for OpenAI format:
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
 import requests
+
+from src.utils.llm_logger import log_llm_interaction
 
 logger = logging.getLogger(__name__)
 
@@ -55,14 +58,30 @@ def _try_openai_models(base_url: str, api_key: str) -> Optional[ProviderInfo]:
     """GET {base_url}/models for OpenAI-compatible providers."""
     url = _normalize_base_url(base_url, "openai") + "/models"
     headers = {"Authorization": f"Bearer {api_key}"}
+    start = time.monotonic()
 
     try:
         resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+        latency = (time.monotonic() - start) * 1000
         if resp.status_code in (401, 403):
             logger.debug("GET models returned %d (auth error)", resp.status_code)
+            log_llm_interaction(
+                backend="provider_detect", call_type="openai_models",
+                model="", system_prompt="", user_prompt="",
+                response=f"[Error: HTTP {resp.status_code} auth]",
+                latency_ms=latency,
+                extra={"url": url, "status_code": resp.status_code},
+            )
             return ProviderInfo(error="API Key 无效或站点地址错误，请检查后重试。")
         if resp.status_code != 200:
             logger.debug("GET models returned %d", resp.status_code)
+            log_llm_interaction(
+                backend="provider_detect", call_type="openai_models",
+                model="", system_prompt="", user_prompt="",
+                response=f"[Error: HTTP {resp.status_code}]",
+                latency_ms=latency,
+                extra={"url": url, "status_code": resp.status_code},
+            )
             return None
         data = resp.json()
 
@@ -70,12 +89,35 @@ def _try_openai_models(base_url: str, api_key: str) -> Optional[ProviderInfo]:
             models = [m["id"] for m in data.get("data", [])
                       if isinstance(m, dict) and "id" in m]
             logger.info("OpenAI models endpoint: %d models found", len(models))
+            log_llm_interaction(
+                backend="provider_detect", call_type="openai_models",
+                model="", system_prompt="", user_prompt="",
+                response=f"OK: {len(models)} models found",
+                latency_ms=latency,
+                extra={"url": url, "models_count": len(models), "models": models[:20]},
+            )
             return ProviderInfo(provider_type="openai", available_models=models)
         return None
     except requests.RequestException as e:
+        latency = (time.monotonic() - start) * 1000
+        log_llm_interaction(
+            backend="provider_detect", call_type="openai_models",
+            model="", system_prompt="", user_prompt="",
+            response=f"[Error: {e}]",
+            latency_ms=latency,
+            extra={"url": url, "error": str(e)},
+        )
         logger.debug("GET models failed: %s", e)
         return None
     except Exception as e:
+        latency = (time.monotonic() - start) * 1000
+        log_llm_interaction(
+            backend="provider_detect", call_type="openai_models",
+            model="", system_prompt="", user_prompt="",
+            response=f"[Error: {e}]",
+            latency_ms=latency,
+            extra={"url": url, "error": str(e)},
+        )
         logger.debug("GET models parse error: %s", e)
         return None
 
@@ -95,15 +137,46 @@ def _try_openai_chat(base_url: str, api_key: str) -> Optional[bool]:
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": 1,
     }
+    start = time.monotonic()
     try:
         resp = requests.post(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
+        latency = (time.monotonic() - start) * 1000
         if resp.status_code in (401, 403):
+            log_llm_interaction(
+                backend="provider_detect", call_type="openai_chat_probe",
+                model="gpt-3.5-turbo", system_prompt="", user_prompt="hi",
+                response=f"[Error: HTTP {resp.status_code} auth]",
+                latency_ms=latency,
+                extra={"url": url, "status_code": resp.status_code},
+            )
             return None
         if resp.status_code in (200, 400):
             logger.info("OpenAI chat/completions confirmed (status=%d)", resp.status_code)
+            log_llm_interaction(
+                backend="provider_detect", call_type="openai_chat_probe",
+                model="gpt-3.5-turbo", system_prompt="", user_prompt="hi",
+                response=f"OK: HTTP {resp.status_code}",
+                latency_ms=latency,
+                extra={"url": url, "status_code": resp.status_code},
+            )
             return True
+        log_llm_interaction(
+            backend="provider_detect", call_type="openai_chat_probe",
+            model="gpt-3.5-turbo", system_prompt="", user_prompt="hi",
+            response=f"[Error: HTTP {resp.status_code}]",
+            latency_ms=latency,
+            extra={"url": url, "status_code": resp.status_code},
+        )
         return False
-    except requests.RequestException:
+    except requests.RequestException as e:
+        latency = (time.monotonic() - start) * 1000
+        log_llm_interaction(
+            backend="provider_detect", call_type="openai_chat_probe",
+            model="gpt-3.5-turbo", system_prompt="", user_prompt="hi",
+            response=f"[Error: {e}]",
+            latency_ms=latency,
+            extra={"url": url, "error": str(e)},
+        )
         return False
 
 
@@ -124,15 +197,46 @@ def _try_anthropic_messages(base_url: str, api_key: str) -> Optional[bool]:
         "max_tokens": 1,
         "messages": [{"role": "user", "content": "hi"}],
     }
+    start = time.monotonic()
     try:
         resp = requests.post(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
+        latency = (time.monotonic() - start) * 1000
         if resp.status_code in (401, 403):
+            log_llm_interaction(
+                backend="provider_detect", call_type="anthropic_probe",
+                model="claude-haiku-4-5", system_prompt="", user_prompt="hi",
+                response=f"[Error: HTTP {resp.status_code} auth]",
+                latency_ms=latency,
+                extra={"url": url, "status_code": resp.status_code},
+            )
             return None
         if resp.status_code in (200, 400):
             logger.info("Anthropic messages confirmed (status=%d)", resp.status_code)
+            log_llm_interaction(
+                backend="provider_detect", call_type="anthropic_probe",
+                model="claude-haiku-4-5", system_prompt="", user_prompt="hi",
+                response=f"OK: HTTP {resp.status_code}",
+                latency_ms=latency,
+                extra={"url": url, "status_code": resp.status_code},
+            )
             return True
+        log_llm_interaction(
+            backend="provider_detect", call_type="anthropic_probe",
+            model="claude-haiku-4-5", system_prompt="", user_prompt="hi",
+            response=f"[Error: HTTP {resp.status_code}]",
+            latency_ms=latency,
+            extra={"url": url, "status_code": resp.status_code},
+        )
         return False
-    except requests.RequestException:
+    except requests.RequestException as e:
+        latency = (time.monotonic() - start) * 1000
+        log_llm_interaction(
+            backend="provider_detect", call_type="anthropic_probe",
+            model="claude-haiku-4-5", system_prompt="", user_prompt="hi",
+            response=f"[Error: {e}]",
+            latency_ms=latency,
+            extra={"url": url, "error": str(e)},
+        )
         return False
 
 
