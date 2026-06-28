@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Star, DownloadSimple, MagnifyingGlass, Clock, File, Image, Video, Link, FileText, Funnel, ArrowsDownUp, FolderOpen, Microphone, ChatsCircle, CaretDown, ChatCircleDots, Tag } from '@phosphor-icons/react'
+import { Star, DownloadSimple, MagnifyingGlass, Clock, File, Image, Video, Link, FileText, Funnel, ArrowsDownUp, FolderOpen, Play, ChatsCircle, CaretDown, ChatCircleDots, Tag } from '@phosphor-icons/react'
 import { Toggle, SectionHeader, API_BASE } from './SharedComponents'
 import ChatDrawer from './ChatDrawer'
 import AIChatPanel from './AIChatPanel'
@@ -139,23 +139,19 @@ function NestedChatCard({ record, itemId }) {
                       )}
                       {/* Voice */}
                       {subType === 3 && (
-                        <div className="mt-0.5 flex items-center gap-1">
-                          <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-bg-card text-xs text-text-muted">
-                            <Microphone size={10} className="text-brand-green" />
-                            <span className="text-brand-green">语音</span>
-                            {sub.duration && <span className="text-text-muted">{(sub.duration / 1000).toFixed(1)}s</span>}
-                          </div>
-                          {sub.dataid && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const audio = document.getElementById(`nestedvoice-${itemId}-${si}`);
-                                if (audio) audio.paused ? audio.play() : audio.pause();
-                              }}
-                              className="p-0.5 rounded bg-brand-green-light/30 hover:bg-brand-green-light/50 text-brand-green text-xs transition-colors"
-                              title="播放"
-                            >▶</button>
-                          )}
+                        <div className="mt-0.5">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const audio = document.getElementById(`nestedvoice-${itemId}-${si}`);
+                              if (audio) audio.paused ? audio.play() : audio.pause();
+                            }}
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-raised border border-border-main hover:border-brand-green/40 transition-colors group text-xs"
+                          >
+                            <Play size={10} weight="fill" className="text-brand-green ml-0.5" />
+                            <span className="text-text-muted">语音</span>
+                            {sub.duration && <span className="text-text-muted/60">{(sub.duration / 1000).toFixed(1)}s</span>}
+                          </button>
                           {sub.dataid && (
                             <audio id={`nestedvoice-${itemId}-${si}`} src={`${API_BASE}/api/fav/voice/record?fav_id=${itemId}&dataid=${sub.dataid}`} preload="metadata" style={{ display: 'none' }} />
                           )}
@@ -276,41 +272,34 @@ function FavCard({ item }) {
           </div>
           {isVoice ? (
             <div className="flex items-center gap-2 mt-1">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-brand-green-light/20">
-                <Microphone size={12} className="text-brand-green" weight="fill" />
-                <div className="flex items-end gap-[2px] h-3">
-                  {[6, 10, 7, 12, 8, 11, 5].map((h, i) => (
-                    <div key={i} className="w-[2px] rounded-full bg-brand-green/60" style={{ height: h }} />
-                  ))}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const audio = document.getElementById(`voice-${item.id}`);
+                  if (audio) audio.paused ? audio.play() : audio.pause();
+                }}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-raised border border-border-main hover:border-brand-green/40 transition-colors group"
+              >
+                <div className={`w-7 h-7 rounded-full flex items-center justify-center ${voiceDuration > 0 ? 'bg-brand-green/15 text-brand-green' : 'bg-text-muted/10 text-text-muted'}`}>
+                  <Play size={12} weight="fill" className="ml-0.5" />
                 </div>
-                {voiceDuration > 0 && (
-                  <span className="text-xs text-brand-green font-medium ml-0.5">{voiceDuration}s</span>
-                )}
-              </div>
+                <div className="flex flex-col items-start">
+                  <span className="text-xs text-text-main font-medium">{voiceDuration > 0 ? `${voiceDuration}s` : '语音消息'}</span>
+                  <span className="text-[10px] text-text-muted/60">点击播放</span>
+                </div>
+              </button>
               {expanded && (
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const audio = document.getElementById(`voice-${item.id}`);
-                      if (audio) {
-                        audio.paused ? audio.play() : audio.pause();
-                      }
-                    }}
-                    className="px-2 py-1 text-xs bg-brand-green-light/30 hover:bg-brand-green-light/50 text-brand-green rounded transition-colors"
-                  >
-                    ▶ 播放
-                  </button>
-                  <a
-                    href={`${API_BASE}/api/fav/voice/download?id=${item.id}&format=wav`}
-                    download
-                    onClick={(e) => e.stopPropagation()}
-                    className="px-2 py-1 text-xs bg-brand-green-light/30 hover:bg-brand-green-light/50 text-brand-green rounded transition-colors flex items-center gap-1"
-                  >
-                    <DownloadSimple size={12} /> 下载
-                  </a>
-                </div>
+                <a
+                  href={`${API_BASE}/api/fav/voice/download?id=${item.id}&format=wav`}
+                  download
+                  onClick={(e) => e.stopPropagation()}
+                  className="p-2 rounded-lg bg-bg-raised border border-border-main hover:border-brand-green/40 text-text-muted hover:text-text-main transition-colors"
+                  title="下载"
+                >
+                  <DownloadSimple size={14} />
+                </a>
               )}
+              <audio id={`voice-${item.id}`} src={`${API_BASE}/api/fav/voice?id=${item.id}`} preload="metadata" style={{ display: 'none' }} />
             </div>
           ) : item.content && !isImage ? (
             <p className="text-xs text-text-muted truncate mt-0.5">
