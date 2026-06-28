@@ -182,6 +182,7 @@ export default function AssistantPanel() {
   }, [])
 
   useEffect(() => {
+    const loadStart = performance.now()
     async function load() {
       try {
         const [configRes, groupsRes] = await Promise.all([
@@ -190,6 +191,8 @@ export default function AssistantPanel() {
         ])
         const configData = await configRes.json()
         const groupsData = await groupsRes.json()
+        const loadMs = Math.round(performance.now() - loadStart)
+        console.log(`[PERF] AssistantPanel load: ${loadMs}ms (config=${Math.round(configData?.response_time||0)} groups=${Math.round(groupsData?.response_time||0)})`)
         setConfig(normalizeConfig(configData.config || defaultConfig()))
         if (groupsData.ok) {
           setGroups(groupsData.groups || [])
