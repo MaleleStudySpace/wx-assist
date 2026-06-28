@@ -2032,7 +2032,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         "attempt": attempt,
                         "max_retries": max_retries,
                         "delay": delay,
-                        "message": f"推送请求未响应，{delay:.0f}秒后第{attempt}次重试",
+                        "message": f"请求超时，{delay:.0f}秒后第{attempt}次重试",
                         "raw": error,
                     })
 
@@ -2046,11 +2046,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     _send_sse("success", {"message": "测试消息发送成功，请检查微信"})
                 else:
                     raw_error = result.get("error", "")
-                    friendly = "推送失败，请尝试先给助手主动发送一条消息激活；如果仍失败，请重新扫码绑定。"
+                    friendly = "推送失败，请尝试先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
                     if "session_expired" in raw_error or "errcode=-14" in raw_error:
-                        friendly = "推送会话已失效（同一微信号在其他设备登录导致令牌失效）。请先给助手发送一条消息激活；如果仍失败，请重新扫码绑定。"
+                        friendly = "推送会话已失效，请先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
                     elif "rate-limited" in raw_error:
-                        friendly = "推送请求被限流，3 次重试后仍失败。请稍后再试，或先给助手主动发送一条消息激活。"
+                        friendly = "推送请求被限流，3 次重试后仍失败。请稍后再试，或先给助手主动发送一条消息。"
                     update_status(ai_ok=False, ai_verified=False, error=friendly)
                     _send_sse("error", {
                         "error": friendly,
