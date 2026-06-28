@@ -174,10 +174,9 @@ class OAMonitorEngine:
             except Exception as e:
                 logger.warning(f"OAMonitor AI digest failed, falling back to title: {e}")
 
-            notif_title = "🔔 公众号新文"
             import json as _json
 
-            notif_title = "🔔 公众号新文"
+            notif_title = f"🔔 {source} · 新文章"
             notif_content = _json.dumps({
                 "group": source,
                 "time": time_str,
@@ -185,11 +184,10 @@ class OAMonitorEngine:
                 "digest": digest,
                 "url": art.url,
                 "display": (
-                    f"公众号: {source}\n"
-                    f"时间: {time_str}\n"
-                    f"文章: 《{title}》\n"
-                    f"摘要: {digest}\n"
-                    f"链接: {art.url}"
+                    f"📰 **{title}**\n"
+                    f"🕐 {time_str}\n"
+                    f"\n{digest}\n"
+                    f"\n🔗 {art.url}"
                 ),
             }, ensure_ascii=False)
 

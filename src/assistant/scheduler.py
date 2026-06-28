@@ -279,14 +279,14 @@ class DigestScheduler:
                 notif_type="group_digest",
                 chat_id=chat_id,
                 group_name=dg.group_name,
-                title=f"📋 {dg.group_name} — 群聊摘要 ({mode_label})",
+                title=f"📋 {dg.group_name} · 群聊摘要 ({mode_label})",
                 content=json.dumps({
                     "group": dg.group_name,
                     "lookback_hours": dg.lookback_hours,
                     "mode": mode_label,
                     "msg_count": 0,
                     "digest": "该时间窗口内无新消息，摘要跳过。",
-                    "display": f"群: {dg.group_name}\n时间范围: 最近 {dg.lookback_hours} 小时\n消息数: 0 条\n\n该时间窗口内无新消息，摘要跳过。",
+                    "display": f"📊 0 条消息 · 近 {dg.lookback_hours}h\n\n> 该时间窗口内无新消息，摘要跳过。",
                 }, ensure_ascii=False),
                 priority="normal",
             )
@@ -440,7 +440,7 @@ class DigestScheduler:
             "mode": mode_label,
             "msg_count": len(filtered),
             "digest": digest_text,
-            "display": f"群: {dg.group_name}\n时间范围: 最近 {dg.lookback_hours} 小时\n消息数: {len(filtered)} 条\n\n{digest_text}",
+            "display": f"📊 {len(filtered)} 条消息 · 近 {dg.lookback_hours}h\n\n{digest_text}",
         }, ensure_ascii=False)
         nid = self._outbox.add(
             notif_type="group_digest",
@@ -569,24 +569,24 @@ class DigestScheduler:
                 notif_type="oa_digest",
                 chat_id=oa.id,
                 group_name=oa.name,
-                title=f"📰 {oa.name} — 公众号摘要",
+                title=f"📰 {oa.name} · 公众号摘要",
                 content=json.dumps({
                     "group": oa.name,
                     "articles_count": articles_count,
                     "digest": digest_text,
-                    "display": f"公众号组: {oa.name}\n文章数: {articles_count} 篇\n\n{digest_text}",
+                    "display": f"📄 {articles_count} 篇文章\n\n{digest_text}",
                 }, ensure_ascii=False),
                 priority="normal",
             )
             return
 
         # Push to outbox
-        title = f"📰 {oa.name} — 公众号摘要"
+        title = f"📰 {oa.name} · 公众号摘要"
         content = json.dumps({
             "group": oa.name,
             "articles_count": articles_count,
             "digest": digest_text,
-            "display": f"公众号组: {oa.name}\n文章数: {articles_count} 篇\n\n{digest_text}",
+            "display": f"📄 {articles_count} 篇文章\n\n{digest_text}",
         }, ensure_ascii=False)
         nid = self._outbox.add(
             notif_type="oa_digest",
