@@ -384,7 +384,7 @@ class OADigestService:
                         if len(content) > max_content_chars:
                             content = content[:max_content_chars] + f"\n...(原文{len(content)}字，已截断)"
                         article_text += f"\n{content}\n"
-                        logger.info(
+                        logger.debug(
                             "[OA-DIGEST] Article '%s': scraped OK, content_len=%d, url=%s",
                             art.title[:30], len(content), art.url[:80],
                         )
