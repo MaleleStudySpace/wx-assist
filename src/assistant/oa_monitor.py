@@ -162,8 +162,7 @@ class OAMonitorEngine:
                 smrz = create_summarizer(cfg)
                 ai_content = art.content or art.digest or title
                 ai_digest = smrz.chat(
-                    message=f"请用1-2句话总结以下文章的核心内容:
-{ai_content[:500]}",
+                    message="请用1-2句话总结以下文章的核心内容:\n" + ai_content[:500],
                     context_messages=[],
                     requester_name="system",
                     bot_name="摘要助手",
@@ -216,9 +215,13 @@ class OAMonitorEngine:
         """Push notification to WeChat via iLink Bot."""
         try:
             from src.wechat.ilink_push import get_ilink_push, format_for_wechat
+            import json as _json
             ilink = get_ilink_push()
             if ilink.is_available():
-                push_msg = format_for_wechat(title, content)
+                # Extract display text from JSON content (not raw JSON)
+                push_data = _json.loads(content) if isinstance(content, str) else content
+                push_text = push_data.get("display", content)
+                push_msg = format_for_wechat(title, push_text)
                 result = ilink.send_message(push_msg)
                 push_ok = result.get("success", False)
                 push_err = result.get("error", "") if not push_ok else ""

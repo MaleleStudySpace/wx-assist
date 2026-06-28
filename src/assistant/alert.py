@@ -145,9 +145,13 @@ class AlertEngine:
                 if ag.push_target == "ilink":
                     try:
                         from src.wechat.ilink_push import get_ilink_push, format_for_wechat
+                        import json as _json
                         ilink = get_ilink_push()
                         if ilink.is_available():
-                            push_msg = format_for_wechat(title, notif_content)
+                            # Extract display text from JSON content (not raw JSON)
+                            push_data = _json.loads(notif_content) if isinstance(notif_content, str) else notif_content
+                            push_text = push_data.get("display", notif_content)
+                            push_msg = format_for_wechat(title, push_text)
                             result = ilink.send_message(push_msg)
                             # Update push audit in outbox
                             push_ok = result.get("success", False)
