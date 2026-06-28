@@ -1931,6 +1931,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 from src.wechat.ilink_push import get_ilink_push, reset_ilink_push
                 ilink = get_ilink_push()
                 ilink.bind(bot_token, account_id, base_url, user_id)
+                # 重置单例，下次调用 get_ilink_push() 会重新从磁盘加载新账号
+                reset_ilink_push()
                 self.send_json({"ok": True, "message": "iLink bound successfully"})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)})
@@ -1969,7 +1971,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
             try:
                 from src.wechat.ilink_push import get_ilink_push
+                # 每次 test-push 前先 reload 单例，确保用磁盘上的最新账号
                 ilink = get_ilink_push()
+                ilink.reload()
                 if not ilink.is_available():
                     _send_sse("error", {"error": "iLink not bound"})
                     return
@@ -1989,14 +1993,24 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 )
 
                 if result.get("success"):
+                    update_status(error="")
                     _send_sse("success", {"message": "测试消息发送成功，请检查微信"})
                 else:
+                    raw_error = result.get("error", "")
+                    friendly = "推送失败，请尝试先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
+                    if "session_expired" in raw_error or "errcode=-14" in raw_error:
+                        friendly = "推送会话已失效，请先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
+                    elif "rate-limited" in raw_error:
+                        friendly = "推送请求被限流，3 次重试后仍失败。请稍后再试，或先给助手主动发送一条消息。"
+                    update_status(ai_ok=False, ai_verified=False, error=friendly)
                     _send_sse("error", {
-                        "error": "推送失败，请确认已给助手发送激活消息",
-                        "detail": result.get("error", ""),
+                        "error": friendly,
+                        "detail": raw_error,
                     })
             except Exception as e:
-                _send_sse("error", {"error": f"推送异常: {e}"})
+                friendly = f"推送异常：{e}。请尝试先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
+                update_status(ai_ok=False, ai_verified=False, error=friendly)
+                _send_sse("error", {"error": friendly})
             return
 
         # ── API: Assistant — trigger digest ─────────────────────────────
