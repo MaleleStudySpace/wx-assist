@@ -370,9 +370,12 @@ class Bot:
 
             outbox = Outbox()
 
-            # Always create the digest scheduler (so it can be hot-enabled via the API
-            # even if assistant_enabled was false at boot).  _tick() will check the
-            # config each cycle and no-op when disabled.
+            # Always create all engines unconditionally so they can be hot-enabled
+            # via the API even if assistant_enabled was false at boot.
+            # Each engine's check()/tick() no-ops when assistant_enabled=False
+            # or when no groups are configured.
+
+            # ── Digest scheduler (thread loop, no-ops when disabled) ──
             from src.assistant.scheduler import DigestScheduler
             assistant_scheduler = DigestScheduler(
                 asst_cfg, outbox, summarizer, store,
@@ -385,32 +388,25 @@ class Bot:
             except Exception:
                 pass
 
-            if asst_cfg.assistant_enabled:
-                # Alert engine — message-triggered, no start() needed
-                assistant_alert = AlertEngine(asst_cfg, outbox)
-                try:
-                    from src.web.server import register_assistant_alert
-                    register_assistant_alert(assistant_alert)
-                except Exception:
-                    pass
+            # ── Alert engine (message-triggered, no thread needed) ──
+            assistant_alert = AlertEngine(asst_cfg, outbox)
+            try:
+                from src.web.server import register_assistant_alert
+                register_assistant_alert(assistant_alert)
+            except Exception:
+                pass
 
-                # OA Monitor — independent polling for gh_xxx accounts
-                if asst_cfg.oa_monitor_groups:
-                    try:
-                        from src.assistant.oa_monitor import OAMonitorEngine
-                        oa_monitor = OAMonitorEngine(asst_cfg, outbox)
-                        oa_monitor.start()
-                        try:
-                            from src.web.server import register_oa_monitor
-                            register_oa_monitor(oa_monitor)
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        logger.warning("OA Monitor init failed (continuing without): %s", e)
+            # ── OA Monitor (thread loop, no-ops when no groups) ──
+            from src.assistant.oa_monitor import OAMonitorEngine
+            oa_monitor = OAMonitorEngine(asst_cfg, outbox)
+            oa_monitor.start()
+            try:
+                from src.web.server import register_oa_monitor
+                register_oa_monitor(oa_monitor)
+            except Exception:
+                pass
 
-                logger.info("Assistant: alert engine + OA monitor + digest scheduler started")
-            else:
-                logger.info("Assistant: disabled in config (scheduler thread runs, tick no-ops)")
+            logger.info("Assistant: alert engine + OA monitor + digest scheduler initialized")
         except Exception as e:
             logger.warning("Assistant init failed (continuing without): %s", e)
 

@@ -124,7 +124,7 @@ def log_llm_interaction(
 
     Args:
         backend: "deepseek" | "claude" | "oa_digest"
-        call_type: "chat" | "proactive_chat" | "summarize_direct" |
+        call_type: "chat" | "summarize_direct" |
                    "summarize_chunk" | "merge_summaries" |
                    "consolidate_memory" | "oa_digest" |
                    "group_digest" | "group_digest_memory" |
