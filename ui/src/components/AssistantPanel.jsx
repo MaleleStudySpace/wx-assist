@@ -1,0 +1,1834 @@
+﻿import { useState, useEffect, useRef, useCallback } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { CheckCircle, Warning, Spinner, MagnifyingGlass, Bell, Clock, ChatCircle, CaretDown, CaretRight, EnvelopeOpen, Archive, Lightning, Trash, X, Plus } from '@phosphor-icons/react'
+import { Toggle, SectionHeader, TagInput, API_BASE } from './SharedComponents'
+
+const pageTransition = {
+  initial: { opacity: 0, x: 12 },
+  animate: { opacity: 1, x: 0 },
+  exit: { opacity: 0, x: -12 },
+}
+
+const PRESET_TIMES = ['09:00', '12:00', '14:00', '18:00', '21:00', '23:00']
+
+const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六']
+
+// ── Cron helpers ─────────────────────────────────────────────────────
+
+function buildCronExpr(times, freqMode, weekdays) {
+  const parsed = times.map(t => {
+    const [h, m] = t.split(':').map(Number)
+    return { hour: h, minute: m || 0 }
+  }).sort((a, b) => a.hour - b.hour || a.minute - b.minute)
+  if (!parsed.length) parsed.push({ hour: 9, minute: 0 })
+
+  // Build dow field
+  let dowField = '*'
+  if (freqMode === 'weekday') {
+    dowField = '1-5'
+  } else if (freqMode === 'custom') {
+    dowField = [...weekdays].sort((a, b) => a - b).join(',') || '*'
+  }
+
+  // If all times share the same minute, use compact "M H1,H2 * * DOW".
+  // Otherwise generate one cron line per time to avoid Cartesian product.
+  // e.g. ["09:00", "12:30"] → "0 9 * * DOW\n30 12 * * DOW"
+  const uniqueMinutes = [...new Set(parsed.map(p => p.minute))]
+  if (uniqueMinutes.length === 1) {
+    const minStr = uniqueMinutes[0]
+    const hourStr = [...new Set(parsed.map(p => p.hour))].sort((a, b) => a - b).join(',')
+    return `${minStr} ${hourStr} * * ${dowField}`
+  }
+  // Mixed minutes — one line per time
+  const lines = parsed.map(p => `${p.minute} ${p.hour} * * ${dowField}`)
+  return lines.join('\n')
+}
+
+function parseCronExpr(cronExpr) {
+  if (!cronExpr) return { freqMode: 'daily', times: ['09:00'], weekdays: [1,2,3,4,5] }
+
+  // Support multi-line cron: parse each line and merge results
+  const lines = cronExpr.trim().split(/\n/).map(l => l.trim()).filter(Boolean)
+  let allTimes = []
+  let allWeekdays = []
+  let detectedFreq = 'custom'
+
+  for (const line of lines) {
+    const fields = line.split(/\s+/)
+    if (fields.length !== 5) continue
+
+    const [min, hour, , , dow] = fields
+    const hours = hour === '*' ? [9] : hour.split(',').map(Number).filter(n => !isNaN(n))
+    const mins = min === '*' ? [0] : min.split(',').map(Number).filter(n => !isNaN(n))
+
+    // For single-line cron with comma-separated hours/minutes,
+    // generate all combinations (this is how cron works)
+    for (const h of hours) {
+      for (const m of mins) {
+        allTimes.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+      }
+    }
+
+    // Detect frequency from dow field
+    if (dow === '*') {
+      if (detectedFreq === 'custom') detectedFreq = 'daily'
+    } else if (dow === '1-5') {
+      if (detectedFreq !== 'custom') detectedFreq = 'weekday'
+      allWeekdays = [1, 2, 3, 4, 5]
+    } else {
+      detectedFreq = 'custom'
+      allWeekdays = dow.split(',').map(Number).filter(n => !isNaN(n))
+    }
+  }
+
+  // Deduplicate and sort times
+  allTimes = [...new Set(allTimes)].sort()
+
+  if (!allTimes.length) allTimes = ['09:00']
+  if (!allWeekdays.length && detectedFreq === 'custom') allWeekdays = [1, 2, 3, 4, 5]
+
+  return { freqMode: detectedFreq, times: allTimes, weekdays: allWeekdays }
+}
+
+function cronToLabel(cronExpr) {
+  if (!cronExpr) return ''
+  const p = parseCronExpr(cronExpr)
+  const timeLabel = p.times.join(' · ') || '9:00'
+  if (p.freqMode === 'daily') return `每天 ${timeLabel}`
+  if (p.freqMode === 'weekday') return `工作日 ${timeLabel}`
+  if (p.freqMode === 'custom' && p.weekdays.length) {
+    const days = p.weekdays.map(d => '周' + WEEKDAY_LABELS[d]).join(' ')
+    return `${days} ${timeLabel}`
+  }
+  return cronExpr
+}
+
+const notificationTypes = {
+  keyword_alert: '关键词提醒',
+  group_digest: '定时摘要',
+  oa_digest: '公众号摘要',
+  oa_article_alert: '公众号即时',
+}
+
+const notificationStatuses = {
+  pending: '待投递',
+  delivered: '已投递',
+  ignored: '已忽略',
+  failed: '失败',
+}
+
+const statusColors = {
+  pending: 'var(--status-warn)',
+  delivered: 'var(--brand-green)',
+  ignored: 'var(--text-muted)',
+  failed: 'var(--status-error)',
+}
+
+// ── Main component ──────────────────────────────────────────────────
+
+export default function AssistantPanel() {
+  const [config, setConfig] = useState(null)
+  const [groups, setGroups] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [dirty, setDirty] = useState(false)
+  const saveTimerRef = useRef(null)
+  const [saveFlash, setSaveFlash] = useState(null)  // 'saving' | 'saved' | 'error' | null
+  const [notifications, setNotifications] = useState([])
+  const [notificationLoading, setNotificationLoading] = useState(false)
+  const [notificationError, setNotificationError] = useState('')
+  const [filters, setFilters] = useState({ chat_id: '', type: '', status: '' })
+  // Track which alert/digest items are expanded
+  const [expandedAlerts, setExpandedAlerts] = useState({})
+  const [expandedDigests, setExpandedDigests] = useState({})
+  const [expandedProfiles, setExpandedProfiles] = useState({})
+  const [notificationExpanded, setNotificationExpanded] = useState(false)
+  // Inline editors
+  const [showAlertEditor, setShowAlertEditor] = useState(false)
+  const [showDigestEditor, setShowDigestEditor] = useState(false)
+  const [alertDraft, setAlertDraft] = useState({ chat_id: '', group_name: '', keywords: [], enabled: true, push_target: '' })
+  const [digestDraft, setDigestDraft] = useState({
+    chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true,
+    unread_only: false, push_target: '', profile: { summary: '', focus: [], ignore: [], style: '', custom_prompt: '' },
+  })
+  const [editorError, setEditorError] = useState('')
+  // Push result toast (auto-disappears after 3s)
+  const [pushToast, setPushToast] = useState(null)  // { group_name, success, error }
+  // Draft state for editing existing cards (separate from saved config)
+  const [alertDrafts, setAlertDrafts] = useState({})  // { index: { ...values } }
+  const [digestDrafts, setDigestDrafts] = useState({})  // { index: { ...values } }
+
+  // WebSocket for digest push results
+  useEffect(() => {
+    const handleMessage = (e) => {
+      try {
+        const data = JSON.parse(e.data)
+        if (data.type === 'digest_push_result' || data.type === 'oa_digest_push_result') {
+          setPushToast(data)
+          // Session expired: show longer so user can read the fix
+          const duration = data.session_expired ? 10000 : 3000
+          setTimeout(() => setPushToast(null), duration)
+        }
+      } catch {}
+    }
+    let ws = window.__assistant_ws
+    if (!ws || ws.readyState === WebSocket.CLOSED) {
+      ws = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      window.__assistant_ws = ws
+    }
+    ws.addEventListener('message', handleMessage)
+    return () => { ws.removeEventListener('message', handleMessage) }
+  }, [])
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const [configRes, groupsRes] = await Promise.all([
+          fetch(`${API_BASE}/api/assistant/config`),
+          fetch(`${API_BASE}/api/nicknames/groups`),
+        ])
+        const configData = await configRes.json()
+        const groupsData = await groupsRes.json()
+        setConfig(normalizeConfig(configData.config || defaultConfig()))
+        if (groupsData.ok) {
+          setGroups(groupsData.groups || [])
+          // Fetch real member counts from WCDB and merge
+          try {
+            const countsRes = await fetch(`${API_BASE}/api/groups/member-counts`)
+            const countsData = await countsRes.json()
+            if (countsData.ok && countsData.counts) {
+              setGroups(prev => prev.map(g => ({
+                ...g,
+                member_count: countsData.counts[g.chat_id] ?? g.member_count,
+              })))
+            }
+          } catch {
+            // Fallback: keep original counts from messages.db
+          }
+        }
+      } catch {
+        setConfig(defaultConfig())
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [])
+
+  useEffect(() => {
+    loadNotifications()
+  }, [filters.chat_id, filters.type, filters.status])
+
+  function defaultConfig() {
+    return {
+      version: 1,
+      assistant_enabled: false,
+      allow_wechat_send: false,
+      alert_groups: [],
+      digest_groups: [],
+      notification_queue: { enabled: true, retention_hours: 24 },
+      outbox_retention_hours: 24,
+    }
+  }
+
+  // ── Data migration: fix Cartesian product cron expressions ──────────
+  // Old buildCronExpr generated "M1,M2 H1,H2 * * DOW" which creates
+  // a Cartesian product of times. Convert to one-line-per-time format.
+  function fixCronCartesian(cronExpr) {
+    if (!cronExpr || !cronExpr.includes('\n')) {
+      const fields = cronExpr.trim().split(/\s+/)
+      if (fields.length !== 5) return cronExpr
+      const [min, hour, dom, mon, dow] = fields
+      // If both minute and hour have commas, it's a Cartesian product
+      if (min.includes(',') && hour.includes(',')) {
+        const mins = min.split(',').map(Number).filter(n => !isNaN(n))
+        const hours = hour.split(',').map(Number).filter(n => !isNaN(n))
+        const lines = []
+        for (const h of hours) {
+          for (const m of mins) {
+            lines.push(`${m} ${h} ${dom} ${mon} ${dow}`)
+          }
+        }
+        return lines.join('\n')
+      }
+    }
+    return cronExpr
+  }
+
+  function normalizeConfig(raw) {
+    const queue = raw.notification_queue || {
+      enabled: (raw.notify_channels || []).some(ch => ch.enabled !== false) || true,
+      retention_hours: raw.outbox_retention_hours || 24,
+    }
+    return {
+      ...defaultConfig(),
+      ...raw,
+      notification_queue: queue,
+      alert_groups: (raw.alert_groups || []).map(item => ({ chat_id: '', ...item })),
+      digest_groups: (raw.digest_groups || []).map(item => {
+        const fixed = { chat_id: '', ...item }
+        if (fixed.cron_expr) {
+          fixed.cron_expr = fixCronCartesian(fixed.cron_expr)
+        }
+        return fixed
+      }),
+    }
+  }
+
+  function update(field, value) {
+    setDirty(true)
+    setConfig(prev => {
+      const next = { ...prev, [field]: value }
+      // Auto-save after state update
+      scheduleAutoSave(next)
+      return next
+    })
+  }
+
+  function updateQueue(patch) {
+    setDirty(true)
+    setConfig(prev => {
+      const next = {
+        ...prev,
+        notification_queue: { ...(prev.notification_queue || {}), ...patch },
+        outbox_retention_hours: patch.retention_hours ?? prev.outbox_retention_hours,
+      }
+      scheduleAutoSave(next)
+      return next
+    })
+  }
+
+  // Auto-save with debounce: switches/toggles save immediately,
+  // text/tag inputs debounce 800ms
+  function scheduleAutoSave(configToSave, immediate = false) {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    if (immediate) {
+      doSave(configToSave)
+    } else {
+      saveTimerRef.current = setTimeout(() => doSave(configToSave), 800)
+    }
+  }
+
+  async function doSave(configToSave) {
+    try {
+      setSaveFlash('saving')
+      const res = await fetch(`${API_BASE}/api/assistant/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(configToSave || config),
+      })
+      const d = await res.json()
+      if (d.ok) {
+        setSaved(true)
+        setSaveError('')
+        setDirty(false)
+        setSaveFlash('saved')
+        setTimeout(() => { setSaved(false); setSaveFlash(null) }, 1500)
+      } else {
+        setSaveError(d.error || '保存失败')
+        setSaveFlash('error')
+        setTimeout(() => setSaveFlash(null), 2500)
+      }
+    } catch (e) {
+      setSaveError(e.message || '保存失败')
+      setSaveFlash('error')
+      setTimeout(() => setSaveFlash(null), 2500)
+    }
+  }
+
+  // For immediate saves on toggle switches
+  function updateAndSaveNow(field, value) {
+    setDirty(true)
+    setConfig(prev => {
+      const next = { ...prev, [field]: value }
+      scheduleAutoSave(next, true)
+      return next
+    })
+  }
+
+  function updateQueueAndSave(patch) {
+    setDirty(true)
+    setConfig(prev => {
+      const next = {
+        ...prev,
+        notification_queue: { ...(prev.notification_queue || {}), ...patch },
+        outbox_retention_hours: patch.retention_hours ?? prev.outbox_retention_hours,
+      }
+      scheduleAutoSave(next, true)
+      return next
+    })
+  }
+
+  function findGroup(chatId) {
+    return groups.find(g => g.chat_id === chatId)
+  }
+
+  function applyGroupToAlert(index, chatId) {
+    const selected = findGroup(chatId)
+    const next = [...(config.alert_groups || [])]
+    next[index] = {
+      ...next[index],
+      chat_id: chatId,
+      group_name: selected?.group_name || next[index].group_name || '',
+    }
+    update('alert_groups', next)
+  }
+
+  function applyGroupToDigest(index, chatId) {
+    const selected = findGroup(chatId)
+    const next = [...(config.digest_groups || [])]
+    next[index] = {
+      ...next[index],
+      chat_id: chatId,
+      group_name: selected?.group_name || next[index].group_name || '',
+    }
+    update('digest_groups', next)
+  }
+
+  async function save() {
+    await doSave(config)
+  }
+
+  // For inline editors that build config first then save
+
+  async function loadNotifications() {
+    setNotificationLoading(true)
+    setNotificationError('')
+    try {
+      const params = new URLSearchParams()
+      if (filters.chat_id) params.set('chat_id', filters.chat_id)
+      if (filters.type) params.set('type', filters.type)
+      if (filters.status) params.set('status', filters.status)
+      params.set('limit', '50')
+      const res = await fetch(`${API_BASE}/api/assistant/notifications?${params.toString()}`)
+      const data = await res.json()
+      if (data.ok) setNotifications(data.notifications || [])
+      else setNotificationError(data.error || '通知记录加载失败')
+    } catch {
+      setNotificationError('通知记录加载失败')
+    } finally {
+      setNotificationLoading(false)
+    }
+  }
+
+  async function createTestNotification() {
+    await fetch(`${API_BASE}/api/assistant/notifications/test`, { method: 'POST' })
+    loadNotifications()
+  }
+
+  async function updateNotificationStatus(id, action) {
+    await fetch(`${API_BASE}/api/assistant/notifications/${id}/${action}`, { method: 'POST' })
+    loadNotifications()
+  }
+
+  if (loading) {
+    return (
+      <motion.div {...pageTransition} className="p-8 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <Spinner size={24} weight="bold" className="animate-spin text-brand-green mx-auto mb-3" />
+          <p className="text-sm text-text-muted font-mono">加载微信助手配置...</p>
+        </div>
+      </motion.div>
+    )
+  }
+
+  if (!config) return null
+
+  const assistantOn = config.assistant_enabled
+  const alertCount = (config.alert_groups || []).filter(g => g.enabled).length
+  const digestCount = (config.digest_groups || []).filter(g => g.enabled).length
+
+  return (
+    <motion.div {...pageTransition} className="p-8 space-y-10 max-w-5xl">
+      {/* Push result toast */}
+      {pushToast && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-2 rounded-lg text-sm font-medium shadow-lg transition-all max-w-sm ${
+          pushToast.success
+            ? 'bg-brand-green/90 text-white'
+            : 'bg-status-error/90 text-white'
+        }`}>
+          {pushToast.success
+            ? `✓ 推送成功: ${pushToast.group_name}`
+            : pushToast.session_expired
+              ? <div>
+                  <div>⚠ 推送失败: ${pushToast.group_name}</div>
+                  <div className="text-xs mt-1 opacity-90">微信链接可能已断开，请在微信中主动回复一条消息即可恢复，或扫码重新绑定</div>
+                </div>
+              : `⚠ 推送失败: ${pushToast.group_name}`}
+        </div>
+      )}
+
+      {/* ── Auto-save flash indicator ───────────────────────────── */}
+      <AnimatePresence>
+        {saveFlash && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            transition={{ duration: 0.2 }}
+            className="fixed bottom-6 right-6 z-50"
+          >
+            <div className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium shadow-lg transition-all ${
+              saveFlash === 'saving' ? 'bg-bg-raised text-text-muted' :
+              saveFlash === 'saved' ? 'bg-brand-green/90 text-white' :
+              'bg-status-error/90 text-white'
+            }`}>
+              {saveFlash === 'saving' && <Spinner size={14} className="animate-spin" />}
+              {saveFlash === 'saved' && <CheckCircle size={14} weight="fill" />}
+              {saveFlash === 'error' && <Warning size={14} weight="fill" />}
+              {saveFlash === 'saving' ? '保存中...' : saveFlash === 'saved' ? '已保存' : '保存失败'}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Status bar (with main toggle) ───────────────────── */}
+      <div className={`flex items-center gap-3 px-5 py-3 rounded-xl border text-sm transition-all duration-300 ${
+        assistantOn
+          ? 'bg-brand-green/5 border-brand-green/20'
+          : 'bg-bg-raised/60 border-border-main'
+      }`}>
+        <div className={`w-2.5 h-2.5 rounded-full ${assistantOn ? 'bg-brand-green animate-pulse' : 'bg-text-muted'}`} />
+        <span className={`font-semibold ${assistantOn ? 'text-brand-green-hover dark:text-brand-green' : 'text-text-muted'}`}>
+          {assistantOn ? '微信助手已开启' : '微信助手已关闭'}
+        </span>
+        <span className="text-text-muted">·</span>
+        <span className="text-xs text-text-muted">
+          {alertCount > 0 && `${alertCount} 个提醒群 · `}
+          {digestCount > 0 && `${digestCount} 个摘要群 · `}
+          {config.notification_queue?.enabled !== false ? '通知队列开启' : '通知队列关闭'}
+        </span>
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          <span className={`text-xs font-semibold uppercase tracking-wider ${assistantOn ? 'text-brand-green' : 'text-text-muted'}`}>
+            {assistantOn ? 'ON' : 'OFF'}
+          </span>
+          <Toggle enabled={config.assistant_enabled} onChange={v => updateAndSaveNow('assistant_enabled', v)} />
+        </div>
+      </div>
+
+      {/* ── Keyword Alerts ─────────────────────────────────────── */}
+      <section className="relative">
+        {!assistantOn && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-bg-main/60 backdrop-blur-[2px] rounded-2xl">
+            <p className="text-sm text-text-muted font-medium mb-3">请先开启微信助手</p>
+            <button
+              onClick={() => updateAndSaveNow('assistant_enabled', true)}
+              className="px-5 py-2 rounded-full bg-brand-green-hover text-white text-xs font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer"
+            >开启微信助手</button>
+          </div>
+        )}
+        <SectionHeader
+          title="关键词即时提醒"
+          accent="#f59e0b"
+          icon={Lightning}
+          subtitle="检测到关键词时即时提醒，可推送到微信"
+        />
+        <div className={`bg-bg-card rounded-2xl border border-border-main shadow-sm overflow-hidden transition-opacity duration-300 ${!assistantOn ? 'opacity-40' : ''}`}>
+          <div className="p-6 space-y-3">
+            {/* 已有群列表 */}
+            <AnimatePresence>
+              {(config.alert_groups || []).map((ag, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <AlertGroupCard
+                    ag={ag}
+                    index={i}
+                    groups={groups}
+                    expanded={!!expandedAlerts[i]}
+                    draft={alertDrafts[i] || null}
+                    onToggleExpand={() => {
+                      const nextExpanded = !expandedAlerts[i]
+                      setExpandedAlerts(prev => ({ ...prev, [i]: nextExpanded }))
+                      if (nextExpanded) {
+                        // Initialize draft from current config
+                        setAlertDrafts(prev => ({ ...prev, [i]: { ...ag } }))
+                      } else {
+                        // Clear draft on collapse
+                        setAlertDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
+                      }
+                    }}
+                    onToggleEnabled={v => {
+                      // Toggle updates draft only — save button persists
+                      setAlertDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || ag), enabled: v } }))
+                    }}
+                    onDelete={() => {
+                      const next = config.alert_groups.filter((_, idx) => idx !== i)
+                      updateAndSaveNow('alert_groups', next)
+                    }}
+                    onSelectGroup={chatId => {
+                      const selected = findGroup(chatId)
+                      setAlertDrafts(prev => ({ ...prev, [i]: { ...prev[i], chat_id: chatId, group_name: selected?.group_name || prev[i]?.group_name || '' } }))
+                    }}
+                    onKeywordsChange={keywords => {
+                      setAlertDrafts(prev => ({ ...prev, [i]: { ...prev[i], keywords } }))
+                    }}
+                    onPushTargetChange={v => {
+                      // Toggle updates draft only — save button persists
+                      setAlertDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || ag), push_target: v } }))
+                    }}
+                    onSave={() => {
+                      const draft = alertDrafts[i]
+                      if (!draft) return
+                      const next = [...config.alert_groups]
+                      next[i] = { ...next[i], ...draft }
+                      setConfig(prev => ({ ...prev, alert_groups: next }))
+                      scheduleAutoSave({ ...config, alert_groups: next }, true)
+                      setAlertDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
+                    }}
+                    onCancel={() => {
+                      setAlertDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
+                      setExpandedAlerts(prev => ({ ...prev, [i]: false }))
+                    }}
+                  />
+                </motion.div>
+              ))}
+            </AnimatePresence>
+
+            {/* 空状态 */}
+            {!config.alert_groups?.length && !showAlertEditor && (
+              <div className="py-10 text-center">
+                <Lightning size={32} className="text-text-muted/30 mx-auto mb-3" />
+                <p className="text-sm text-text-muted">添加群聊以配置关键词提醒</p>
+                <button
+                  onClick={() => { setShowAlertEditor(true); setAlertDraft({ chat_id: '', group_name: '', keywords: [], enabled: true, push_target: '' }); setEditorError('') }}
+                  className="mt-4 text-sm text-brand-green-hover hover:underline cursor-pointer font-medium"
+                >+ 添加提醒群</button>
+              </div>
+            )}
+
+            {/* Inline 编辑器 */}
+            <AnimatePresence>
+              {showAlertEditor && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <AlertGroupEditor
+                    draft={alertDraft}
+                    groups={groups}
+                    error={editorError}
+                    onDraftChange={setAlertDraft}
+                    onSave={() => {
+                      if (!alertDraft.chat_id) { setEditorError('请先选择群聊'); return }
+                      const selected = findGroup(alertDraft.chat_id)
+                      const next = [...(config.alert_groups || []), {
+                        ...alertDraft,
+                        group_name: selected?.group_name || alertDraft.group_name || '',
+                      }]
+                      updateAndSaveNow('alert_groups', next)
+                      setShowAlertEditor(false)
+                      setEditorError('')
+                    }}
+                    onCancel={() => { setShowAlertEditor(false); setEditorError('') }}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* 有群时的添加按钮 */}
+            {(config.alert_groups?.length > 0 || showAlertEditor) && !showAlertEditor && (
+              <button
+                onClick={() => { setShowAlertEditor(true); setAlertDraft({ chat_id: '', group_name: '', keywords: [], enabled: true, push_target: '' }); setEditorError('') }}
+                className="w-full py-3.5 text-sm text-text-muted hover:text-brand-green border border-dashed border-border-main hover:border-brand-green/40 rounded-xl transition-all duration-200 cursor-pointer bg-bg-raised/30 hover:bg-brand-green/5"
+              >
+                + 添加提醒群
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Timed Digests ──────────────────────────────────────── */}
+      <section className="relative">
+        {!assistantOn && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-bg-main/60 backdrop-blur-[2px] rounded-2xl">
+            <p className="text-sm text-text-muted font-medium mb-3">请先开启微信助手</p>
+            <button
+              onClick={() => updateAndSaveNow('assistant_enabled', true)}
+              className="px-5 py-2 rounded-full bg-brand-green-hover text-white text-xs font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer"
+            >开启微信助手</button>
+          </div>
+        )}
+        <SectionHeader
+          title="定时群摘要"
+          accent="var(--status-warn)"
+          icon={Clock}
+          subtitle="定时生成群聊摘要，可推送到微信"
+        />
+        <div className={`bg-bg-card rounded-2xl border border-border-main shadow-sm overflow-hidden transition-opacity duration-300 ${!assistantOn ? 'opacity-40' : ''}`}>
+          <div className="p-6 space-y-3">
+            {/* 已有群列表 */}
+            <AnimatePresence>
+              {(config.digest_groups || []).map((dg, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <DigestGroupCard
+                    dg={dg}
+                    index={i}
+                    groups={groups}
+                    expanded={!!expandedDigests[i]}
+                    profileExpanded={!!expandedProfiles[i]}
+                    draft={digestDrafts[i] || null}
+                    onToggleExpand={() => {
+                      const nextExpanded = !expandedDigests[i]
+                      setExpandedDigests(prev => ({ ...prev, [i]: nextExpanded }))
+                      if (nextExpanded) {
+                        // Initialize draft from current config
+                        setDigestDrafts(prev => ({ ...prev, [i]: { ...dg } }))
+                      } else {
+                        // Clear draft on collapse
+                        setDigestDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
+                      }
+                    }}
+                    onToggleProfile={() => setExpandedProfiles(prev => ({ ...prev, [i]: !prev[i] }))}
+                    onToggleEnabled={v => {
+                      // Toggle updates draft only — save button persists
+                      setDigestDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || dg), enabled: v } }))
+                    }}
+                    onDelete={() => {
+                      const next = config.digest_groups.filter((_, idx) => idx !== i)
+                      updateAndSaveNow('digest_groups', next)
+                    }}
+                    onSelectGroup={chatId => {
+                      const selected = findGroup(chatId)
+                      setDigestDrafts(prev => ({ ...prev, [i]: { ...prev[i], chat_id: chatId, group_name: selected?.group_name || prev[i]?.group_name || '' } }))
+                    }}
+                    onScheduleChange={schedule => {
+                      setDigestDrafts(prev => ({ ...prev, [i]: { ...prev[i], schedule } }))
+                    }}
+                    onCronExprChange={cron_expr => {
+                      setDigestDrafts(prev => ({ ...prev, [i]: { ...prev[i], cron_expr } }))
+                    }}
+                    onLookbackChange={lookback_hours => {
+                      setDigestDrafts(prev => ({ ...prev, [i]: { ...prev[i], lookback_hours } }))
+                    }}
+                    onProfileChange={patch => {
+                      setDigestDrafts(prev => {
+                        const profile = prev[i]?.profile || {}
+                        return { ...prev, [i]: { ...prev[i], profile: { ...profile, ...patch } } }
+                      })
+                    }}
+                    onUnreadOnlyChange={v => {
+                      // Toggle updates draft only — save button persists
+                      setDigestDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || dg), unread_only: v } }))
+                    }}
+                    onPushTargetChange={v => {
+                      // Toggle updates draft only — save button persists
+                      setDigestDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || dg), push_target: v } }))
+                    }}
+                    onSave={() => {
+                      const draft = digestDrafts[i]
+                      if (!draft) return
+                      const next = [...config.digest_groups]
+                      next[i] = { ...next[i], ...draft }
+                      setConfig(prev => ({ ...prev, digest_groups: next }))
+                      scheduleAutoSave({ ...config, digest_groups: next }, true)
+                      setDigestDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
+                      setExpandedDigests(prev => ({ ...prev, [i]: false }))
+                      setSaveFlash('saved')
+                      setTimeout(() => setSaveFlash(null), 1500)
+                    }}
+                    onCancel={() => {
+                      setDigestDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
+                      setExpandedDigests(prev => ({ ...prev, [i]: false }))
+                    }}
+                  />
+                </motion.div>
+              ))}
+            </AnimatePresence>
+
+            {/* 空状态 */}
+            {!config.digest_groups?.length && !showDigestEditor && (
+              <div className="py-10 text-center">
+                <Clock size={32} className="text-text-muted/30 mx-auto mb-3" />
+                <p className="text-sm text-text-muted">添加群聊以配置定时摘要</p>
+                <button
+                  onClick={() => { setShowDigestEditor(true); setDigestDraft({ chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true, unread_only: false, push_target: '', profile: { summary: '', focus: [], ignore: [], style: '' } }); setEditorError('') }}
+                  className="mt-4 text-sm text-brand-green-hover hover:underline cursor-pointer font-medium"
+                >+ 添加摘要群</button>
+              </div>
+            )}
+
+            {/* Inline 编辑器 */}
+            <AnimatePresence>
+              {showDigestEditor && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <DigestGroupEditor
+                    draft={digestDraft}
+                    groups={groups}
+                    error={editorError}
+                    onDraftChange={setDigestDraft}
+                    onSave={() => {
+                      if (!digestDraft.chat_id) { setEditorError('请先选择群聊'); return }
+                      const selected = findGroup(digestDraft.chat_id)
+                      const schedule = digestDraft.schedule?.length ? digestDraft.schedule : ['09:00']
+                      const cron_expr = digestDraft.cron_expr || '0 9 * * *'
+                      const next = [...(config.digest_groups || []), {
+                        ...digestDraft,
+                        schedule,
+                        cron_expr,
+                        group_name: selected?.group_name || digestDraft.group_name || '',
+                      }]
+                      updateAndSaveNow('digest_groups', next)
+                      setShowDigestEditor(false)
+                      setEditorError('')
+                    }}
+                    onCancel={() => { setShowDigestEditor(false); setEditorError('') }}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* 有群时的添加按钮 */}
+            {(config.digest_groups?.length > 0 || showDigestEditor) && !showDigestEditor && (
+              <button
+                onClick={() => { setShowDigestEditor(true); setDigestDraft({ chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true, unread_only: false, push_target: '', profile: { purpose: '', description: '', focus: [], ignore: [], style: '' } }); setEditorError('') }}
+                className="w-full py-3.5 text-sm text-text-muted hover:text-brand-green border border-dashed border-border-main hover:border-brand-green/40 rounded-xl transition-all duration-200 cursor-pointer bg-bg-raised/30 hover:bg-brand-green/5"
+              >
+                + 添加摘要群
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Notification Center ────────────────────────────────── */}
+      <section>
+        <SectionHeader
+          title="通知中心"
+          accent="var(--brand-green)"
+          icon={Bell}
+          subtitle="查看提醒和摘要的通知记录"
+          action={
+            <button
+              onClick={() => setNotificationExpanded(!notificationExpanded)}
+              className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-main transition-colors cursor-pointer"
+            >
+              {notificationExpanded ? '收起' : '展开'}
+              <CaretDown size={12} className={`transition-transform duration-200 ${notificationExpanded ? 'rotate-180' : ''}`} />
+            </button>
+          }
+        />
+        <AnimatePresence>
+          {notificationExpanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.25 }}
+              className="overflow-hidden"
+            >
+              <div className="space-y-5">
+                {/* Queue status card */}
+                <div className="bg-bg-card rounded-2xl border border-border-main shadow-sm overflow-hidden">
+                  <div className="p-6 space-y-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+                          config.notification_queue?.enabled !== false
+                            ? 'bg-brand-green/10 text-brand-green'
+                            : 'bg-bg-raised text-text-muted'
+                        }`}>
+                          <EnvelopeOpen size={18} />
+                        </div>
+                        <div>
+                          <p className="text-sm text-text-main font-medium">通知投递队列</p>
+                          <p className="text-xs text-text-muted mt-0.5">
+                            {config.notification_queue?.enabled !== false ? '队列运行中' : '队列已暂停'}
+                          </p>
+                        </div>
+                      </div>
+                      <Toggle enabled={config.notification_queue?.enabled !== false} onChange={v => updateQueueAndSave({ enabled: v })} />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pl-12">
+                      <div>
+                        <label className="text-xs text-text-muted block mb-1.5">通知保留时间</label>
+                        <div className="flex items-center gap-2">
+                          <input type="number" min={1} max={168} value={config.notification_queue?.retention_hours || 24}
+                            onChange={e => updateQueue({ retention_hours: parseInt(e.target.value) || 24 })}
+                            className="w-20 bg-bg-raised border border-border-main rounded-lg px-3 py-2 text-sm text-text-main focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                          />
+                          <span className="text-xs text-text-muted">小时</span>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs text-text-muted block mb-1.5">API 拉取地址</label>
+                        <code className="text-xs text-text-muted bg-bg-raised border border-border-main rounded-lg px-3 py-2 block truncate font-mono">
+                          GET /api/assistant/notifications/pending
+                        </code>
+                      </div>
+                    </div>
+                    <div className="pl-12">
+                      <button
+                        onClick={createTestNotification}
+                        className="text-sm text-brand-green-hover hover:underline cursor-pointer font-medium"
+                      >+ 写入一条测试通知</button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Notification history */}
+                <div className="bg-bg-card rounded-2xl border border-border-main shadow-sm overflow-hidden">
+                  <div className="p-6 space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-bg-raised text-text-muted">
+                          <Archive size={18} />
+                        </div>
+                        <p className="text-sm text-text-main font-medium">通知记录</p>
+                      </div>
+                      <button onClick={loadNotifications} className="text-sm text-brand-green-hover hover:underline cursor-pointer font-medium">刷新</button>
+                    </div>
+                    {/* Filters */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <SearchableGroupSelect
+                        groups={groups}
+                        value={filters.chat_id}
+                        onChange={chatId => setFilters(prev => ({ ...prev, chat_id: chatId }))}
+                        placeholder="全部群聊"
+                        allowClear
+                      />
+                      <select value={filters.type} onChange={e => setFilters(prev => ({ ...prev, type: e.target.value }))} className="bg-bg-raised border border-border-main rounded-lg px-3 py-2.5 text-sm text-text-main focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all">
+                        <option value="">全部类型</option>
+                        <option value="keyword_alert">关键词提醒</option>
+                        <option value="group_digest">定时摘要</option>
+                        <option value="oa_digest">公众号摘要</option>
+                        <option value="oa_article_alert">公众号即时</option>
+                      </select>
+                      <select value={filters.status} onChange={e => setFilters(prev => ({ ...prev, status: e.target.value }))} className="bg-bg-raised border border-border-main rounded-lg px-3 py-2.5 text-sm text-text-main focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all">
+                        <option value="">全部状态</option>
+                        <option value="pending">待投递</option>
+                        <option value="delivered">已投递</option>
+                        <option value="ignored">已忽略</option>
+                        <option value="failed">失败</option>
+                      </select>
+                    </div>
+                    {notificationError && <p className="text-xs text-status-error">{notificationError}</p>}
+                    {notificationLoading ? (
+                      <div className="flex items-center gap-2 text-xs text-text-muted py-8 justify-center"><Spinner size={14} className="animate-spin" />加载中...</div>
+                    ) : (
+                      <div className="space-y-2 max-h-[480px] overflow-y-auto">
+                        {notifications.map(n => (
+                          <NotificationCard
+                            key={n.id}
+                            notification={n}
+                            onAck={() => updateNotificationStatus(n.id, 'ack')}
+                            onIgnore={() => updateNotificationStatus(n.id, 'ignore')}
+                          />
+                        ))}
+                        {!notifications.length && (
+                          <div className="py-10 text-center">
+                            <Archive size={28} className="text-text-muted/40 mx-auto mb-2" />
+                            <p className="text-xs text-text-muted">暂无通知记录</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </section>
+
+
+    </motion.div>
+  )
+}
+
+// ── Sub-components ─────────────────────────────────────────────────
+
+function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, onToggleEnabled, onDelete, onSelectGroup, onKeywordsChange, onPushTargetChange, onSave, onCancel }) {
+  const bodyRef = useRef(null)
+  // Use draft if available (editing), otherwise use saved values
+  const values = draft || ag
+
+  return (
+    <div className="border border-border-main rounded-xl overflow-hidden transition-all duration-200 hover:border-border-main/80">
+      {/* Header */}
+      <div
+        className="flex items-center gap-3 p-4 cursor-pointer hover:bg-bg-raised/30 transition-colors"
+        onClick={onToggleExpand}
+      >
+        <Toggle enabled={ag.enabled} onChange={onToggleEnabled} />
+        <div className="flex-1 min-w-0">
+          <span className="text-sm text-text-main font-medium truncate block">
+            {ag.group_name || `提醒群 #${index + 1}`}
+          </span>
+          <div className="flex gap-1 mt-1 flex-wrap items-center">
+            {(ag.keywords || []).slice(0, 3).map((kw, ki) => (
+              <span key={ki} className="text-xs px-2 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">{kw}</span>
+            ))}
+            {(ag.keywords || []).length > 3 && (
+              <span className="text-xs text-text-muted">+{ag.keywords.length - 3}</span>
+            )}
+            {ag.push_target === 'ilink' && (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-status-warn-soft text-status-warn font-medium">推送</span>
+            )}
+          </div>
+        </div>
+        <DeleteButton onDelete={onDelete} />
+        <div className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
+          <CaretDown size={16} className="text-text-muted" />
+        </div>
+      </div>
+      {/* Body */}
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+            onAnimationComplete={() => {
+              if (bodyRef.current) {
+                bodyRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+              }
+            }}
+          >
+            <div ref={bodyRef} className="px-4 pb-4 space-y-3 border-t border-border-main/50 pt-4 mx-4">
+              <div>
+                <label className="text-xs text-text-muted block mb-1.5">选择群聊</label>
+                <SearchableGroupSelect
+                  groups={groups}
+                  value={values.chat_id || ''}
+                  onChange={onSelectGroup}
+                  placeholder="搜索群聊..."
+                />
+                {!values.chat_id && values.group_name && (
+                  <p className="text-xs text-status-warn mt-1">历史群名：{values.group_name}，请从下拉重新绑定</p>
+                )}
+              </div>
+              <div>
+                <label className="text-xs text-text-muted block mb-1.5">关键词</label>
+                <TagInput
+                  tags={values.keywords || []}
+                  onChange={onKeywordsChange}
+                  placeholder="输入关键词后按回车添加"
+                />
+              </div>
+              {/* Push to WeChat toggle */}
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm text-text-main/80 font-medium">推送到微信</p>
+                  <p className="text-xs text-text-muted mt-0.5">开启后关键词命中时自动推送到微信私聊（需先绑定 iLink Bot）</p>
+                </div>
+                <Toggle
+                  enabled={values.push_target === 'ilink'}
+                  onChange={v => onPushTargetChange?.(v ? 'ilink' : '')}
+                />
+              </div>
+              {/* Save / Cancel buttons */}
+              {draft && (
+                <div className="flex items-center gap-2 pt-3 border-t border-border-main/30">
+                  <button
+                    onClick={onSave}
+                    className="text-sm px-5 py-2 rounded-lg bg-brand-green-hover text-white font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer"
+                  >保存</button>
+                  <button
+                    onClick={onCancel}
+                    className="text-sm px-5 py-2 rounded-lg bg-bg-raised border border-border-main text-text-muted hover:text-text-main transition-colors cursor-pointer"
+                  >取消</button>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+// ── ScheduleConfig — 摘要时间配置（频率+时间+星期+高阶cron）──
+
+function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCronExprChange }) {
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [customTimeInput, setCustomTimeInput] = useState('')
+
+  // 从 cron_expr 解析基础模式；无 cron 时从 schedule 推断
+  const parsed = cronExpr
+    ? parseCronExpr(cronExpr)
+    : { freqMode: 'daily', times: schedule.length ? schedule : ['09:00'], weekdays: [1,2,3,4,5] }
+
+  const freqMode = parsed.freqMode
+  const times = parsed.times
+  const weekdays = parsed.weekdays
+
+  function syncCron(newTimes, newFreq, newWeekdays) {
+    const cron = buildCronExpr(newTimes, newFreq, newWeekdays)
+    onScheduleChange(newTimes)
+    onCronExprChange(cron)
+  }
+
+  function handleFreqChange(mode) {
+    const wds = mode === 'weekday' ? [1,2,3,4,5] : mode === 'daily' ? [] : weekdays
+    syncCron(times, mode, wds)
+  }
+
+  function handleTimeToggle(time) {
+    const next = times.includes(time) ? times.filter(t => t !== time) : [...times, time].sort()
+    if (!next.length) next.push('09:00')
+    syncCron(next, freqMode, weekdays)
+  }
+
+  function addCustomTime() {
+    if (!customTimeInput) return
+    // <input type="time"> returns "HH:MM" format, validated by browser
+    const [h, m] = customTimeInput.split(':').map(Number)
+    if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) return
+    const timeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+    const next = [...new Set([...times, timeStr])].sort()
+    syncCron(next, freqMode, weekdays)
+    setCustomTimeInput('')
+  }
+
+  function removeCustomTime(time) {
+    const next = times.filter(t => t !== time)
+    if (!next.length) next.push('09:00')
+    syncCron(next, freqMode, weekdays)
+  }
+
+  function handleWeekdayToggle(day) {
+    const next = weekdays.includes(day) ? weekdays.filter(d => d !== day) : [...weekdays, day].sort((a,b)=>a-b)
+    if (!next.length) return // 至少选一天
+    syncCron(times, 'custom', next)
+  }
+
+  return (
+    <div className="space-y-3">
+      <label className="text-xs text-text-muted block">摘要时间</label>
+
+      {/* 频率选择 */}
+      <div className="flex gap-1.5">
+        {[
+          { key: 'daily', label: '每天' },
+          { key: 'weekday', label: '工作日' },
+          { key: 'custom', label: '自定义' },
+        ].map(f => (
+          <button
+            key={f.key}
+            onClick={() => handleFreqChange(f.key)}
+            className={`text-sm px-3.5 py-2 rounded-lg font-medium transition-all duration-150 cursor-pointer ${
+              freqMode === f.key
+                ? 'bg-brand-green-hover text-white shadow-sm'
+                : 'bg-bg-raised border border-border-main text-text-muted hover:border-brand-green/40 hover:text-text-main'
+            }`}
+          >{f.label}</button>
+        ))}
+      </div>
+
+      {/* 时间 chips（预设 + 用户自定义的都显示为可点选 chip） */}
+      <div className="flex flex-wrap gap-1.5">
+        {PRESET_TIMES.map(t => {
+          const active = times.includes(t)
+          return (
+            <button
+              key={t}
+              onClick={() => handleTimeToggle(t)}
+              className={`text-xs px-3 py-2 rounded-lg font-mono font-medium transition-all duration-150 cursor-pointer ${
+                active
+                  ? 'bg-brand-green-hover text-white shadow-sm'
+                  : 'bg-bg-raised border border-border-main text-text-muted hover:border-brand-green/40 hover:text-text-main'
+              }`}
+            >{t}</button>
+          )
+        })}
+        {/* 用户添加的自定义时间也显示为 chip，可点击删除 */}
+        {times.filter(t => !PRESET_TIMES.includes(t)).map(t => (
+          <span
+            key={t}
+            className="inline-flex items-center gap-1 text-xs px-3 py-2 rounded-lg font-mono font-medium bg-brand-green-hover text-white shadow-sm"
+          >
+            {t}
+            <button
+              onClick={() => removeCustomTime(t)}
+              className="text-bg-main/60 hover:text-bg-main transition-colors cursor-pointer"
+            >
+              <X size={10} weight="bold" />
+            </button>
+          </span>
+        ))}
+      </div>
+
+      {/* 添加自定义时间 — 时间选择器 + 添加按钮 */}
+      <div className="flex items-center gap-1.5">
+        <input
+          type="time"
+          value={customTimeInput}
+          onChange={e => setCustomTimeInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') addCustomTime() }}
+          onBlur={() => { if (customTimeInput) addCustomTime() }}
+          className="w-36 bg-bg-raised border border-border-main rounded-lg px-3 py-2 text-sm text-text-main focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+        />
+        <button
+          onClick={addCustomTime}
+          disabled={!customTimeInput}
+          className="flex items-center justify-center w-9 h-9 rounded-lg bg-brand-green-hover text-white font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <Plus size={14} weight="bold" />
+        </button>
+        <span className="text-xs text-text-muted ml-1">回车或失焦自动添加</span>
+      </div>
+
+      {/* 星期勾选 — 仅自定义模式 */}
+      {freqMode === 'custom' && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-text-muted shrink-0">星期</span>
+          {WEEKDAY_LABELS.map((label, i) => {
+            const dayNum = i // 0=日, 1=一, ..., 6=六
+            const active = weekdays.includes(dayNum)
+            return (
+              <button
+                key={i}
+                onClick={() => handleWeekdayToggle(dayNum)}
+                className={`text-xs w-9 h-9 rounded-lg font-medium transition-all duration-150 cursor-pointer ${
+                  active
+                    ? 'bg-brand-green-hover text-white shadow-sm'
+                    : 'bg-bg-raised border border-border-main text-text-muted hover:border-brand-green/40'
+                }`}
+              >{label}</button>
+            )
+          })}
+        </div>
+      )}
+
+      {/* 高阶 Cron 设置 */}
+      <div>
+        <button
+          onClick={() => setAdvancedOpen(!advancedOpen)}
+          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-main transition-colors cursor-pointer"
+        >
+          {advancedOpen ? <CaretDown size={10} /> : <CaretRight size={10} />}
+          高阶 Cron 设置
+        </button>
+        <AnimatePresence>
+          {advancedOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="overflow-hidden"
+            >
+              <div className="mt-2 space-y-2 pl-2">
+                <input
+                  type="text"
+                  value={cronExpr}
+                  onChange={e => onCronExprChange(e.target.value)}
+                  placeholder="0 9,18 * * 1-5"
+                  className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm text-text-main font-mono placeholder:text-text-muted/65 focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                />
+                <p className="text-xs text-text-muted">
+                  5字段: 分 时 日 月 周。如 <code className="text-text-muted">0 9,18 * * 1-5</code> = 工作日9/18点
+                </p>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  )
+}
+
+function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onSave, onCancel }) {
+  const bodyRef = useRef(null)
+  // Use draft if available (editing), otherwise use saved values
+  const values = draft || dg
+
+  // 解析 cron/schedule 为 header 展示用
+  const headerSchedule = dg.cron_expr
+    ? cronToLabel(dg.cron_expr)
+    : (dg.schedule || []).length > 0
+      ? dg.schedule.join(' · ')
+      : ''
+
+  const LOOKBACK_OPTIONS = [
+    { value: 3, label: '近3小时' },
+    { value: 6, label: '近6小时' },
+    { value: 12, label: '近12小时' },
+    { value: 24, label: '近1天' },
+  ]
+
+  return (
+    <div className="border border-border-main rounded-xl overflow-hidden transition-all duration-200 hover:border-border-main/80">
+      {/* Header */}
+      <div
+        className="flex items-center gap-3 p-4 cursor-pointer hover:bg-bg-raised/30 transition-colors"
+        onClick={onToggleExpand}
+      >
+        <Toggle enabled={dg.enabled} onChange={onToggleEnabled} />
+        <div className="flex-1 min-w-0">
+          <span className="text-sm text-text-main font-medium truncate block">
+            {dg.group_name || `摘要群 #${index + 1}`}
+          </span>
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            {headerSchedule ? (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-mono">{headerSchedule}</span>
+            ) : (
+              <span className="text-xs text-status-warn">未设置时间</span>
+            )}
+            {dg.lookback_hours && dg.lookback_hours !== 6 && (
+              <span className="text-xs text-text-muted">{dg.lookback_hours}h</span>
+            )}
+            {dg.unread_only && (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-status-warn-soft text-status-warn font-medium">未读</span>
+            )}
+            {dg.push_target === 'ilink' && (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-status-info-soft text-status-info font-medium">推送</span>
+            )}
+          </div>
+        </div>
+        <DeleteButton onDelete={onDelete} />
+        <div className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
+          <CaretDown size={16} className="text-text-muted" />
+        </div>
+      </div>
+      {/* Body */}
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+            onAnimationComplete={() => {
+              if (bodyRef.current) {
+                bodyRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+              }
+            }}
+          >
+            <div ref={bodyRef} className="px-4 pb-4 space-y-4 border-t border-border-main/50 pt-4 mx-4">
+              {/* Group select */}
+              <div>
+                <label className="text-xs text-text-muted block mb-1.5">选择群聊</label>
+                <SearchableGroupSelect
+                  groups={groups}
+                  value={values.chat_id || ''}
+                  onChange={onSelectGroup}
+                  placeholder="搜索群聊..."
+                />
+                {!values.chat_id && values.group_name && (
+                  <p className="text-xs text-status-warn mt-1">历史群名：{values.group_name}，请从下拉重新绑定</p>
+                )}
+              </div>
+              {/* Schedule config */}
+              <ScheduleConfig
+                schedule={values.schedule || []}
+                cronExpr={values.cron_expr || ''}
+                onScheduleChange={onScheduleChange}
+                onCronExprChange={onCronExprChange}
+              />
+              {/* Lookback — 改为易懂表达 */}
+              <div>
+                <label className="text-xs text-text-muted block mb-1.5">摘要时间范围</label>
+                <p className="text-xs text-text-muted mb-2">从当前时间往前取多少小时的消息进行摘要</p>
+                <div className="flex items-center gap-2">
+                  {LOOKBACK_OPTIONS.map(({ value, label }) => (
+                    <button
+                      key={value}
+                      onClick={() => onLookbackChange(value)}
+                      className={`text-xs px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
+                        values.lookback_hours === value
+                          ? 'bg-brand-green-hover text-white shadow-sm'
+                          : 'bg-bg-raised border border-border-main text-text-muted hover:border-brand-green/40'
+                      }`}
+                    >{label}</button>
+                  ))}
+                </div>
+                {values.unread_only && (
+                  <p className="text-xs text-status-warn/80 mt-1">仅摘要该时间窗口内的未读消息</p>
+                )}
+              </div>
+              {/* Unread only toggle — 加深标签 */}
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm text-text-main/80 font-medium">仅摘要未读</p>
+                  <p className="text-xs text-text-muted mt-0.5">开启后只在时间窗口内摘要未读消息，无未读则跳过</p>
+                </div>
+                <Toggle
+                  enabled={values.unread_only || false}
+                  onChange={onUnreadOnlyChange}
+                />
+              </div>
+              {/* Push to WeChat toggle — 加深标签 */}
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm text-text-main/80 font-medium">推送到微信</p>
+                  <p className="text-xs text-text-muted mt-0.5">开启后摘要结果自动推送到微信私聊（需先绑定 iLink Bot）</p>
+                </div>
+                <Toggle
+                  enabled={values.push_target === 'ilink'}
+                  onChange={v => onPushTargetChange?.(v ? 'ilink' : '')}
+                />
+              </div>
+              {/* Group profile */}
+              <div>
+                <button
+                  onClick={onToggleProfile}
+                  className="flex items-center gap-2 text-sm text-text-muted hover:text-text-main transition-colors cursor-pointer"
+                >
+                  {profileExpanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
+                  群档案 Profile
+                  {values.profile && (values.profile.summary || values.profile.focus?.length || values.profile.custom_prompt) ? (
+                    <span className="text-xs text-brand-green">· 已填写</span>
+                  ) : (
+                    <span className="text-xs text-text-muted">· 可选</span>
+                  )}
+                </button>
+                <AnimatePresence>
+                  {profileExpanded && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="mt-3 space-y-2.5 pl-4">
+                        {/* 群简介 — merged from purpose + description */}
+                        <div>
+                          <label className="text-xs text-text-muted block mb-1">群简介</label>
+                          <textarea
+                            value={values.profile?.summary || ''}
+                            onChange={e => onProfileChange({ summary: e.target.value })}
+                            placeholder="这个群是做什么的？主要聊什么？"
+                            rows={2}
+                            className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm text-text-main placeholder:text-text-muted/65 resize-none focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                          />
+                        </div>
+                        {/* 关注点 — tag input */}
+                        <ProfileInput label="关注点（逗号分隔）" value={(values.profile?.focus || []).join(', ')} placeholder="新需求, 报价, 截止时间" onChange={v => onProfileChange({ focus: v.split(',').map(s => s.trim()).filter(Boolean) })} />
+                        {/* 忽略内容 — tag input */}
+                        <ProfileInput label="忽略内容（逗号分隔）" value={(values.profile?.ignore || []).join(', ')} placeholder="闲聊, 表情, 广告" onChange={v => onProfileChange({ ignore: v.split(',').map(s => s.trim()).filter(Boolean) })} />
+                        {/* 摘要风格 — preset chips + 自定义 */}
+                        <div>
+                          <label className="text-xs text-text-muted block mb-1.5">摘要风格</label>
+                          <div className="flex flex-wrap gap-1.5">
+                            {[
+                              { key: '', label: '默认' },
+                              { key: '行动项优先', label: '行动项优先' },
+                              { key: '完整复盘', label: '完整复盘' },
+                              { key: '极简速览', label: '极简速览' },
+                              { key: 'custom', label: '自定义' },
+                            ].map(s => (
+                              <button
+                                key={s.key}
+                                onClick={() => {
+                                  if (s.key === 'custom') {
+                                    onProfileChange({ style: 'custom' })
+                                  } else {
+                                    onProfileChange({ style: s.key, custom_prompt: '' })
+                                  }
+                                }}
+                                className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-all duration-150 cursor-pointer ${
+                                  (values.profile?.style || '') === s.key
+                                    ? 'bg-brand-green-hover text-white shadow-sm'
+                                    : 'bg-bg-raised border border-border-main text-text-muted hover:border-brand-green/40 hover:text-text-main'
+                                }`}
+                              >{s.label}</button>
+                            ))}
+                          </div>
+                        </div>
+                        {/* 自定义摘要指令 — 仅选中自定义时显示 */}
+                        {(values.profile?.style || '') === 'custom' && (
+                          <div className="space-y-2">
+                            {/* 当前默认 Prompt 预览（只读参考） */}
+                            <div>
+                              <label className="text-xs text-text-muted mb-1 block">当前默认 Prompt（只读参考）</label>
+                              <div className="p-2 rounded-lg bg-bg-inset border border-border-main text-xs text-text-muted max-h-20 overflow-y-auto whitespace-pre-wrap">
+                                你是微信群聊AI助手，帮助用户回顾和查找群聊消息。用中文回答，简洁自然。基于群聊记录回答问题。引用消息时用"昵称说：..."的格式。可以帮用户查找某人说的话、总结讨论、找特定话题的消息。如果用户问的内容不在提供的记录中，坦诚说明。不要编造不存在的消息。
+                              </div>
+                            </div>
+                            {/* 自定义 Prompt 输入框（可编辑，保存后完全替代默认） */}
+                            <div>
+                              <label className="text-xs text-text-muted font-medium mb-1 block">自定义 Prompt（完全替代默认，仅影响此群）</label>
+                              <textarea
+                                value={values.profile?.custom_prompt || ''}
+                                onChange={e => onProfileChange({ custom_prompt: e.target.value })}
+                                placeholder="修改后将完全替代默认 System Prompt。留空则使用默认。例如：你是一个项目进度追踪助手，只输出待办事项和截止时间..."
+                                rows={3}
+                                className="w-full bg-bg-main border border-border-main rounded-xl px-4 py-2.5 text-sm text-text-main
+                                  placeholder:text-text-muted/65 resize-none
+                                  focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/15"
+                              />
+                              <p className="text-xs text-status-warn mt-1">⚠ 填写后完全替代默认摘要指令，仅影响此群，不影响其他群</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+              {/* Save / Cancel buttons */}
+              {draft && (
+                <div className="flex items-center gap-2 pt-3 border-t border-border-main/30">
+                  <button
+                    onClick={onSave}
+                    className="text-sm px-5 py-2 rounded-lg bg-brand-green-hover text-white font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer"
+                  >保存</button>
+                  <button
+                    onClick={onCancel}
+                    className="text-sm px-5 py-2 rounded-lg bg-bg-raised border border-border-main text-text-muted hover:text-text-main transition-colors cursor-pointer"
+                  >取消</button>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+function AlertGroupEditor({ draft, groups, error, onDraftChange, onSave, onCancel }) {
+  return (
+    <div className="border border-brand-green/30 rounded-xl p-4 space-y-3 bg-brand-green/[0.02]">
+      <p className="text-sm text-brand-green font-semibold mb-1">新增提醒群</p>
+      {error && <p className="text-xs text-status-error">{error}</p>}
+      <div>
+        <label className="text-xs text-text-muted block mb-1.5">选择群聊 <span className="text-status-error">*</span></label>
+        <SearchableGroupSelect
+          groups={groups}
+          value={draft.chat_id || ''}
+          onChange={chatId => {
+            const selected = groups.find(g => g.chat_id === chatId)
+            onDraftChange({ ...draft, chat_id: chatId, group_name: selected?.group_name || '' })
+          }}
+          placeholder="搜索群聊..."
+        />
+      </div>
+      <div>
+        <label className="text-xs text-text-muted block mb-1.5">关键词</label>
+        <TagInput
+          tags={draft.keywords || []}
+          onChange={keywords => onDraftChange({ ...draft, keywords })}
+          placeholder="输入关键词后按回车添加"
+        />
+      </div>
+      {/* Push to WeChat toggle */}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm text-text-main/80 font-medium">推送到微信</p>
+          <p className="text-xs text-text-muted mt-0.5">开启后关键词命中时自动推送到微信私聊（需先绑定 iLink Bot）</p>
+        </div>
+        <Toggle enabled={draft.push_target === 'ilink'} onChange={v => onDraftChange({ ...draft, push_target: v ? 'ilink' : '' })} />
+      </div>
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          onClick={onSave}
+          className="text-sm px-5 py-2 rounded-lg bg-brand-green-hover text-white font-semibold hover:bg-brand-green-hover transition-colors cursor-pointer"
+        >保存</button>
+        <button
+          onClick={onCancel}
+          className="text-sm px-5 py-2 rounded-lg bg-bg-raised border border-border-main text-text-muted hover:text-text-main transition-colors cursor-pointer"
+        >取消</button>
+      </div>
+    </div>
+  )
+}
+
+function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCancel }) {
+  const [profileOpen, setProfileOpen] = useState(false)
+  return (
+    <div className="border border-brand-green/30 rounded-xl p-4 space-y-3 bg-brand-green/[0.02]">
+      <p className="text-sm text-brand-green font-semibold mb-1">新增摘要群</p>
+      {error && <p className="text-xs text-status-error">{error}</p>}
+      <div>
+        <label className="text-xs text-text-muted block mb-1.5">选择群聊 <span className="text-status-error">*</span></label>
+        <SearchableGroupSelect
+          groups={groups}
+          value={draft.chat_id || ''}
+          onChange={chatId => {
+            const selected = groups.find(g => g.chat_id === chatId)
+            onDraftChange({ ...draft, chat_id: chatId, group_name: selected?.group_name || '' })
+          }}
+          placeholder="搜索群聊..."
+        />
+      </div>
+      {/* Schedule config */}
+      <ScheduleConfig
+        schedule={draft.schedule || []}
+        cronExpr={draft.cron_expr || ''}
+        onScheduleChange={schedule => onDraftChange({ ...draft, schedule })}
+        onCronExprChange={cron_expr => onDraftChange({ ...draft, cron_expr })}
+      />
+      {/* 回溯时长 */}
+      <div>
+        <label className="text-xs text-text-muted block mb-1.5">摘要时间范围</label>
+        <div className="flex items-center gap-2">
+          {[3, 6, 12, 24].map(h => (
+            <button
+              key={h}
+              onClick={() => onDraftChange({ ...draft, lookback_hours: h })}
+              className={`text-xs px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
+                draft.lookback_hours === h ? 'bg-brand-green-hover text-white shadow-sm' : 'bg-bg-raised border border-border-main text-text-muted hover:border-brand-green/40'
+              }`}
+            >{h}h</button>
+          ))}
+        </div>
+      </div>
+      {/* 仅摘要未读 */}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm text-text-main/80 font-medium">仅摘要未读</p>
+          <p className="text-xs text-text-muted mt-0.5">开启后只在时间窗口内摘要未读消息，无未读则跳过</p>
+        </div>
+        <Toggle enabled={draft.unread_only || false} onChange={v => onDraftChange({ ...draft, unread_only: v })} />
+      </div>
+      {/* 推送到微信 */}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm text-text-main/80 font-medium">推送到微信</p>
+          <p className="text-xs text-text-muted mt-0.5">开启后摘要结果自动推送到微信私聊（需先绑定 iLink Bot）</p>
+        </div>
+        <Toggle enabled={draft.push_target === 'ilink'} onChange={v => onDraftChange({ ...draft, push_target: v ? 'ilink' : '' })} />
+      </div>
+      {/* Profile */}
+      <div>
+        <button
+          onClick={() => setProfileOpen(!profileOpen)}
+          className="flex items-center gap-2 text-sm text-text-muted hover:text-text-main transition-colors cursor-pointer"
+        >
+          {profileOpen ? <CaretDown size={12} /> : <CaretRight size={12} />}
+          群档案 Profile
+          <span className="text-xs text-text-muted">· 可选</span>
+        </button>
+        <AnimatePresence>
+          {profileOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="overflow-hidden"
+            >
+              <div className="mt-3 space-y-2.5 pl-4">
+                {/* 群简介 — merged from purpose + description */}
+                <div>
+                  <label className="text-xs text-text-muted block mb-1">群简介</label>
+                  <textarea
+                    value={draft.profile?.summary || ''}
+                    onChange={e => onDraftChange({ ...draft, profile: { ...draft.profile, summary: e.target.value } })}
+                    placeholder="这个群是做什么的？主要聊什么？"
+                    rows={2}
+                    className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm text-text-main placeholder:text-text-muted/65 resize-none focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                  />
+                </div>
+                <ProfileInput label="关注点（逗号分隔）" value={(draft.profile?.focus || []).join(', ')} placeholder="新需求, 报价, 截止时间" onChange={v => onDraftChange({ ...draft, profile: { ...draft.profile, focus: v.split(',').map(s => s.trim()).filter(Boolean) } })} />
+                <ProfileInput label="忽略内容（逗号分隔）" value={(draft.profile?.ignore || []).join(', ')} placeholder="闲聊, 表情, 广告" onChange={v => onDraftChange({ ...draft, profile: { ...draft.profile, ignore: v.split(',').map(s => s.trim()).filter(Boolean) } })} />
+                {/* 摘要风格 — preset chips */}
+                <div>
+                  <label className="text-xs text-text-muted block mb-1.5">摘要风格</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { key: '', label: '默认' },
+                      { key: '行动项优先', label: '行动项优先' },
+                      { key: '完整复盘', label: '完整复盘' },
+                      { key: '极简速览', label: '极简速览' },
+                    ].map(s => (
+                      <button
+                        key={s.key}
+                        onClick={() => onDraftChange({ ...draft, profile: { ...draft.profile, style: s.key } })}
+                        className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-all duration-150 cursor-pointer ${
+                          (draft.profile?.style || '') === s.key
+                            ? 'bg-brand-green-hover text-white shadow-sm'
+                            : 'bg-bg-raised border border-border-main text-text-muted hover:border-brand-green/40 hover:text-text-main'
+                        }`}
+                      >{s.label}</button>
+                    ))}
+                  </div>
+                </div>
+                {/* 自定义摘要指令 — completely replaces system prompt */}
+                <div>
+                  <label className="text-xs text-text-muted font-medium mb-1.5">自定义摘要指令</label>
+                  <textarea
+                    value={draft.profile?.custom_prompt || ''}
+                    onChange={e => onDraftChange({ ...draft, profile: { ...draft.profile, custom_prompt: e.target.value } })}
+                    placeholder="填写后将完全替代默认 System Prompt，自行控制AI角色和输出格式。例如：你是一个项目进度追踪助手，只输出待办事项和截止时间..."
+                    rows={3}
+                    className="w-full bg-bg-main border border-border-main rounded-xl px-4 py-2.5 text-sm text-text-main
+                      placeholder:text-text-muted/65 resize-none
+                      focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/15"
+                  />
+                  <p className="text-xs text-status-warn mt-1">⚠ 填写后完全替代默认摘要指令，请确保指令完整</p>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          onClick={onSave}
+          className="text-sm px-5 py-2 rounded-lg bg-brand-green-hover text-white font-semibold hover:bg-brand-green-hover transition-colors cursor-pointer"
+        >保存</button>
+        <button
+          onClick={onCancel}
+          className="text-sm px-5 py-2 rounded-lg bg-bg-raised border border-border-main text-text-muted hover:text-text-main transition-colors cursor-pointer"
+        >取消</button>
+      </div>
+    </div>
+  )
+}
+
+function DeleteButton({ onDelete }) {
+  const [confirming, setConfirming] = useState(false)
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span className="text-xs text-status-error font-medium">确认?</span>
+        <button
+          onClick={e => { e.stopPropagation(); onDelete(); setConfirming(false) }}
+          className="text-xs px-2.5 py-1 rounded bg-status-error text-bg-main font-medium cursor-pointer"
+        >是</button>
+        <button
+          onClick={e => { e.stopPropagation(); setConfirming(false) }}
+          className="text-xs px-2.5 py-1 rounded bg-bg-raised border border-border-main text-text-muted font-medium cursor-pointer"
+        >否</button>
+      </div>
+    )
+  }
+
+  return (
+    <button
+      onClick={e => { e.stopPropagation(); setConfirming(true) }}
+      className="text-sm text-text-muted hover:text-status-error shrink-0 px-2 py-1.5 transition-colors cursor-pointer"
+    >
+      <Trash size={16} />
+    </button>
+  )
+}
+
+function ProfileInput({ label, value, placeholder, onChange }) {
+  return (
+    <div>
+      <label className="text-xs text-text-muted block mb-1">{label}</label>
+      <input
+        type="text"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm text-text-main placeholder:text-text-muted/65 focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+      />
+    </div>
+  )
+}
+
+function NotificationCard({ notification, onAck, onIgnore }) {
+  const statusColor = statusColors[notification.status] || '#a0aec0'
+  return (
+    <div className="bg-bg-raised/40 border border-border-main rounded-xl p-4 transition-all hover:border-border-main/80">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap mb-2">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">
+              {notificationTypes[notification.type] || notification.type}
+            </span>
+            <span className="inline-flex items-center gap-1 text-xs" style={{ color: statusColor }}>
+              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: statusColor }} />
+              {notificationStatuses[notification.status] || notification.status}
+            </span>
+            <span className="text-xs text-text-muted">{notification.created_at}</span>
+          </div>
+          <p className="text-sm text-text-main font-medium truncate">{notification.title || '无标题'}</p>
+          <p className="text-xs text-text-muted mt-0.5">{notification.group_name || notification.chat_id || '未知群聊'}</p>
+        </div>
+        {notification.status === 'pending' && (
+          <div className="flex gap-1.5 shrink-0">
+            <button onClick={onAck} className="text-xs px-3.5 py-1.5 rounded-full bg-brand-green/10 text-brand-green-hover hover:bg-brand-green/20 transition-colors cursor-pointer font-medium">标记投递</button>
+            <button onClick={onIgnore} className="text-xs px-3.5 py-1.5 rounded-full bg-bg-raised text-text-muted hover:text-status-error hover:bg-status-error-soft transition-colors cursor-pointer">忽略</button>
+          </div>
+        )}
+      </div>
+      <pre className="whitespace-pre-wrap text-sm text-text-main/75 mt-3 font-sans leading-relaxed">{notification.content}</pre>
+    </div>
+  )
+}
+
+function SearchableGroupSelect({ groups, value, onChange, placeholder, allowClear }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const ref = useRef(null)
+
+  useEffect(() => {
+    function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  const selected = groups.find(g => g.chat_id === value)
+  const filtered = query
+    ? groups.filter(g => g.group_name.toLowerCase().includes(query.toLowerCase()))
+    : groups
+
+  const displayText = open ? query : (selected ? `${selected.group_name}（${selected.member_count} 人）` : '')
+
+  return (
+    <div ref={ref} className="relative">
+      <div className="relative">
+        <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+        <input
+          type="text"
+          value={displayText}
+          placeholder={placeholder || '搜索群聊...'}
+          onFocus={() => { setOpen(true); setQuery('') }}
+          onChange={e => { setQuery(e.target.value); setOpen(true) }}
+          className="w-full bg-bg-raised border border-border-main rounded-lg pl-9 pr-4 py-2 text-[14px] text-text-main placeholder:text-text-muted/65 focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+        />
+      </div>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full bg-bg-card border border-border-main rounded-lg shadow-lg max-h-52 overflow-y-auto">
+          {allowClear && value && (
+            <button
+              type="button"
+              className="w-full text-left px-4 py-2.5 text-sm text-text-muted hover:bg-bg-raised transition-colors border-b border-border-main/50"
+              onClick={() => { onChange(''); setQuery(''); setOpen(false) }}
+            >全部群聊</button>
+          )}
+          {filtered.length === 0 ? (
+            <p className="px-4 py-3 text-xs text-text-muted text-center">无匹配群聊</p>
+          ) : (
+            filtered.map(g => (
+              <button
+                key={g.chat_id}
+                type="button"
+                className={`w-full text-left px-4 py-2.5 text-sm hover:bg-bg-raised transition-colors flex items-center justify-between gap-2 ${
+                  g.chat_id === value ? 'bg-brand-green/10 text-brand-green-hover' : 'text-text-main'
+                }`}
+                onClick={() => { onChange(g.chat_id); setQuery(''); setOpen(false) }}
+              >
+                <span className="truncate">{g.group_name}</span>
+                <span className="text-xs text-text-muted shrink-0">{g.member_count} 人</span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
