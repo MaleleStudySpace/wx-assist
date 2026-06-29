@@ -1021,6 +1021,7 @@ function PushSection() {
   const [qrcodeId, setQrcodeId] = useState('')
   const [qrStatus, setQrStatus] = useState('')
   const [testResult, setTestResult] = useState('')
+  const [persistentPushError, setPersistentPushError] = useState('')
   const [pushProgress, setPushProgress] = useState([])  // { attempt, max_retries, delay, message }
   const [pushModalVisible, setPushModalVisible] = useState(false)
   const [unbindConfirm, setUnbindConfirm] = useState(false)
@@ -1036,6 +1037,10 @@ function PushSection() {
       const res = await fetch(`${API_BASE}/api/ilink/status`)
       const data = await res.json()
       setIlinkStatus(data)
+      // Load persistent push error from backend (survives page reopen)
+      if (data.push_error_message) {
+        setPersistentPushError(data.push_error_message)
+      }
     } catch {}
     setLoading(false)
   }
@@ -1166,8 +1171,11 @@ function PushSection() {
                 } else if (currentEvent === 'success') {
                   setTestResult('success')
                   setPushModalVisible(false)
+                  setPersistentPushError('')
                 } else if (currentEvent === 'error') {
-                  setTestResult(data.error || data.detail || '推送失败')
+                  const errMsg = data.error || data.detail || '推送失败'
+                  setTestResult(errMsg)
+                  setPersistentPushError(errMsg)
                   // 不自动关闭弹窗，让用户看到错误后手动关闭
                 }
               } catch {}
@@ -1359,6 +1367,14 @@ function PushSection() {
               <p className="text-xs text-status-error font-medium">
                 ❌ {testResult}
               </p>
+            )}
+            {/* 持久化推送错误 — 即使关闭弹窗或重新打开页面仍显示，直到再次推送成功 */}
+            {!testResult && persistentPushError && (
+              <div className="p-3 rounded-xl bg-status-error-soft/40 border border-status-error/15">
+                <p className="text-xs text-status-error font-medium">
+                  ❌ {persistentPushError}
+                </p>
+              </div>
             )}
           </div>
         ) : (
