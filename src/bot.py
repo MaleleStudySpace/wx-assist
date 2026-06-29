@@ -140,19 +140,16 @@ class HealthMonitor:
             return f"ERR:{e}"
 
     def _check_wechat_online(self) -> bool:
-        """Check if WeChat process is running."""
+        """Check if iLink push channel is connected (bound + usable).
+
+        Replaces the old WeChat process detection — "微信"状态 now reflects
+        whether the push channel is available, not whether the WeChat window
+        is open.
+        """
         try:
-            # WCDB backend: check via process detection
-            if self._config.wechat_backend == "wcdb":
-                from src.wechat.native.injector import _find_wechat_pid
-                wx_pid, _ = _find_wechat_pid()
-                return wx_pid is not None
-            # Other backends: check via health_status method
-            health_status = getattr(self._backend, "health_status", None)
-            if callable(health_status):
-                result = str(health_status())
-                return "ok" in result.lower() or "hwnd" in result.lower()
-            return True  # can't determine, assume ok
+            from src.wechat.ilink_push import get_ilink_push
+            ilink = get_ilink_push()
+            return ilink.is_available()
         except Exception:
             return False
 

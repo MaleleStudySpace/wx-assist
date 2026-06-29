@@ -427,12 +427,6 @@ class ILinkPush:
                     self._last_send_time = time.monotonic()
                     return {"success": False, "error": f"session_expired: errcode={errcode}"}
 
-                # Stale session (ret=-2 + "unknown error") — user must send a message to reactivate
-                if ret == -2 and errmsg and "unknown error" in errmsg.lower():
-                    self._last_send_time = time.monotonic()
-                    logger.warning("iLink stale session — user must send a message to reactivate")
-                    return {"success": False, "error": "session_stale: 推送通道已过期，请给 Bot 发一条微信消息重新激活"}
-
                 # Rate limited: retry with backoff
                 if ret == RATE_LIMIT_RET:
                     if attempt < SEND_MAX_RETRIES:
