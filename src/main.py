@@ -28,7 +28,6 @@ def _print_config_summary(config: BotConfig) -> None:
     print(f"  AI Provider API Key:    {_mask(config.ai_provider_api_key)}")
     print(f"  WeChat Backend:         {config.wechat_backend}")
     print(f"  Admin wxid:              {config.admin_wxid or '(not set)'}")
-    print(f"  Trigger Keywords:        {config.trigger_keywords}")
     print(f"  DB Path:                 {config.db_path}")
     print(f"  Poll Interval (sec):     {config.poll_interval_sec}")
     print(f"  Chunk Size:              {config.chunk_size}")

@@ -1076,10 +1076,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "ai_provider_extra_body": raw.get("AI_PROVIDER_EXTRA_BODY", ""),
                     "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                     "memory_consolidation_enabled": raw.get("MEMORY_CONSOLIDATION_ENABLED", "false").lower() == "true",
-                    "trigger_keywords": [
-                        kw.strip() for kw in raw.get("TRIGGER_KEYWORDS", "").split(",")
-                        if kw.strip()
-                    ],
                     "log_level": raw.get("LOG_LEVEL", "INFO"),
                     "wechat_data_dir": raw.get("WECHAT_DATA_DIR", ""),
                 },
@@ -1106,10 +1102,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "ai_provider_model": raw.get("AI_PROVIDER_MODEL", ""),
                     "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                     "memory_consolidation_enabled": raw.get("MEMORY_CONSOLIDATION_ENABLED", "false").lower() == "true",
-                    "trigger_keywords": [
-                        kw.strip() for kw in raw.get("TRIGGER_KEYWORDS", "").split(",")
-                        if kw.strip()
-                    ],
                     "log_level": raw.get("LOG_LEVEL", "INFO"),
                     "wechat_data_dir": raw.get("WECHAT_DATA_DIR", ""),
                 }
@@ -1145,7 +1137,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         "AI_PROVIDER_EXTRA_BODY": config.get("ai_provider_extra_body"),
                         "WECHAT_BACKEND": config.get("wechat_backend"),
                         "MEMORY_CONSOLIDATION_ENABLED": str(config.get("memory_consolidation_enabled", False)).lower(),
-                        "TRIGGER_KEYWORDS": ",".join(config.get("trigger_keywords", [])) if config.get("trigger_keywords") else None,
                         "LOG_LEVEL": config.get("log_level"),
                         "WECHAT_DATA_DIR": config.get("wechat_data_dir"),
                     }
@@ -1201,7 +1192,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "AI_PROVIDER_TYPE": config.get("ai_provider_type"),
                     "AI_PROVIDER_MODEL": config.get("ai_provider_model"),
                     "WECHAT_BACKEND": config.get("wechat_backend"),
-                    "TRIGGER_KEYWORDS": ",".join(config.get("trigger_keywords", [])) if config.get("trigger_keywords") else None,
                     "LOG_LEVEL": config.get("log_level"),
                     "WECHAT_DATA_DIR": config.get("wechat_data_dir"),
                 }

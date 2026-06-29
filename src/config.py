@@ -197,13 +197,6 @@ class BotConfig:
     # Admin wxid (can manage nicknames and bot settings)
     admin_wxid: str = ""
 
-    # === Trigger Keywords ===
-    trigger_keywords: list[str] = field(default_factory=lambda: [
-        "总结一下", "之前发了什么", "错过了什么", "summarize",
-        "what did i miss", "聊天总结", "帮我总结", "前面说了什么",
-        "说了啥", "发生了什么",
-    ])
-
     # === Database ===
     db_path: str = "data/messages.db"
 
@@ -298,9 +291,6 @@ def load_config() -> BotConfig:
         "ai_provider_model": os.getenv("AI_PROVIDER_MODEL", "").strip(),
         "ai_provider_extra_body": os.getenv("AI_PROVIDER_EXTRA_BODY", "").strip(),
     }
-
-    if trigger_keywords is not None:
-        kwargs["trigger_keywords"] = trigger_keywords
 
     _validate_config(kwargs)
 

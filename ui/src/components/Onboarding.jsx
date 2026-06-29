@@ -9,7 +9,7 @@ const iconVariants = {
 
 const STEPS = [
   { id: 1, label: '环境诊断与连接', desc: '诊断系统 & 获取/输入连接凭证' },
-  { id: 2, label: '微信配置', desc: '设置机器人身份' },
+  { id: 2, label: '微信配置', desc: '配置聊天范围' },
   { id: 3, label: 'AI 后端', desc: '配置 AI 服务' },
   { id: 4, label: '功能设置', desc: '选择功能开关' },
 ]
