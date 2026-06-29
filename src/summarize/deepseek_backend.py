@@ -198,7 +198,11 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             self.extra_body,
         )
         response = self.client.chat.completions.create(**params)
-        return response.choices[0].message.content or "..."
+        content = response.choices[0].message.content
+        if not content:
+            logger.warning("[CHAT-API] LLM returned empty content (model=%s)", self.model)
+            return "..."
+        return content
 
     def _call_digest_api(self, system_prompt: str,
                          messages: list[dict]) -> str:
@@ -209,7 +213,11 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             self.extra_body,
         )
         response = self.client.chat.completions.create(**params)
-        return response.choices[0].message.content or "..."
+        content = response.choices[0].message.content
+        if not content:
+            logger.warning("[DIGEST-API] LLM returned empty content (model=%s)", self.model)
+            return "..."
+        return content
 
     def _call_long_api(self, system_prompt: str,
                        messages: list[dict],
@@ -223,7 +231,11 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             self.extra_body,
         )
         response = self.client.chat.completions.create(**params)
-        return response.choices[0].message.content or "..."
+        content = response.choices[0].message.content
+        if not content:
+            logger.warning("[LONG-API] LLM returned empty content (model=%s)", self.model)
+            return "..."
+        return content
 
     def _call_chat_api_stream(self, system_prompt: str,
                                messages: list[dict]) -> Iterator[str]:

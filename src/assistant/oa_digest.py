@@ -150,7 +150,7 @@ def call_llm(prompt: str, system_prompt: str = "", summarizer=None) -> str:
             content = summarizer._call_long_api(
                 system_prompt,
                 [{"role": "user", "content": prompt}],
-                max_tokens=2000,
+                max_tokens=4096,
                 temperature=0.3,
             )
             latency = (time.monotonic() - start) * 1000
@@ -160,7 +160,7 @@ def call_llm(prompt: str, system_prompt: str = "", summarizer=None) -> str:
                 system_prompt=system_prompt,
                 user_prompt=prompt, response=content,
                 latency_ms=latency,
-                extra={"temperature": 0.3, "max_tokens": 2000},
+                extra={"temperature": 0.3, "max_tokens": 4096},
             )
             logger.debug("[OA-DIGEST] LLM response: %d chars, preview=%s", len(content), content[:100])
             return content
@@ -203,7 +203,7 @@ def call_llm(prompt: str, system_prompt: str = "", summarizer=None) -> str:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.3,
-        "max_tokens": 2000,
+        "max_tokens": 4096,
     }
 
     try:
