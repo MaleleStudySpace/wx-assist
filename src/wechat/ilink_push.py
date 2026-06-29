@@ -246,7 +246,18 @@ class ILinkPush:
                 pass
 
     def is_available(self) -> bool:
-        """Check if iLink account is bound and last push succeeded."""
+        """Check if iLink account is bound (can attempt to push).
+
+        This only checks account binding, NOT whether the last push succeeded.
+        Callers should always try send_message() — the result tells success/failure.
+        """
+        return self._account is not None
+
+    def is_healthy(self) -> bool:
+        """Check if iLink channel is bound AND last push succeeded.
+
+        Used by Dashboard to show '已连接/未连接' status.
+        """
         return self._account is not None and self._last_push_ok
 
     def get_status(self) -> dict:
