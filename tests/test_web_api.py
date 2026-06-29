@@ -50,7 +50,6 @@ class TestConfig(unittest.TestCase):
             "AI_PROVIDER_MODEL": "deepseek-v4-flash",
             "WECHAT_BACKEND": "wcdb",
             "WECHAT_GROUPS": "*",
-            "BOT_DISPLAY_NAME": "test-bot",
             "TRIGGER_KEYWORDS": "summary,help,info",
         }
         with patch.dict(os.environ, env, clear=True):
@@ -59,7 +58,6 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(cfg.ai_provider_type, "openai")
             self.assertEqual(cfg.ai_provider_api_key, "sk-test-deepseek-key")
             self.assertEqual(cfg.ai_provider_model, "deepseek-v4-flash")
-            self.assertEqual(cfg.bot_display_name, "test-bot")
             self.assertEqual(cfg.trigger_keywords, ["summary", "help", "info"])
             self.assertEqual(cfg.wechat_groups, "*")
 
@@ -70,15 +68,12 @@ class TestConfig(unittest.TestCase):
             "AI_PROVIDER_TYPE": "anthropic",
             "AI_PROVIDER_API_KEY": "sk-ant-test-key",
             "AI_PROVIDER_MODEL": "claude-sonnet-4-5-20250901",
-            "WECHAT_BACKEND": "wcdb",
-            "BOT_DISPLAY_NAME": "claude-bot",
         }
         with patch.dict(os.environ, env, clear=True):
             cfg = load_config()
             self.assertEqual(cfg.ai_provider_type, "anthropic")
             self.assertEqual(cfg.ai_provider_api_key, "sk-ant-test-key")
             self.assertEqual(cfg.ai_provider_model, "claude-sonnet-4-5-20250901")
-            self.assertEqual(cfg.bot_display_name, "claude-bot")
 
     def test_load_config_empty_api_key_is_ok(self):
         """load_config with empty AI_PROVIDER_API_KEY should succeed (UI can configure later)."""
@@ -387,180 +382,6 @@ class TestConfig(unittest.TestCase):
 
         conn.execute("CREATE TABLE messages (chat_id TEXT, sender_id TEXT)")
         self.assertTrue(_messages_table_exists(conn))
-
-
-# ======================================================================
-#  TestTriggerDetector -- keyword + @mention detection
-# ======================================================================
-
-
-class TestTriggerDetector(unittest.TestCase):
-    """Tests for TriggerDetector: keyword matching, @mention detection,
-    empty content, edge cases."""
-
-    def setUp(self):
-        from src.trigger.detector import TriggerDetector
-        self.TriggerDetector = TriggerDetector
-
-    def test_exact_keyword_match(self):
-        """An exact match on a keyword triggers."""
-        detector = self.TriggerDetector(
-            keywords=["总结一下", "summarize"],
-            bot_display_name="小助手",
-        )
-        self.assertTrue(
-            detector.is_trigger("总结一下", is_at_mentioned=False,
-                               sender_name="user")
-        )
-
-    def test_substring_keyword_match(self):
-        """Keyword found as substring triggers (uses 'in' check)."""
-        detector = self.TriggerDetector(
-            keywords=["总结"],
-            bot_display_name="小助手",
-        )
-        self.assertTrue(
-            detector.is_trigger("请帮我总结一下今天的内容",
-                               is_at_mentioned=False, sender_name="user")
-        )
-
-    def test_case_insensitive_match(self):
-        """Keyword matching is case-insensitive."""
-        detector = self.TriggerDetector(
-            keywords=["Summarize", "What Did I Miss"],
-            bot_display_name="小助手",
-        )
-        self.assertTrue(
-            detector.is_trigger("summarize this for me",
-                               is_at_mentioned=False, sender_name="user")
-        )
-        self.assertTrue(
-            detector.is_trigger("WHAT DID I MISS?",
-                               is_at_mentioned=False, sender_name="user")
-        )
-
-    def test_at_mention_always_triggers(self):
-        """is_at_mentioned=True always triggers regardless of content."""
-        detector = self.TriggerDetector(
-            keywords=["总结"],
-            bot_display_name="小助手",
-        )
-        self.assertTrue(
-            detector.is_trigger("random chat message",
-                               is_at_mentioned=True, sender_name="user")
-        )
-
-    def test_at_mention_even_with_empty_content(self):
-        """is_at_mentioned=True with empty content still triggers."""
-        detector = self.TriggerDetector(
-            keywords=["总结"],
-            bot_display_name="小助手",
-        )
-        self.assertTrue(
-            detector.is_trigger("", is_at_mentioned=True, sender_name="user")
-        )
-
-    def test_no_match_when_no_keyword_and_no_mention(self):
-        """A message without keyword or @mention does not trigger."""
-        detector = self.TriggerDetector(
-            keywords=["总结", "summarize"],
-            bot_display_name="小助手",
-        )
-        self.assertFalse(
-            detector.is_trigger("今天天气不错",
-                               is_at_mentioned=False, sender_name="user")
-        )
-
-    def test_empty_content_no_mention_does_not_trigger(self):
-        """Empty content without @mention does not trigger."""
-        detector = self.TriggerDetector(
-            keywords=["总结"],
-            bot_display_name="小助手",
-        )
-        self.assertFalse(
-            detector.is_trigger("", is_at_mentioned=False, sender_name="user")
-        )
-
-    def test_empty_keyword_list_no_false_positive(self):
-        """An empty keyword list never causes a false trigger."""
-        detector = self.TriggerDetector(
-            keywords=[],
-            bot_display_name="小助手",
-        )
-        self.assertFalse(
-            detector.is_trigger("总结一下",
-                               is_at_mentioned=False, sender_name="user")
-        )
-
-    def test_whitespace_only_keyword_not_added(self):
-        """Keywords that are whitespace-only after stripping are excluded."""
-        detector = self.TriggerDetector(
-            keywords=["总结", "   ", "\t"],
-            bot_display_name="小助手",
-        )
-        self.assertEqual(len(detector.keywords), 1)
-        self.assertIn("总结", detector.keywords)
-
-    def test_keyword_with_leading_trailing_spaces_trimmed(self):
-        """Keywords with surrounding whitespace are trimmed."""
-        detector = self.TriggerDetector(
-            keywords=["  总结  "],
-            bot_display_name="小助手",
-        )
-        self.assertIn("总结", detector.keywords)
-        self.assertTrue(
-            detector.is_trigger("总结", is_at_mentioned=False,
-                               sender_name="user")
-        )
-
-    def test_chinese_keyword_match(self):
-        """Chinese keywords match correctly."""
-        detector = self.TriggerDetector(
-            keywords=["说了啥", "发生了什么", "聊天总结"],
-            bot_display_name="小助手",
-        )
-        self.assertTrue(
-            detector.is_trigger("前面说了啥",
-                               is_at_mentioned=False, sender_name="user")
-        )
-        self.assertTrue(
-            detector.is_trigger("发生了什么我不知道的事",
-                               is_at_mentioned=False, sender_name="user")
-        )
-
-    def test_partial_word_boundary_match(self):
-        """Keyword matches inside a longer word (substring match)."""
-        detector = self.TriggerDetector(
-            keywords=["help"],
-            bot_display_name="小助手",
-        )
-        self.assertTrue(
-            detector.is_trigger("helpless situation",
-                               is_at_mentioned=False, sender_name="user")
-        )
-
-    def test_special_characters_in_keyword(self):
-        """Keywords with special characters still match."""
-        detector = self.TriggerDetector(
-            keywords=["@bot", "what's up"],
-            bot_display_name="小助手",
-        )
-        self.assertTrue(
-            detector.is_trigger("hey @bot come here",
-                               is_at_mentioned=False, sender_name="user")
-        )
-
-    def test_bot_name_as_keyword_is_just_string_match(self):
-        """Having the bot name as a keyword is just a string match,
-        not @-semantics."""
-        detector = self.TriggerDetector(
-            keywords=["小助手"],
-            bot_display_name="小助手",
-        )
-        self.assertTrue(
-            detector.is_trigger("小助手在不",
-                               is_at_mentioned=False, sender_name="user")
-        )
 
 
 # ======================================================================
@@ -979,8 +800,6 @@ class ApiConfigEndpointTests(unittest.TestCase):
             fake_env.read_text.return_value = (
                 "AI_PROVIDER_TYPE=anthropic\n"
                 "AI_PROVIDER_BASE_URL=https://proxy.example.com/v1\n"
-                "BOT_DISPLAY_NAME=MyBot\n"
-                "FUN_ENABLED=false\n"
             )
             mock_find.return_value = fake_env
             handler, sock = _build_handler("/api/load-config")
@@ -989,8 +808,6 @@ class ApiConfigEndpointTests(unittest.TestCase):
             config = body["config"]
             self.assertEqual(config["ai_provider_type"], "anthropic")
             self.assertEqual(config["ai_provider_base_url"], "https://proxy.example.com/v1")
-            
-            self.assertEqual(config["bot_display_name"], "MyBot")
 
     def test_load_config_empty_env_returns_defaults(self):
         """GET /api/load-config with empty env returns defaults."""
@@ -1012,13 +829,11 @@ class ApiConfigEndpointTests(unittest.TestCase):
             fake_env.exists.return_value = True
             fake_env.read_text.return_value = (
                 "AI_PROVIDER_TYPE=openai\n"
-                "BOT_DISPLAY_NAME=oldname\n"
             )
             fake_env.with_suffix.return_value = fake_env
             mock_find.return_value = fake_env
             with patch("os.replace") as mock_replace:
                 body = json.dumps({
-                    "bot_display_name": "newname",
                     "ai_provider_type": "anthropic",
                 })
                 handler, sock = _build_handler(
@@ -1029,7 +844,6 @@ class ApiConfigEndpointTests(unittest.TestCase):
                 parts = sock.get_response_text().split("\r\n\r\n", 1)
                 result = json.loads(parts[1])
                 self.assertTrue(result["ok"])
-                self.assertIn("BOT_DISPLAY_NAME", result["saved"])
                 self.assertIn("AI_PROVIDER_TYPE", result["saved"])
                 self.assertTrue(result["requires_restart"])
 
@@ -1042,7 +856,7 @@ class ApiConfigEndpointTests(unittest.TestCase):
             fake_env.with_suffix.return_value = fake_env
             mock_find.return_value = fake_env
             with patch("os.replace") as mock_replace:
-                body = json.dumps({"bot_display_name": "MyBot"})
+                body = json.dumps({"wechat_backend": "wcdb"})
                 handler, sock = _build_handler(
                     "/api/config", method="POST",
                     body=body.encode(),
@@ -1057,8 +871,7 @@ class ApiConfigEndpointTests(unittest.TestCase):
         tmp_dir = Path(tempfile.mkdtemp())
         tmp_env = tmp_dir / ".env"
         tmp_env.write_text(
-            "AI_PROVIDER_TYPE=openai\nAI_PROVIDER_API_KEY=old-key\n"
-            "BOT_DISPLAY_NAME=old-name\n",
+            "AI_PROVIDER_TYPE=openai\nAI_PROVIDER_API_KEY=old-key\n",
             encoding="utf-8",
         )
         try:
@@ -1066,8 +879,6 @@ class ApiConfigEndpointTests(unittest.TestCase):
             save_body = json.dumps({
                 "ai_provider_api_key": "new-key",
                 "ai_provider_base_url": "https://proxy.example.com/v1",
-                
-                "bot_display_name": "new-name",
             }).encode()
             with patch("src.web.server._find_or_create_env",
                        return_value=tmp_env):
@@ -1085,7 +896,6 @@ class ApiConfigEndpointTests(unittest.TestCase):
             saved_content = tmp_env.read_text(encoding="utf-8")
             self.assertIn("AI_PROVIDER_API_KEY=new-key", saved_content)
             self.assertIn("AI_PROVIDER_BASE_URL=https://proxy.example.com/v1", saved_content)
-            self.assertIn("BOT_DISPLAY_NAME=new-name", saved_content)
             self.assertIn("AI_PROVIDER_TYPE=openai", saved_content)
         finally:
             tmp_env.unlink(missing_ok=True)
@@ -1436,7 +1246,6 @@ class OnboardingApiTests(unittest.TestCase):
     def test_onboarding_step2_posts_data(self):
         """POST /api/onboarding/step2 accepts WeChat identity data."""
         post_body = json.dumps({
-            "bot_display_name": "TestBot",
             "wechat_groups": "*",
             "wechat_backend": "wcdb",
         })

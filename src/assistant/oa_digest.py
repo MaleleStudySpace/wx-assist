@@ -136,7 +136,7 @@ class DigestHistory:
         for url in stale:
             del self._urls[url]
         if stale:
-            logger.info("DigestHistory cleanup: removed %d entries older than %d days", len(stale), max_age_days)
+            logger.debug(|[OA-DIGEST] Article.*: using digest"DigestHistory cleanup: removed %d entries older than %d days", len(stale), max_age_days)
             self._save()
 
 
@@ -162,7 +162,7 @@ def call_llm(prompt: str, system_prompt: str = "", summarizer=None) -> str:
                 latency_ms=latency,
                 extra={"temperature": 0.3, "max_tokens": 2000},
             )
-            logger.info("[OA-DIGEST] LLM response: %d chars, preview=%s", len(content), content[:100])
+            logger.debug(|[OA-DIGEST] Article.*: using digest"[OA-DIGEST] LLM response: %d chars, preview=%s", len(content), content[:100])
             return content
         except Exception as e:
             logger.error("LLM call via summarizer failed: %s, falling back to raw requests", e)
@@ -220,7 +220,7 @@ def call_llm(prompt: str, system_prompt: str = "", summarizer=None) -> str:
             latency_ms=latency,
             extra={"api_base": api_base, "temperature": 0.3, "max_tokens": 2000},
         )
-        logger.info("[OA-DIGEST] LLM response (fallback): %d chars, preview=%s", len(content), content[:100])
+        logger.debug(|[OA-DIGEST] Article.*: using digest"[OA-DIGEST] LLM response (fallback): %d chars, preview=%s", len(content), content[:100])
         return content
     except Exception as e:
         latency_ms = (time.monotonic() - start) * 1000 if 'start' in dir() else 0
@@ -289,14 +289,14 @@ class OADigestService:
             try:
                 articles = fetch_oa_articles(self._client, gh_id, limit=50)
                 all_articles.extend(articles)
-                logger.info(
+                logger.debug(|[OA-DIGEST] Article.*: using digest
                     "[OA-DIGEST] Fetched %d articles from %s for group '%s'",
                     len(articles), gh_id, group.name,
                 )
             except Exception as e:
                 logger.error("[OA-DIGEST] Failed to fetch articles from %s: %s", gh_id, e)
 
-        logger.info(
+        logger.debug(|[OA-DIGEST] Article.*: using digest
             "[OA-DIGEST] Generating digest for group '%s' (%d accounts, %d articles fetched)",
             group.name, len(group.accounts), len(all_articles),
         )
@@ -319,7 +319,7 @@ class OADigestService:
                 a for a in all_articles
                 if (a.timestamp or a.pub_time or 0) >= cutoff
             ]
-            logger.info(
+            logger.debug(|[OA-DIGEST] Article.*: using digest
                 "Lookback filter: %dh cutoff=%d, %d→%d articles",
                 lookback_hours, int(cutoff), before_count, len(all_articles),
             )
@@ -336,14 +336,14 @@ class OADigestService:
         # Deduplicate — skip if force=True to allow re-generation
         if force:
             new_articles = all_articles
-            logger.info(
+            logger.debug(|[OA-DIGEST] Article.*: using digest
                 "[OA-DIGEST] Force mode: skipping dedup, using all %d articles",
                 len(all_articles),
             )
         else:
             before_dedup = len(all_articles)
             new_articles = self._history.get_undigested(all_articles)
-            logger.info(
+            logger.debug(|[OA-DIGEST] Article.*: using digest
                 "[OA-DIGEST] Dedup: %d total → %d new articles (history has %d entries)",
                 before_dedup, len(new_articles), len(self._history._urls),
             )
@@ -400,7 +400,7 @@ class OADigestService:
                     article_text += f"\n摘要: {art.digest}\n"
             else:
                 # Non-WeChat URL or no URL — use digest directly
-                logger.info(
+                logger.debug(|[OA-DIGEST] Article.*: using digest
                     "[OA-DIGEST] Article '%s': using digest (url=%s)",
                     art.title[:30], (art.url or "none")[:80],
                 )
@@ -412,7 +412,7 @@ class OADigestService:
         full_prompt = f"请对以下 {len(new_articles)} 篇公众号文章进行摘要：\n\n" + "\n---\n".join(articles_text)
 
         # Call LLM
-        logger.info(
+        logger.debug(|[OA-DIGEST] Article.*: using digest
             "[OA-DIGEST] Calling LLM: %d articles, prompt=%d chars, template=%s",
             len(new_articles), len(full_prompt),
             "custom_prompt" if group.custom_prompt else (group.digest_template or "default"),
@@ -423,7 +423,7 @@ class OADigestService:
         for art in new_articles:
             self._history.mark_digested(art.url)
 
-        logger.info(
+        logger.debug(|[OA-DIGEST] Article.*: using digest
             "[OA-DIGEST] Digest generated for group '%s': %d chars, %d articles covered",
             group.name, len(digest_text), len(new_articles),
         )
@@ -444,7 +444,7 @@ class OADigestService:
         a 1-hour buffer. For 'manual' mode, use lookback_hours directly.
         """
         if group.lookback_mode == "manual":
-            logger.info(
+            logger.debug(|[OA-DIGEST] Article.*: using digest
                 "[OA-DIGEST] Lookback calc: mode=manual, result=%dh",
                 group.lookback_hours,
             )
@@ -487,7 +487,7 @@ class OADigestService:
                         except ValueError:
                             pass
 
-        logger.info(
+        logger.debug(|[OA-DIGEST] Article.*: using digest
             "[OA-DIGEST] Lookback calc: mode=auto, cron='%s', parsed_hours=%s",
             cron_expr, sorted(hours) if hours else "none",
         )
@@ -501,16 +501,16 @@ class OADigestService:
             gaps.append(24 - sorted_hours[-1] + sorted_hours[0])
             min_gap = min(gaps)
             result = min_gap + 1  # +1h buffer
-            logger.info("[OA-DIGEST] Lookback calc: min_gap=%dh, result=%dh", min_gap, result)
+            logger.debug(|[OA-DIGEST] Article.*: using digest"[OA-DIGEST] Lookback calc: min_gap=%dh, result=%dh", min_gap, result)
             return result
         elif len(hours) == 1:
             # Once per day
             result = 24 + 1  # 25h buffer
-            logger.info("[OA-DIGEST] Lookback calc: once/day, result=%dh", result)
+            logger.debug(|[OA-DIGEST] Article.*: using digest"[OA-DIGEST] Lookback calc: once/day, result=%dh", result)
             return result
         else:
             # Could not parse — default
-            logger.info("[OA-DIGEST] Lookback calc: could not parse hours, default=24h")
+            logger.debug(|[OA-DIGEST] Article.*: using digest"[OA-DIGEST] Lookback calc: could not parse hours, default=24h")
             return 24
 
     def search_articles(self, keyword: str, limit: int = 50) -> list[OAArticle]:

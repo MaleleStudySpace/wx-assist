@@ -40,7 +40,7 @@ export default function Onboarding({ onComplete }) {
     // Step 1
     key: '', wxid: '', db_path: '',
     // Step 2
-    bot_display_name: '', wechat_groups: '*',
+    wechat_groups: '*',
     // Step 3
     ai_provider_base_url: '', ai_provider_api_key: '', ai_provider_type: 'auto', ai_provider_model: '',
   })

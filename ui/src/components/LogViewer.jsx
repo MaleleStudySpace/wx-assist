@@ -16,7 +16,7 @@ const FILTER_OPTIONS = ['ALL', 'OP', 'LLM', 'INFO', 'WARNING', 'ERROR', 'DEBUG']
 const OP_TAGS = [
   'BOOT', 'KEY-EXTRACT', 'DB', 'HOOK',
   'MSG-POLL', 'MSG-RECV', 'MSG-DEDUP', 'SEND', 'SEND-FAIL',
-  'LLM', 'AI-CHAT', 'PROACTIVE',
+  'LLM', 'AI-CHAT',
   'API', 'EXPORT',
   'ALERT', 'DIGEST',
   'WND',
@@ -33,7 +33,6 @@ const TAG_STYLES = {
   'MSG-RECV':    { color: '#8b5cf6', bg: 'rgba(139, 92, 246, 0.12)' },
   'SEND':        { color: 'var(--brand-green)', bg: 'rgba(24, 226, 153, 0.12)' },
   'SEND-FAIL':   { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)' },
-  'PROACTIVE':   { color: '#06b6d4', bg: 'rgba(6, 182, 212, 0.12)' },
   'API':         { color: '#6366f1', bg: 'rgba(99, 102, 241, 0.12)' },
   'EXPORT':      { color: '#6366f1', bg: 'rgba(99, 102, 241, 0.12)' },
   'ALERT':       { color: '#f97316', bg: 'rgba(249, 115, 22, 0.12)' },

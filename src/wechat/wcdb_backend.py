@@ -38,7 +38,6 @@ class WcdbBackend(AbstractWeChatBackend):
 
     Usage:
         backend = WcdbBackend(
-            bot_display_name="机器人",
             groups=["摸鱼群"],
             poll_sec=1.0,
         )
@@ -46,11 +45,9 @@ class WcdbBackend(AbstractWeChatBackend):
     """
 
     def __init__(self,
-                 bot_display_name: str = "",
                  groups: list[str] | None = None,
                  poll_sec: float = DEFAULT_POLL_SEC,
                  store=None):
-        self._bot_name = bot_display_name
         self._groups = groups or []
         self._poll_sec = poll_sec
         self._store = store  # MessageStore fallback for name resolution
@@ -73,11 +70,11 @@ class WcdbBackend(AbstractWeChatBackend):
             return
 
         logger.info(
-            "WcdbBackend starting (groups=%s, poll=%ss, bot=%r)",
-            self._groups, self._poll_sec, self._bot_name,
+            "WcdbBackend starting (groups=%s, poll=%ss)",
+            self._groups, self._poll_sec,
         )
-        op_log("BOOT", "后端启动: groups=%d, poll=%.1fs, bot=%r",
-               len(self._groups), self._poll_sec, self._bot_name)
+        op_log("BOOT", "后端启动: groups=%d, poll=%.1fs",
+               len(self._groups), self._poll_sec)
 
         # Init and open database
         try:
@@ -412,9 +409,6 @@ class WcdbBackend(AbstractWeChatBackend):
             self._known_ids.add(msg_id)
             new_count += 1
 
-            if self._bot_name and self._bot_name in standardized["sender_name"]:
-                continue
-
             self._trim_dedup()
 
             # Fire-and-forget: callback (potentially AI call) + send run in
@@ -522,12 +516,6 @@ class WcdbBackend(AbstractWeChatBackend):
                 return f"@{name}" if name != at_wxid else match.group(0)
             resolved_content = re.sub(r'@wxid_[a-zA-Z0-9]+', _replace_at, content)
 
-        # Detect @mention of bot
-        is_at = self._bot_name and (
-            f"@{self._bot_name}" in resolved_content
-            or f"@{self._bot_name}" in content
-        )
-
         # Generate stable message ID
         raw_id = (
             str(msg.get("server_id", ""))
@@ -545,7 +533,6 @@ class WcdbBackend(AbstractWeChatBackend):
             "content": resolved_content,
             "msg_type": int(msg.get("localType", msg.get("msg_type", 1))),
             "timestamp": ts,
-            "is_at_mentioned": is_at,
             "is_group": True,
         }
 

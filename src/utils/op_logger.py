@@ -41,9 +41,6 @@ TAG_CATEGORIES = {
     "LLM":        "LLM调用",
     "AI-CHAT":    "AI对话",
 
-    # Proactive
-    "PROACTIVE":  "主动发言",
-
     # API operations
     "API":        "API请求",
     "EXPORT":     "导出操作",
