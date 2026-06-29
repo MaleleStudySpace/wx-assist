@@ -25,6 +25,18 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+_status_change_callback = None
+
+
+def set_status_change_callback(callback) -> None:
+    """Register a callback called when push health changes.
+
+    The callback receives (ok: bool, error: str). It is best-effort and
+    failures are swallowed so push delivery is not affected by UI updates.
+    """
+    global _status_change_callback
+    _status_change_callback = callback
+
 # ── Constants ────────────────────────────────────────────────────────
 
 ACCOUNT_PATH = Path("data/ilink_account.json")
@@ -208,15 +220,37 @@ class ILinkPush:
     def __init__(self):
         self._account = _load_account()
         self._last_send_time = 0.0  # rate limiter
+        self._last_push_ok = True
+        self._last_error = ""
 
     # ── Public: availability ──────────────────────────────────────
 
+    def _mark_push_success(self) -> None:
+        """Mark iLink channel healthy after a successful send."""
+        self._last_push_ok = True
+        self._last_error = ""
+        if _status_change_callback:
+            try:
+                _status_change_callback(True, "")
+            except Exception:
+                pass
+
+    def _mark_push_failure(self, error: str) -> None:
+        """Mark iLink channel unhealthy after a failed send."""
+        self._last_push_ok = False
+        self._last_error = error or "推送失败"
+        if _status_change_callback:
+            try:
+                _status_change_callback(False, self._last_error)
+            except Exception:
+                pass
+
     def is_available(self) -> bool:
-        """Check if iLink account is bound and ready to push."""
-        return self._account is not None
+        """Check if iLink account is bound and last push succeeded."""
+        return self._account is not None and self._last_push_ok
 
     def get_status(self) -> dict:
-        """Return binding status info."""
+        """Return binding status info with push error."""
         if not self._account:
             return {"bound": False}
         return {
@@ -225,6 +259,8 @@ class ILinkPush:
             "user_id": self._account.get("user_id", ""),
             "base_url": self._account.get("base_url", DEFAULT_BASE_URL),
             "created_at": self._account.get("created_at", ""),
+            "push_ok": self._last_push_ok,
+            "push_error": self._last_error,
         }
 
     # ── Public: QR login ──────────────────────────────────────────
@@ -329,11 +365,14 @@ class ILinkPush:
             "base_url": base_url,
             "user_id": user_id,
         }
+        # New binding → channel should be healthy
+        self._mark_push_success()
 
     def unbind(self) -> None:
         """Remove bound account."""
         _delete_account()
         self._account = None
+        self._mark_push_failure("未绑定")
 
     # ── Public: send message ──────────────────────────────────────
 
@@ -363,8 +402,10 @@ class ILinkPush:
 
             result = self._send_chunk(chunk, progress_callback)
             if not result.get("success"):
+                self._mark_push_failure(result.get("error", ""))
                 return result
 
+        self._mark_push_success()
         return {"success": True}
 
     def _send_chunk(self, text: str, progress_callback=None) -> dict:

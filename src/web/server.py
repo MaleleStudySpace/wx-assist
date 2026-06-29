@@ -711,6 +711,20 @@ def update_status(**kwargs):
     _status.update(**kwargs)
 
 
+def _friendly_ilink_error(raw_error: str) -> str:
+    """Convert raw iLink push error to user-friendly Chinese message."""
+    if not raw_error:
+        return ""
+    if "session_expired" in raw_error or "errcode=-14" in raw_error:
+        return "推送会话已失效，请先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
+    if "rate-limited" in raw_error:
+        return "推送请求被限流，3 次重试后仍失败。请稍后再试，或先给助手主动发送一条消息。"
+    if "not bound" in raw_error or "未绑定" in raw_error:
+        return "iLink 未绑定，请先扫码绑定。"
+    # Generic fallback
+    return f"推送失败：{raw_error}。请稍后重试。"
+
+
 def register_bot(thread=None, backend=None):
     """Register bot thread/backend so the web API can control it."""
     _bot_control.register(thread=thread, backend=backend)
@@ -1931,6 +1945,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 from src.wechat.ilink_push import get_ilink_push
                 ilink = get_ilink_push()
                 status = ilink.get_status()
+                if status.get("push_error"):
+                    status["push_error_message"] = _friendly_ilink_error(status.get("push_error", ""))
                 self.send_json({"ok": True, **status})
             except Exception as e:
                 self.send_json({"ok": True, "bound": False, "error": str(e)})
@@ -2042,15 +2058,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 )
 
                 if result.get("success"):
-                    update_status(error="")
+                    update_status(error="", wechat_online=True)
                     _send_sse("success", {"message": "测试消息发送成功，请检查微信"})
                 else:
                     raw_error = result.get("error", "")
-                    friendly = "推送失败，请尝试先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
-                    if "session_expired" in raw_error or "errcode=-14" in raw_error:
-                        friendly = "推送会话已失效，请先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
-                    elif "rate-limited" in raw_error:
-                        friendly = "推送请求被限流，3 次重试后仍失败。请稍后再试，或先给助手主动发送一条消息。"
+                    friendly = _friendly_ilink_error(raw_error)
+                    update_status(wechat_online=False)
                     _send_sse("error", {
                         "error": friendly,
                         "detail": raw_error,
@@ -2058,6 +2071,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 friendly = f"推送异常：{e}。请尝试先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
                 _send_sse("error", {"error": friendly})
+                update_status(wechat_online=False)
             return
 
         # ── API: Assistant — trigger digest ─────────────────────────────
@@ -2987,6 +3001,12 @@ def start_web_server(host="127.0.0.1", port=17327):
     if not UI_DIR.exists():
         logger.warning("UI not built. Run: cd ui && npm run build")
         return None
+
+    try:
+        from src.wechat.ilink_push import set_status_change_callback
+        set_status_change_callback(lambda ok, error: update_status(wechat_online=ok))
+    except Exception:
+        logger.exception("Failed to register iLink status callback")
 
     thread = threading.Thread(
         target=_run_server, args=(host, port),
