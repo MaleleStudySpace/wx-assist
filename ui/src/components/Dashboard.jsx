@@ -58,39 +58,48 @@ const TASK_TYPE_META = {
   },
 }
 
-/* ── Keyword Alert Card — clean overview, no recent hits ─── */
+/* ── Instant Alert Card — keyword alerts + OA monitors ─── */
 function KeywordAlertCard({ onTabChange }) {
   const [alertGroups, setAlertGroups] = useState(null)
+  const [oaMonitors, setOaMonitors] = useState(null)
 
   useEffect(() => {
     fetch(`${API_BASE}/api/assistant/config`)
       .then(r => r.json())
       .then(res => {
-        if (res?.ok) setAlertGroups(res.config?.alert_groups || [])
-        else setAlertGroups([])
+        if (res?.ok) {
+          setAlertGroups(res.config?.alert_groups || [])
+          setOaMonitors(res.config?.oa_monitor_groups || [])
+        } else {
+          setAlertGroups([])
+          setOaMonitors([])
+        }
       })
-      .catch(() => setAlertGroups([]))
+      .catch(() => { setAlertGroups([]); setOaMonitors([]) })
   }, [])
 
   const loading = alertGroups === null
-  const enabledCount = (alertGroups || []).filter(g => g.enabled).length
-  const totalCount = (alertGroups || []).length
-  const hasGroups = totalCount > 0
+  const enabledAlerts = (alertGroups || []).filter(g => g.enabled).length
+  const totalAlerts = (alertGroups || []).length
+  const totalOa = (oaMonitors || []).length
+  const hasAny = totalAlerts > 0 || totalOa > 0
 
   return (
     <div className="space-y-3">
       {/* Summary row */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] text-text-main font-semibold">{totalCount} 个提醒群</span>
-          {enabledCount > 0 && (
-            <span className="text-[10px] font-mono font-bold text-amber-600 bg-amber-500/[0.08] px-1.5 py-px rounded">{enabledCount} 启用</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          {totalAlerts > 0 && (
+            <span className="text-[13px] text-text-main font-semibold">{totalAlerts} 个提醒群</span>
           )}
-          {totalCount - enabledCount > 0 && (
-            <span className="text-[10px] font-mono text-text-muted bg-bg-raised px-1.5 py-px rounded">{totalCount - enabledCount} 禁用</span>
+          {totalOa > 0 && (
+            <span className="text-[13px] text-text-main font-semibold">{totalOa} 个公众号</span>
+          )}
+          {enabledAlerts > 0 && (
+            <span className="text-[10px] font-mono font-bold text-amber-600 bg-amber-500/[0.08] px-1.5 py-px rounded">{enabledAlerts} 启用</span>
           )}
         </div>
-        {hasGroups && (
+        {hasAny && (
           <button onClick={() => onTabChange?.('assistant')}
             className="flex items-center gap-1 text-[10px] text-amber-600 hover:text-amber-500 font-medium cursor-pointer group">
             查看全部 <ArrowRight size={8} className="group-hover:translate-x-0.5 transition-transform" />
@@ -104,46 +113,92 @@ function KeywordAlertCard({ onTabChange }) {
           <Spinner size={14} className="animate-spin text-text-muted" />
           <span className="text-[11px] text-text-muted">加载中</span>
         </div>
-      ) : !hasGroups ? (
+      ) : !hasAny ? (
         <div className="flex flex-col items-center py-8 gap-2">
           <Lightning size={20} weight="fill" className="text-amber-400/40" />
-          <span className="text-[12px] text-text-muted">暂未配置关键词监控</span>
+          <span className="text-[12px] text-text-muted">暂未配置即时提醒</span>
           <button onClick={() => onTabChange?.('assistant')}
             className="flex items-center gap-1 text-[10px] text-amber-600 hover:text-amber-500 font-medium cursor-pointer">
             前往配置 <ArrowRight size={8} />
           </button>
         </div>
       ) : (
-        <div className="space-y-1.5">
-          {(alertGroups || []).map((ag, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25, delay: i * 0.04 }}
-              className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl bg-bg-raised/40 dark:bg-bg-raised/20 border border-border-main/30 hover:border-border-main/60 transition-colors"
-            >
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-amber-500/[0.08] text-amber-500 dark:bg-amber-500/[0.10]">
-                <Lightning size={14} weight="fill" />
+        <div className="space-y-2">
+          {/* Keyword alerts */}
+          {(alertGroups || []).length > 0 && (
+            <div>
+              <p className="text-[10px] text-text-muted font-semibold mb-1 flex items-center gap-1">
+                <Lightning size={10} /> 关键词
+              </p>
+              <div className="space-y-1.5">
+                {(alertGroups || []).map((ag, i) => (
+                  <motion.div
+                    key={`kw-${i}`}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.25, delay: i * 0.04 }}
+                    className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl bg-bg-raised/40 dark:bg-bg-raised/20 border border-border-main/30 hover:border-border-main/60 transition-colors"
+                  >
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-amber-500/[0.08] text-amber-500 dark:bg-amber-500/[0.10]">
+                      <Lightning size={14} weight="fill" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[12px] text-text-main font-semibold truncate">{ag.group_name || ag.chat_id || `提醒群 #${i + 1}`}</span>
+                        {ag.push_target === 'ilink' && (
+                          <span className="text-[9px] font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
+                            <PaperPlaneTilt size={8} />推送
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                        {(ag.keywords || []).map((kw, ki) => (
+                          <span key={ki} className="text-[10px] font-mono font-medium px-1.5 py-px rounded bg-amber-500/[0.08] text-amber-600 dark:text-amber-400">{kw}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ag.enabled ? 'bg-brand-green' : 'bg-text-muted/30'}`} />
+                  </motion.div>
+                ))}
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[12px] text-text-main font-semibold truncate">{ag.group_name || ag.chat_id || `提醒群 #${i + 1}`}</span>
-                  {ag.push_target === 'ilink' && (
-                    <span className="text-[9px] font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
-                      <PaperPlaneTilt size={8} />推送
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                  {(ag.keywords || []).map((kw, ki) => (
-                    <span key={ki} className="text-[10px] font-mono font-medium px-1.5 py-px rounded bg-amber-500/[0.08] text-amber-600 dark:text-amber-400">{kw}</span>
-                  ))}
-                </div>
+            </div>
+          )}
+
+          {/* OA monitors */}
+          {(oaMonitors || []).length > 0 && (
+            <div>
+              <p className="text-[10px] text-text-muted font-semibold mb-1 flex items-center gap-1">
+                <Bell size={10} /> 公众号
+              </p>
+              <div className="space-y-1.5">
+                {(oaMonitors || []).map((mg, i) => (
+                  <motion.div
+                    key={`oa-${mg.id}`}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.25, delay: i * 0.04 }}
+                    className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl bg-bg-raised/40 dark:bg-bg-raised/20 border border-border-main/30 hover:border-border-main/60 transition-colors"
+                  >
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-amber-500/[0.08] text-amber-500 dark:bg-amber-500/[0.10]">
+                      <Bell size={14} weight="fill" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[12px] text-text-main font-semibold truncate">{mg.name || mg.id}</span>
+                        <span className="text-[10px] text-text-muted">{(mg.accounts || []).length} 个号</span>
+                        {mg.push_target === 'ilink' && (
+                          <span className="text-[9px] font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
+                            <PaperPlaneTilt size={8} />推送
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${mg.enabled !== false ? 'bg-amber-500' : 'bg-text-muted/30'}`} />
+                  </motion.div>
+                ))}
               </div>
-              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ag.enabled ? 'bg-brand-green' : 'bg-text-muted/30'}`} />
-            </motion.div>
-          ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -451,7 +506,7 @@ export default function Dashboard({ status, onTabChange }) {
           <div className="h-[2px] bg-amber-400/30 flex-shrink-0" />
           <div className="px-5 py-3.5 flex items-center gap-2 flex-shrink-0">
             <Lightning size={15} className="text-amber-500" weight="fill" />
-            <h3 className="text-[14px] font-semibold text-text-main">关键词提醒</h3>
+            <h3 className="text-[14px] font-semibold text-text-main">即时提醒</h3>
           </div>
           <div className="px-5 pb-4 overflow-y-auto scrollbar-thin">
             <KeywordAlertCard onTabChange={onTabChange} />
