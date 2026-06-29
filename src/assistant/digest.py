@@ -68,6 +68,13 @@ MEDIA_PLACEHOLDERS = {
 }
 MEDIA_RAW_TYPES = frozenset({3, 34, 43, 47, 49})
 
+# WCDB 4.x sometimes stores messages with msg_type=1 (text) but content
+# is actually encrypted ciphertext (a long hex string).  These leak
+# raw encrypted data to LLM if not caught.  Minimum hex length to avoid
+# false-positives on short numeric strings like "123abc".
+ENCRYPTED_MIN_LEN = 50
+_ENCRYPTED_HEX_RE = re.compile(r'[a-fA-F0-9]{' + str(ENCRYPTED_MIN_LEN) + r',}$')
+
 
 def _strip_ids(text: str) -> str:
     """Remove raw wxid/gh_ identifiers from message content.
@@ -124,6 +131,12 @@ def filter_messages(messages: list[dict], ignore_keywords: Optional[list[str]] =
         # Skip messages matching ignore keywords
         content_lower = content.lower()
         if any(ik in content_lower for ik in ignore_set):
+            continue
+
+        # WCDB encrypted content: msg_type=1 but content is raw ciphertext hex
+        if len(content) >= ENCRYPTED_MIN_LEN and _ENCRYPTED_HEX_RE.fullmatch(content):
+            msg["content"] = "{{ encrypted }}"
+            result.append(msg)
             continue
 
         # Non-text media: replace raw content with placeholder, keep message
