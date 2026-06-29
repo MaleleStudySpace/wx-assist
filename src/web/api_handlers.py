@@ -4255,136 +4255,149 @@ def handle_oa_groups_delete(params, config: AssistantConfig):
 
 
 def handle_oa_digest_run(params, config: AssistantConfig):
-    """POST /api/oa/digest/run/:groupId — Generate digest manually"""
+    """POST /api/oa/digest/run/:groupId — Generate digest manually (async).
+
+    Creates a background thread so the HTTP request returns immediately.
+    Progress and results are broadcast via WebSocket (oa_digest_progress).
+    """
+    group_id = params.get("groupId", [""])[0]
+    if not group_id:
+        return {"ok": False, "error": "Missing groupId"}
+
     client = get_wcdb_client()
     if not client:
         return {"ok": False, "error": "WCDB not available"}
 
+    # Validate AI is configured before spawning thread
     try:
-        group_id = params.get("groupId", [""])[0]
-        broadcast_event("oa_digest_progress", {"status": "started", "group_id": group_id})
-        service = OADigestService(config, client)
-        # Pass summarizer for unified LLM calls
-        summarizer_ok = False
-        try:
-            from src.summarize import create_summarizer
-            from src.config import load_config
-            bot_cfg = load_config()
-            service._summarizer = create_summarizer(bot_cfg)
-            summarizer_ok = True
-        except ValueError as e:
-            # AI provider not configured
-            logger.warning("[OA-DIGEST] AI not configured: %s", e)
-            broadcast_event("oa_digest_progress", {"status": "error", "group_id": group_id, "error": "AI未配置"})
-            return {"ok": False, "error": "AI未配置，请先在设置中配置AI提供商（API Key）"}
-        except Exception as e:
-            logger.warning("[OA-DIGEST] Summarizer creation failed: %s (will try fallback)", e)
-        result = service.generate_digest(group_id, force=True)
-        # Normalize response to use "ok" instead of "success"
-        result["ok"] = result.pop("success", True)
-        broadcast_event("oa_digest_progress", {
-            "status": "completed",
-            "group_id": group_id,
-            "articles_count": result.get("articles_count", 0),
-            "digest_text": result.get("digest_text", ""),
-        })
-
-        # Push to WeChat via iLink (if configured for this OA group)
-        if result.get("ok") and result.get("digest_text"):
-            # Write to Outbox for push history tracking
-            oa_nid = None
-            try:
-                from src.assistant.outbox import Outbox
-                import json as _json
-                outbox = Outbox()
-                oa_title = f"📰 {group.name} · 公众号摘要"
-                oa_content = _json.dumps({
-                    "group": group.name,
-                    "articles_count": result.get("articles_count", 0),
-                    "digest": result['digest_text'],
-                    "display": f"公众号组: {group.name}\n文章数: {result.get('articles_count', 0)} 篇\n\n{result['digest_text']}",
-                }, ensure_ascii=False)
-                oa_nid = outbox.add(
-                    notif_type="oa_digest",
-                    chat_id=group_id,
-                    group_name=group.name,
-                    title=oa_title,
-                    content=oa_content,
-                    priority="normal",
-                )
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).debug("OA outbox write skipped: %s", e)
-
-            try:
-                from src.assistant.oa_groups import OAGroupManager
-                manager = OAGroupManager(config)
-                group = manager.get_group(group_id)
-                if group and group.push_target == "ilink":
-                    from src.wechat.ilink_push import get_ilink_push, format_for_wechat
-                    ilink = get_ilink_push()
-                    if ilink.is_available():
-                        title = f"📰 {group.name} · 公众号摘要"
-                        ac = result.get('articles_count', 0)
-                        content = f"📄 {ac} 篇文章\n\n{result['digest_text']}"
-                        msg = format_for_wechat(title, content)
-                        push_result = ilink.send_message(msg)
-                        push_ok = push_result.get("success", False)
-                        push_err = push_result.get("error", "") if not push_ok else ""
-                        result["ilink_push"] = "success" if push_ok else f"failed: {push_err}"
-                        if oa_nid:
-                            try:
-                                from src.assistant.outbox import Outbox
-                                outbox = Outbox()
-                                outbox.update_push_result(
-                                    oa_nid, "ilink",
-                                    "success" if push_ok else "failed",
-                                    push_err,
-                                )
-                            except Exception:
-                                pass
-                    else:
-                        # iLink configured but not available
-                        if oa_nid:
-                            try:
-                                from src.assistant.outbox import Outbox
-                                outbox = Outbox()
-                                outbox.update_push_result(
-                                    oa_nid, "ilink", "failed", "iLink推送通道未绑定或已断开",
-                                )
-                            except Exception:
-                                pass
-                else:
-                    # No iLink push target — still record in outbox for history tracking
-                    if oa_nid:
-                        try:
-                            from src.assistant.outbox import Outbox
-                            outbox = Outbox()
-                            outbox.update_push_result(
-                                oa_nid, "local", "skipped", "未配置微信推送通道",
-                            )
-                        except Exception:
-                            pass
-                        # Broadcast push result to WebSocket clients
-                        try:
-                            broadcast_event("oa_digest_push_result", {
-                                "group_name": group.name,
-                                "success": push_ok,
-                                "error": push_err,
-                            })
-                        except Exception:
-                            pass
-                    else:
-                        result["ilink_push"] = "skipped: not bound"
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning("iLink push for OA digest failed: %s", e)
-                result["ilink_push"] = f"error: {e}"
-
-        return result
+        from src.summarize import create_summarizer
+        from src.config import load_config
+        bot_cfg = load_config()
+        summarizer = create_summarizer(bot_cfg)
+    except ValueError as e:
+        logger.warning("[OA-DIGEST] AI not configured: %s", e)
+        return {"ok": False, "error": "AI未配置，请先在设置中配置AI提供商（API Key）"}
     except Exception as e:
-        broadcast_event("oa_digest_progress", {"status": "error", "group_id": group_id, "error": str(e)})
-        return {"ok": False, "error": str(e)}
+        logger.warning("[OA-DIGEST] Summarizer creation failed: %s", e)
+        summarizer = None
+
+    broadcast_event("oa_digest_progress", {"status": "started", "group_id": group_id})
+
+    def _run():
+        """Background: generate digest, broadcast result, handle push."""
+        _group = None
+        try:
+            _service = OADigestService(config, client)
+            _service._summarizer = summarizer
+            result = _service.generate_digest(group_id, force=True)
+            result["ok"] = result.pop("success", True)
+
+            # Resolve group info for push
+            try:
+                _manager = OAGroupManager(config)
+                _group = _manager.get_group(group_id)
+            except Exception:
+                _group = None
+
+            # Broadcast completed result
+            broadcast_event("oa_digest_progress", {
+                "status": "completed",
+                "group_id": group_id,
+                "articles_count": result.get("articles_count", 0),
+                "digest_text": result.get("digest_text", ""),
+            })
+
+            # Push to WeChat via iLink (if configured for this OA group)
+            if result.get("ok") and result.get("digest_text") and _group:
+                _push_oa_digest(result, _group, config)
+
+        except Exception as e:
+            logger.exception("[OA-DIGEST] Background digest failed")
+            broadcast_event("oa_digest_progress", {
+                "status": "error", "group_id": group_id,
+                "error": str(e),
+            })
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    return {"ok": True, "status": "started", "group_id": group_id}
+
+
+def _push_oa_digest(result, group, config):
+    """Push OA digest to Outbox + iLink (runs in background thread)."""
+    import json as _json
+    from src.assistant.outbox import Outbox
+
+    oa_nid = None
+    try:
+        outbox = Outbox()
+        oa_title = f"📰 {group.name} · 公众号摘要"
+        oa_content = _json.dumps({
+            "group": group.name,
+            "articles_count": result.get("articles_count", 0),
+            "digest": result["digest_text"],
+            "display": f"公众号组: {group.name}\n文章数: {result.get('articles_count', 0)} 篇\n\n{result['digest_text']}",
+        }, ensure_ascii=False)
+        oa_nid = outbox.add(
+            notif_type="oa_digest",
+            chat_id=group.id,
+            group_name=group.name,
+            title=oa_title,
+            content=oa_content,
+            priority="normal",
+        )
+    except Exception as e:
+        logger.debug("OA outbox write skipped: %s", e)
+
+    try:
+        if group.push_target == "ilink":
+            from src.wechat.ilink_push import get_ilink_push, format_for_wechat
+            ilink = get_ilink_push()
+            if ilink.is_available():
+                title = f"📰 {group.name} · 公众号摘要"
+                ac = result.get("articles_count", 0)
+                content = f"📄 {ac} 篇文章\n\n{result['digest_text']}"
+                msg = format_for_wechat(title, content)
+                push_result = ilink.send_message(msg)
+                push_ok = push_result.get("success", False)
+                push_err = push_result.get("error", "") if not push_ok else ""
+                if oa_nid:
+                    try:
+                        outbox = Outbox()
+                        outbox.update_push_result(
+                            oa_nid, "ilink",
+                            "success" if push_ok else "failed",
+                            push_err,
+                        )
+                    except Exception:
+                        pass
+                broadcast_event("oa_digest_push_result", {
+                    "group_name": group.name,
+                    "success": push_ok,
+                    "error": push_err,
+                })
+            else:
+                if oa_nid:
+                    try:
+                        outbox = Outbox()
+                        outbox.update_push_result(
+                            oa_nid, "ilink", "failed", "iLink推送通道未绑定或已断开",
+                        )
+                    except Exception:
+                        pass
+        else:
+            if oa_nid:
+                try:
+                    outbox = Outbox()
+                    outbox.update_push_result(
+                        oa_nid, "local", "skipped", "未配置微信推送通道",
+                    )
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning("[OA-DIGEST] Push failed: %s", e)
+
 
 
 def handle_oa_search(params, config: AssistantConfig):

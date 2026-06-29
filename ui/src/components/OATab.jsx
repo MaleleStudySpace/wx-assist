@@ -961,10 +961,16 @@ export default function OATab() {
       try {
         const data = JSON.parse(e.data)
         if (data.type === 'oa_digest_progress') {
-          if (data.status === 'completed' || data.status === 'error') {
+          if (data.status === 'completed') {
             setDigestRunning('')
-          }
-          if (data.progress) {
+            setDigestProgress(`✅ 摘要生成完成（${data.articles_count || 0} 篇文章）`)
+            setTimeout(() => setDigestProgress(''), 3000)
+            setLastDigest({ groupId: data.group_id, text: data.digest_text, articlesCount: data.articles_count || 0 })
+          } else if (data.status === 'error') {
+            setDigestRunning('')
+            setDigestProgress(`⚠ ${data.error || '生成失败'}`)
+            setTimeout(() => setDigestProgress(''), 5000)
+          } else if (data.progress) {
             setDigestProgress(data.progress)
           }
         }
@@ -1051,20 +1057,22 @@ export default function OATab() {
 
   async function handleRunDigest(groupId) {
     setDigestRunning(groupId)
-    setDigestProgress('开始生成...')
+    setDigestProgress('正在提交任务...')
     try {
       const res = await fetch(`${API_BASE}/api/oa/digest/run/${groupId}`, { method: 'POST' })
       const data = await res.json()
-      if (data.ok && data.digest_text) {
-        setLastDigest({ groupId, text: data.digest_text, articlesCount: data.articles_count || 0 })
-        setDigestProgress(`✅ 摘要生成完成（${data.articles_count || 0} 篇文章）`)
-        setTimeout(() => setDigestProgress(''), 3000)
-      } else if (!data.ok && data.error) {
-        setDigestProgress(`⚠ ${data.error}`)
+      if (data.ok) {
+        setDigestProgress('⏳ 摘要生成中（约 10-30 秒）...')
+      } else {
+        setDigestProgress(`⚠ ${data.error || '提交失败'}`)
         setTimeout(() => setDigestProgress(''), 4000)
+        setDigestRunning('')
       }
-    } catch {}
-    setDigestRunning('')
+    } catch {
+      setDigestProgress('⚠ 提交失败，请重试')
+      setTimeout(() => setDigestProgress(''), 4000)
+      setDigestRunning('')
+    }
   }
 
   async function handleSearch() {
