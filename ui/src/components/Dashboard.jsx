@@ -20,7 +20,7 @@ function StatusTile({ icon: Icon, label, ok, okText, errText, detail }) {
       <Icon size={16} weight="fill" className={ok ? 'text-brand-green' : 'text-status-error/60'} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="text-[13px] text-text-main font-semibold">{label}</span>
+          <span className="text-sm text-text-main font-semibold">{label}</span>
           <AnimatePresence mode="wait">
             <motion.span
               key={ok ? 'ok' : 'err'}
@@ -28,13 +28,13 @@ function StatusTile({ icon: Icon, label, ok, okText, errText, detail }) {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.7, opacity: 0 }}
               transition={{ duration: 0.2, type: 'spring', stiffness: 400 }}
-              className={`text-[11px] font-mono font-bold ${ok ? 'text-brand-green' : 'text-status-error'}`}
+              className={`text-xs font-mono font-bold ${ok ? 'text-brand-green' : 'text-status-error'}`}
             >
               {ok ? okText : errText}
             </motion.span>
           </AnimatePresence>
         </div>
-        {detail && <p className="text-[11px] text-text-muted truncate mt-0.5">{detail}</p>}
+        {detail && <p className="text-xs text-text-muted truncate mt-0.5">{detail}</p>}
       </div>
     </motion.div>
   )
@@ -90,19 +90,19 @@ function KeywordAlertCard({ onTabChange }) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 flex-wrap">
           {totalAlerts > 0 && (
-            <span className="text-[13px] text-text-main font-semibold">{totalAlerts} 个提醒群</span>
+            <span className="text-sm text-text-main font-semibold">{totalAlerts} 个提醒群</span>
           )}
           {totalOa > 0 && (
-            <span className="text-[13px] text-text-main font-semibold">{totalOa} 个公众号</span>
+            <span className="text-sm text-text-main font-semibold">{totalOa} 个公众号</span>
           )}
           {enabledAlerts > 0 && (
-            <span className="text-[10px] font-mono font-bold text-amber-600 bg-amber-500/[0.08] px-1.5 py-px rounded">{enabledAlerts} 启用</span>
+            <span className="text-xs font-mono font-bold text-amber-600 bg-amber-500/[0.08] px-1.5 py-px rounded">{enabledAlerts} 启用</span>
           )}
         </div>
         {hasAny && (
           <button onClick={() => onTabChange?.('assistant')}
-            className="flex items-center gap-1 text-[10px] text-amber-600 hover:text-amber-500 font-medium cursor-pointer group">
-            查看全部 <ArrowRight size={8} className="group-hover:translate-x-0.5 transition-transform" />
+            className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-500 font-medium cursor-pointer group">
+            查看全部 <ArrowRight size={10} className="group-hover:translate-x-0.5 transition-transform" />
           </button>
         )}
       </div>
@@ -111,15 +111,15 @@ function KeywordAlertCard({ onTabChange }) {
       {loading ? (
         <div className="flex items-center gap-2 py-8 justify-center">
           <Spinner size={14} className="animate-spin text-text-muted" />
-          <span className="text-[11px] text-text-muted">加载中</span>
+          <span className="text-xs text-text-muted">加载中</span>
         </div>
       ) : !hasAny ? (
         <div className="flex flex-col items-center py-8 gap-2">
           <Lightning size={20} weight="fill" className="text-amber-400/40" />
-          <span className="text-[12px] text-text-muted">暂未配置即时提醒</span>
+          <span className="text-sm text-text-muted">暂未配置即时提醒</span>
           <button onClick={() => onTabChange?.('assistant')}
-            className="flex items-center gap-1 text-[10px] text-amber-600 hover:text-amber-500 font-medium cursor-pointer">
-            前往配置 <ArrowRight size={8} />
+            className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-500 font-medium cursor-pointer">
+            前往配置 <ArrowRight size={10} />
           </button>
         </div>
       ) : (
@@ -127,7 +127,7 @@ function KeywordAlertCard({ onTabChange }) {
           {/* Keyword alerts */}
           {(alertGroups || []).length > 0 && (
             <div>
-              <p className="text-[10px] text-text-muted font-semibold mb-1 flex items-center gap-1">
+              <p className="text-xs text-text-muted font-semibold mb-1 flex items-center gap-1">
                 <Lightning size={10} /> 关键词
               </p>
               <div className="space-y-1.5">
@@ -144,16 +144,16 @@ function KeywordAlertCard({ onTabChange }) {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-[12px] text-text-main font-semibold truncate">{ag.group_name || ag.chat_id || `提醒群 #${i + 1}`}</span>
+                        <span className="text-sm text-text-main font-semibold truncate">{ag.group_name || ag.chat_id || `提醒群 #${i + 1}`}</span>
                         {ag.push_target === 'ilink' && (
-                          <span className="text-[9px] font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
+                          <span className="text-xs font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
                             <PaperPlaneTilt size={8} />推送
                           </span>
                         )}
                       </div>
                       <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                         {(ag.keywords || []).map((kw, ki) => (
-                          <span key={ki} className="text-[10px] font-mono font-medium px-1.5 py-px rounded bg-amber-500/[0.08] text-amber-600 dark:text-amber-400">{kw}</span>
+                          <span key={ki} className="text-xs font-mono font-medium px-1.5 py-px rounded bg-amber-500/[0.08] text-amber-600 dark:text-amber-400">{kw}</span>
                         ))}
                       </div>
                     </div>
@@ -167,7 +167,7 @@ function KeywordAlertCard({ onTabChange }) {
           {/* OA monitors */}
           {(oaMonitors || []).length > 0 && (
             <div>
-              <p className="text-[10px] text-text-muted font-semibold mb-1 flex items-center gap-1">
+              <p className="text-xs text-text-muted font-semibold mb-1 flex items-center gap-1">
                 <Bell size={10} /> 公众号
               </p>
               <div className="space-y-1.5">
@@ -184,10 +184,10 @@ function KeywordAlertCard({ onTabChange }) {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-[12px] text-text-main font-semibold truncate">{mg.name || mg.id}</span>
-                        <span className="text-[10px] text-text-muted">{(mg.accounts || []).length} 个号</span>
+                        <span className="text-sm text-text-main font-semibold truncate">{mg.name || mg.id}</span>
+                        <span className="text-xs text-text-muted">{(mg.accounts || []).length} 个号</span>
                         {mg.push_target === 'ilink' && (
-                          <span className="text-[9px] font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
+                          <span className="text-xs font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
                             <PaperPlaneTilt size={8} />推送
                           </span>
                         )}
@@ -219,7 +219,7 @@ function ScheduledTasksCard() {
   if (!data || data.total === 0) return (
     <div className="flex items-center gap-2 py-8 justify-center">
       <Clock size={18} className="text-text-muted" />
-      <span className="text-[12px] text-text-muted">暂无定时任务</span>
+      <span className="text-sm text-text-muted">暂无定时任务</span>
     </div>
   )
 
@@ -229,12 +229,12 @@ function ScheduledTasksCard() {
     <div className="space-y-3">
       {/* Summary row */}
       <div className="flex items-center gap-2">
-        <span className="text-[13px] text-text-main font-semibold">{data.total} 个任务</span>
+        <span className="text-sm text-text-main font-semibold">{data.total} 个任务</span>
         {enabledCount > 0 && (
-          <span className="text-[10px] font-mono font-bold text-brand-green bg-brand-green/[0.08] px-1.5 py-px rounded">{enabledCount} 启用</span>
+          <span className="text-xs font-mono font-bold text-brand-green bg-brand-green/[0.08] px-1.5 py-px rounded">{enabledCount} 启用</span>
         )}
         {data.total - enabledCount > 0 && (
-          <span className="text-[10px] font-mono text-text-muted bg-bg-raised px-1.5 py-px rounded">{data.total - enabledCount} 禁用</span>
+          <span className="text-xs font-mono text-text-muted bg-bg-raised px-1.5 py-px rounded">{data.total - enabledCount} 禁用</span>
         )}
       </div>
 
@@ -279,15 +279,15 @@ function TaskRow({ task, index }) {
       <div className="flex-1 min-w-0">
         {/* Line 1: name + push tag */}
         <div className="flex items-center gap-1.5">
-          <span className="text-[12px] text-text-main font-semibold truncate">{task.name || meta.label}</span>
+          <span className="text-sm text-text-main font-semibold truncate">{task.name || meta.label}</span>
           {task.push && task.push !== '不推送' && (
-            <span className="text-[9px] font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
+            <span className="text-xs font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
               <PaperPlaneTilt size={8} />推送
             </span>
           )}
         </div>
         {/* Line 2: schedule */}
-        <div className="flex items-center gap-1 mt-0.5 text-[10px]">
+        <div className="flex items-center gap-1 mt-0.5 text-xs">
           <Clock size={9} weight="fill" className="text-text-muted flex-shrink-0" />
           <span className="text-text-muted">{scheduleText}</span>
         </div>
@@ -295,7 +295,7 @@ function TaskRow({ task, index }) {
         {detailTags.length > 0 && (
           <div className="flex items-center gap-1.5 mt-0.5">
             {detailTags.map((tag, i) => (
-              <span key={i} className="text-[9px] text-text-muted bg-bg-raised/60 dark:bg-bg-raised/40 px-1.5 py-px rounded">{tag}</span>
+              <span key={i} className="text-xs text-text-muted bg-bg-raised/60 dark:bg-bg-raised/40 px-1.5 py-px rounded">{tag}</span>
             ))}
           </div>
         )}
@@ -401,21 +401,21 @@ export default function Dashboard({ status, onTabChange }) {
               </AnimatePresence>
               <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                 {status.running && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-brand-green/[0.08] text-brand-green dark:bg-brand-green/[0.10]">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-mono font-bold bg-brand-green/[0.08] text-brand-green dark:bg-brand-green/[0.10]">
                     <Cube size={9} weight="fill" />
                     {status.model_name || '-'}
                     {status.model_name && <span className="opacity-60 ml-0.5">{status.model_name}</span>}
                   </span>
                 )}
-                <span className="text-[11px] text-text-muted font-mono">
+                <span className="text-xs text-text-muted font-mono">
                   {status.messages_processed.toLocaleString()} 条消息
                 </span>
                 <span className="text-text-muted">|</span>
-                <span className="text-[11px] text-text-muted font-mono">运行 {uptimeStr}</span>
+                <span className="text-xs text-text-muted font-mono">运行 {uptimeStr}</span>
                 {groupCountStr && (
                   <>
                     <span className="text-text-muted">|</span>
-                    <span className="text-[11px] text-text-muted font-mono">{groupCountStr}</span>
+                    <span className="text-xs text-text-muted font-mono">{groupCountStr}</span>
                   </>
                 )}
               </div>
@@ -446,11 +446,11 @@ export default function Dashboard({ status, onTabChange }) {
       >
         <div className="h-[2px] bg-status-info/20" />
         <div className="px-6 py-4 flex items-center justify-between">
-          <h3 className="text-[14px] font-semibold text-text-main">系统健康</h3>
+          <h3 className="text-sm font-semibold text-text-main">系统健康</h3>
           <button
             onClick={triggerDiagnostics}
             disabled={diagnosing}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-text-muted bg-bg-raised border border-border-main/50 hover:text-brand-green hover:border-brand-green/20 transition-all cursor-pointer disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-text-muted bg-bg-raised border border-border-main/50 hover:text-brand-green hover:border-brand-green/20 transition-all cursor-pointer disabled:opacity-50"
           >
             <ArrowsClockwise size={12} className={diagnosing ? 'animate-spin' : ''} />
             环境检查
@@ -482,9 +482,9 @@ export default function Dashboard({ status, onTabChange }) {
                     ? <CheckCircle size={13} weight="fill" className="text-brand-green flex-shrink-0" />
                     : <XCircle size={13} weight="fill" className="text-status-error flex-shrink-0" />
                   }
-                  <span className="text-[12px] text-text-main font-medium">{item.label || key}</span>
+                  <span className="text-sm text-text-main font-medium">{item.label || key}</span>
                   {!item.ok && item.detail && (
-                    <span className="text-[11px] text-status-error/80 font-mono">{item.detail}</span>
+                    <span className="text-xs text-status-error/80 font-mono">{item.detail}</span>
                   )}
                 </div>
               ))
@@ -501,14 +501,14 @@ export default function Dashboard({ status, onTabChange }) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ ...spring, delay: 0.12, duration: 0.5 }}
           className="bg-bg-card border border-border-main rounded-2xl overflow-hidden flex flex-col"
-          style={{ maxHeight: '45vh' }}
+          style={{ maxHeight: '55vh' }}
         >
           <div className="h-[2px] bg-amber-400/30 flex-shrink-0" />
-          <div className="px-5 py-3.5 flex items-center gap-2 flex-shrink-0">
+          <div className="px-6 py-4 flex items-center gap-2 flex-shrink-0">
             <Lightning size={15} className="text-amber-500" weight="fill" />
             <h3 className="text-[14px] font-semibold text-text-main">即时提醒</h3>
           </div>
-          <div className="px-5 pb-4 overflow-y-auto scrollbar-thin">
+          <div className="px-6 pb-4 overflow-y-auto scrollbar-thin">
             <KeywordAlertCard onTabChange={onTabChange} />
           </div>
         </motion.div>
@@ -519,14 +519,14 @@ export default function Dashboard({ status, onTabChange }) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ ...spring, delay: 0.16, duration: 0.5 }}
           className="bg-bg-card border border-border-main rounded-2xl overflow-hidden flex flex-col"
-          style={{ maxHeight: '45vh' }}
+          style={{ maxHeight: '55vh' }}
         >
-          <div className="h-[2px] bg-brand-green/15 flex-shrink-0" />
-          <div className="px-5 py-3.5 flex items-center gap-2 flex-shrink-0">
+          <div className="h-[2px] bg-brand-green/20 flex-shrink-0" />
+          <div className="px-6 py-4 flex items-center gap-2 flex-shrink-0">
             <Clock size={15} className="text-text-muted" weight="fill" />
             <h3 className="text-[14px] font-semibold text-text-main">定时任务</h3>
           </div>
-          <div className="px-5 pb-4 overflow-y-auto scrollbar-thin">
+          <div className="px-6 pb-4 overflow-y-auto scrollbar-thin">
             <ScheduledTasksCard />
           </div>
         </motion.div>
