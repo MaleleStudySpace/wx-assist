@@ -1299,13 +1299,11 @@ class MacUIBackend(AbstractWeChatBackend):
 
     def __init__(
         self,
-        bot_display_name: str = "",
         groups: list[str] | None = None,
         poll_sec: float = DEFAULT_POLL_SEC,
         store=None,
         automation: Optional[MacUIAutomation] = None,
     ):
-        self._bot_name = bot_display_name
         self._groups = groups or []
         self._poll_sec = poll_sec
         self._store = store
@@ -1317,8 +1315,8 @@ class MacUIBackend(AbstractWeChatBackend):
     def start(self, callback: MessageCallback) -> None:
         self._running = True
         logger.info(
-            "MacUIBackend starting (groups=%s, poll=%ss, bot=%r)",
-            self._groups, self._poll_sec, self._bot_name,
+            "MacUIBackend starting (groups=%s, poll=%ss)",
+            self._groups, self._poll_sec,
         )
         self._automation.activate_wechat()
         while self._running:
@@ -1391,6 +1389,5 @@ class MacUIBackend(AbstractWeChatBackend):
             "content": content,
             "msg_type": 1,
             "timestamp": int(time.time()),
-            "is_at_mentioned": bool(self._bot_name and self._bot_name in content),
             "is_group": True,
         }

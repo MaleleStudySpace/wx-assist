@@ -13,7 +13,6 @@ from typing import Callable, Optional
 #   content: str,          # Text content (or "[图片]", "[语音]", etc.)
 #   msg_type: int,         # 1=text, 3=image, 34=voice, 47=emoji, 49=link/app
 #   timestamp: int,        # Unix epoch seconds
-#   is_at_mentioned: bool, # Whether the bot was @mentioned
 #   is_group: bool,        # Whether this is a group chat
 # }
 MessageCallback = Callable[[dict], Optional[str]]

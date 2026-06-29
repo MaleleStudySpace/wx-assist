@@ -15,9 +15,6 @@ from pathlib import Path
 from .config import BotConfig, PROJECT_ROOT
 from .db import initialize_db, MessageStore
 from .summarize import create_summarizer
-from .trigger import TriggerDetector
-from .nickname import NicknameService
-from .admin import AdminCommandHandler
 from .router import MessageRouter
 from .utils.logging_config import setup_logging
 from .utils.op_logger import op_log
@@ -263,20 +260,11 @@ class Bot:
             pass
 
         # ── 3. Components ───────────────────────────────────────
-        detector = TriggerDetector(
-            keywords=config.trigger_keywords,
-            bot_display_name="群聊小助手",
-        )
         summarizer = create_summarizer(config)
-        nickname_service = NicknameService()
-        admin_handler = AdminCommandHandler(nickname_service)
 
         router = MessageRouter(
             store=store,
-            detector=detector,
             summarizer=summarizer,
-            admin_handler=admin_handler,
-            nickname_service=nickname_service,
             config=config,
         )
 
@@ -488,7 +476,6 @@ class Bot:
         if config.wechat_backend == "wcdb":
             from .wechat.wcdb_backend import WcdbBackend
             return WcdbBackend(
-                bot_display_name="群聊小助手",
                 groups=groups,
                 poll_sec=config.poll_interval_sec,
                 store=store,
@@ -497,7 +484,6 @@ class Bot:
         if config.wechat_backend == "mac_ui":
             from .wechat.mac_ui_backend import MacUIBackend
             return MacUIBackend(
-                bot_display_name="群聊小助手",
                 groups=groups,
                 poll_sec=config.poll_interval_sec,
                 store=store,
@@ -506,7 +492,6 @@ class Bot:
         if config.wechat_backend == "mac_hybrid":
             from .wechat.mac_hybrid_backend import MacHybridBackend
             return MacHybridBackend(
-                bot_display_name="群聊小助手",
                 groups=groups,
                 poll_sec=config.poll_interval_sec,
                 store=store,

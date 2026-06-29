@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Star, DownloadSimple, MagnifyingGlass, Clock, File, Image, Video, Link, FileText, Funnel, ArrowsDownUp, FolderOpen, Play, ChatsCircle, CaretDown, ChatCircleDots, Tag } from '@phosphor-icons/react'
+import { Star, DownloadSimple, MagnifyingGlass, Clock, File, Image, Video, Link, FileText, Funnel, ArrowsDownUp, FolderOpen, Play, Microphone, ChatsCircle, CaretDown, ChatCircleDots, Tag } from '@phosphor-icons/react'
 import { Toggle, SectionHeader, API_BASE } from './SharedComponents'
 import ChatDrawer from './ChatDrawer'
 import AIChatPanel from './AIChatPanel'

@@ -416,7 +416,6 @@ class LoadConfigTests(unittest.TestCase):
             self.assertEqual(config.poll_interval_sec, 1.0)
             self.assertEqual(config.chunk_size, 400)
             self.assertEqual(config.wechat_backend, "wcdb")
-            self.assertEqual(config.bot_display_name, "群聊小助手")
 
     def test_load_config_with_custom_numeric_values(self):
         """Custom numeric env vars should be parsed correctly."""

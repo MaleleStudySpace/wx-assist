@@ -332,10 +332,6 @@ function IdentitySection({ form, update }) {
 
   return (
     <div>
-      <Field label="机器人微信昵称" hint="用于检测 @提及">
-        <Input value={form.bot_display_name} onChange={v => update('bot_display_name', v)} placeholder="例如：群聊小助手" />
-      </Field>
-
       <Field label="目标群聊" hint={isAll ? '当前关注所有群聊。点击 × 删除「全部群聊」后可指定群名' : `关注 ${groups.filter(g => g !== '').length} 个群聊`}>
         <div className="flex flex-wrap gap-2 mb-2">
           {groups.map((name, i) => {
@@ -1577,7 +1573,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
   const [form, setForm] = useState({
     ai_provider_base_url: '', ai_provider_api_key: '',
     ai_provider_type: 'auto', ai_provider_model: '',
-    bot_display_name: '', wechat_backend: 'wcdb', wechat_groups: '*',
+    wechat_backend: 'wcdb', wechat_groups: '*',
     trigger_keywords: [],
     log_level: 'INFO', wechat_data_dir: '',
   })
@@ -1678,7 +1674,6 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
           ai_provider_type: form.ai_provider_type,
           ai_provider_model: form.ai_provider_model,
           ai_provider_extra_body: form.ai_provider_extra_body || '',
-          bot_display_name: form.bot_display_name,
           wechat_backend: form.wechat_backend,
           wechat_groups: form.wechat_groups,
           trigger_keywords: form.trigger_keywords,

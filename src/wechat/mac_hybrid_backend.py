@@ -31,7 +31,6 @@ class MacHybridBackend(AbstractWeChatBackend):
 
     def __init__(
         self,
-        bot_display_name: str = "",
         groups: list[str] | None = None,
         poll_sec: float = DEFAULT_POLL_SEC,
         store=None,
@@ -39,7 +38,6 @@ class MacHybridBackend(AbstractWeChatBackend):
         automation: MacUIAutomation | None = None,
         limit: int = DEFAULT_LIMIT,
     ):
-        self._bot_name = bot_display_name
         self._groups = groups or []
         self._poll_sec = poll_sec
         self._store = store
@@ -68,8 +66,8 @@ class MacHybridBackend(AbstractWeChatBackend):
     def start(self, callback: MessageCallback) -> None:
         self._running = True
         logger.info(
-            "MacHybridBackend starting in WeFlow target mode (groups=%s, poll=%ss, bot=%r)",
-            self._groups, self._poll_sec, self._bot_name,
+            "MacHybridBackend starting in WeFlow target mode (groups=%s, poll=%ss)",
+            self._groups, self._poll_sec,
         )
         self._automation.activate_wechat()
         self._prime_message_state()
@@ -165,9 +163,6 @@ class MacHybridBackend(AbstractWeChatBackend):
                 continue
             self._seen_ids.add(msg_id)
 
-            if self._bot_name and self._bot_name in msg["sender_name"]:
-                continue
-
             self._last_messages[msg["chat_id"]] = msg
             reply = callback(msg)
             if reply:
@@ -252,10 +247,6 @@ class MacHybridBackend(AbstractWeChatBackend):
             "content": content,
             "msg_type": _source_type_to_msg_type(raw.get("type")),
             "timestamp": timestamp,
-            "is_at_mentioned": bool(
-                self._bot_name
-                and (f"@{self._bot_name}" in content or self._bot_name in content)
-            ),
             "is_group": is_group,
         }
 
@@ -518,7 +509,6 @@ class MacHybridBackend(AbstractWeChatBackend):
             titles,
             weak_title=weak_title,
             sender=str(msg.get("sender_name") or msg.get("sender_id") or ""),
-            bot_name=self._bot_name,
         )
         if not title:
             return None
@@ -594,12 +584,10 @@ def _best_visible_group_title(
     *,
     weak_title: str = "",
     sender: str = "",
-    bot_name: str = "",
 ) -> str | None:
     reject = {
         _normalize_chat_title(weak_title),
         _normalize_chat_title(sender),
-        _normalize_chat_title(bot_name),
     }
     for raw in titles or []:
         title = _clean_wechat_group_title(str(raw or ""))

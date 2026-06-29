@@ -136,12 +136,9 @@ function KeywordAlertCard({ onTabChange }) {
                   )}
                 </div>
                 <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                  {(ag.keywords || []).slice(0, 3).map((kw, ki) => (
+                  {(ag.keywords || []).map((kw, ki) => (
                     <span key={ki} className="text-[10px] font-mono font-medium px-1.5 py-px rounded bg-amber-500/[0.08] text-amber-600 dark:text-amber-400">{kw}</span>
                   ))}
-                  {(ag.keywords || []).length > 3 && (
-                    <span className="text-[10px] text-text-muted font-mono">+{ag.keywords.length - 3}</span>
-                  )}
                 </div>
               </div>
               <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ag.enabled ? 'bg-brand-green' : 'bg-text-muted/30'}`} />

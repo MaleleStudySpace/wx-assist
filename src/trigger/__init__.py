@@ -1,4 +1,4 @@
 """Trigger detection."""
-from .detector import TriggerDetector
-
-__all__ = ["TriggerDetector"]
+# TriggerDetector was removed — @mention was a completely disabled feature with
+# no production callers.  Keyword matching is handled directly by AlertEngine.
+__all__ = []
