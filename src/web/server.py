@@ -2039,8 +2039,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 # 每次 test-push 前先 reload 单例，确保用磁盘上的最新账号
                 ilink = get_ilink_push()
                 ilink.reload()
-                if not ilink.is_available():
-                    _send_sse("error", {"error": "iLink not bound"})
+                # 只检查是否绑定了账号，不检查 _last_push_ok（那是发送时才关心的）
+                if not ilink._account:
+                    _send_sse("error", {"error": "iLink 未绑定，请先扫码绑定"})
                     return
 
                 def on_retry(attempt, max_retries, delay, error):

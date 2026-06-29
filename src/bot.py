@@ -149,7 +149,7 @@ class HealthMonitor:
         try:
             from src.wechat.ilink_push import get_ilink_push
             ilink = get_ilink_push()
-            return ilink.is_available()
+            return ilink.is_healthy()
         except Exception:
             return False
 
