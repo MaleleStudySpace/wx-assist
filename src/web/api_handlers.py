@@ -4199,6 +4199,13 @@ def handle_oa_groups_create(params, config: AssistantConfig):
         lookback_mode = body.get("lookback_mode", "auto")
         custom_prompt = body.get("custom_prompt", "")
 
+        # Validate cron expression before saving (same rule as digest_groups)
+        if cron_expr:
+            from src.assistant.config import _validate_cron_expr
+            cron_err = _validate_cron_expr(cron_expr, f"公众号分组“{name}”")
+            if cron_err:
+                return {"ok": False, "error": cron_err}
+
         # Filter out service account IDs (e.g. 微信支付/信用卡还款)
         accounts = _filter_service_account_ids(accounts)
 
@@ -4225,6 +4232,13 @@ def handle_oa_groups_update(params, config: AssistantConfig):
     try:
         body = params.get("_body", {})
         group_id = params.get("id", [""])[0]
+
+        # Validate cron expression before saving (same rule as digest_groups)
+        if "cron_expr" in body and body.get("cron_expr"):
+            from src.assistant.config import _validate_cron_expr
+            cron_err = _validate_cron_expr(body["cron_expr"], f"公众号分组 ID“{group_id}”")
+            if cron_err:
+                return {"ok": False, "error": cron_err}
 
         # Filter out service account IDs before persisting
         if "accounts" in body and isinstance(body["accounts"], list):
