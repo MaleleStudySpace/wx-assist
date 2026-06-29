@@ -176,7 +176,7 @@ class OAMonitorEngine:
 
             import json as _json
 
-            notif_title = f"🔔 {source} · 新文章"
+            notif_title = f"🔔 新文章 · {source}"
             notif_content = _json.dumps({
                 "group": source,
                 "time": time_str,
@@ -184,10 +184,10 @@ class OAMonitorEngine:
                 "digest": digest,
                 "url": art.url,
                 "display": (
-                    f"📰 **{title}**\n"
-                    f"🕐 {time_str}\n"
+                    f"📰 **文章:** {title}\n"
+                    f"🕐 **时间:** {time_str}\n"
                     f"\n{digest}\n"
-                    f"\n🔗 {art.url}"
+                    f"\n🔗 **原文链接:** {art.url}"
                 ),
             }, ensure_ascii=False)
 
