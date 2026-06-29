@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -10,6 +11,53 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path("data/assistant_config.json")
+
+
+def _validate_cron_expr(cron_expr: str, field_name: str = "cron_expr") -> str:
+    """Validate cron against the fixed UI/backend contract.
+
+    Returns an error message if invalid, empty string if valid.
+
+    Fixed rule:
+    - Multi-line allowed; one trigger time per line
+    - Each line has exactly 5 fields: minute hour day month day_of_week
+    - minute is a single integer 0-59
+    - hour is a single integer 0-23
+    - day and month must be '*'
+    - day_of_week is '*' or comma/range expression with values 0-6
+    """
+    if not cron_expr:
+        return ""
+
+    lines = [line.strip() for line in cron_expr.strip().split('\n') if line.strip()]
+    if not lines:
+        return f"{field_name}: cron表达式不能为空"
+
+    for i, line in enumerate(lines, start=1):
+        parts = line.split()
+        if len(parts) != 5:
+            return f"{field_name}: 第{i}行必须有5个字段（分 时 日 月 周），当前={line}"
+        minute, hour, day, month, dow = parts
+
+        try:
+            minute_i = int(minute)
+            hour_i = int(hour)
+        except ValueError:
+            return f"{field_name}: 第{i}行分/时必须是单个数字，不能使用逗号、*、范围或步进"
+        if not (0 <= minute_i <= 59):
+            return f"{field_name}: 第{i}行分钟={minute} 超出范围，应为0-59"
+        if not (0 <= hour_i <= 23):
+            return f"{field_name}: 第{i}行小时={hour} 超出范围，应为0-23"
+
+        if day != "*":
+            return f"{field_name}: 第{i}行日字段必须是 *"
+        if month != "*":
+            return f"{field_name}: 第{i}行月字段必须是 *"
+
+        if dow != "*" and not re.match(r'^(\d+(-\d+)?)(,\d+(-\d+)?)*$', dow):
+            return f"{field_name}: 第{i}行周={dow} 格式错误，支持 *、1-5、1,2,3,4,5"
+
+    return ""
 
 
 @dataclass

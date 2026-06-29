@@ -22,7 +22,7 @@ function buildCronExpr(times, freqMode, weekdays) {
   }).sort((a, b) => a.hour - b.hour || a.minute - b.minute)
   if (!parsed.length) parsed.push({ hour: 9, minute: 0 })
 
-  // Build dow field
+  // Build dow field. Use range for weekday so round-trip parsing is stable.
   let dowField = '*'
   if (freqMode === 'weekday') {
     dowField = '1-5'
@@ -30,18 +30,9 @@ function buildCronExpr(times, freqMode, weekdays) {
     dowField = [...weekdays].sort((a, b) => a - b).join(',') || '*'
   }
 
-  // If all times share the same minute, use compact "M H1,H2 * * DOW".
-  // Otherwise generate one cron line per time to avoid Cartesian product.
-  // e.g. ["09:00", "12:30"] → "0 9 * * DOW\n30 12 * * DOW"
-  const uniqueMinutes = [...new Set(parsed.map(p => p.minute))]
-  if (uniqueMinutes.length === 1) {
-    const minStr = uniqueMinutes[0]
-    const hourStr = [...new Set(parsed.map(p => p.hour))].sort((a, b) => a - b).join(',')
-    return `${minStr} ${hourStr} * * ${dowField}`
-  }
-  // Mixed minutes — one line per time
-  const lines = parsed.map(p => `${p.minute} ${p.hour} * * ${dowField}`)
-  return lines.join('\n')
+  // Store one cron line per selected time. This avoids ambiguous compact forms
+  // and prevents accidental concatenation when users edit schedule repeatedly.
+  return parsed.map(p => `${p.minute} ${p.hour} * * ${dowField}`).join('\n')
 }
 
 function parseCronExpr(cronExpr) {
@@ -51,7 +42,8 @@ function parseCronExpr(cronExpr) {
   const lines = cronExpr.trim().split(/\n/).map(l => l.trim()).filter(Boolean)
   let allTimes = []
   let allWeekdays = []
-  let detectedFreq = 'custom'
+  // Start as null; set from first line, downgrade if lines conflict
+  let detectedFreq = null
 
   for (const line of lines) {
     const fields = line.split(/\s+/)
@@ -70,16 +62,27 @@ function parseCronExpr(cronExpr) {
     }
 
     // Detect frequency from dow field
+    let lineFreq
     if (dow === '*') {
-      if (detectedFreq === 'custom') detectedFreq = 'daily'
-    } else if (dow === '1-5') {
-      if (detectedFreq !== 'custom') detectedFreq = 'weekday'
+      lineFreq = 'daily'
+    } else if (dow === '1-5' || _isWeekdayList(dow)) {
+      lineFreq = 'weekday'
       allWeekdays = [1, 2, 3, 4, 5]
     } else {
-      detectedFreq = 'custom'
+      lineFreq = 'custom'
       allWeekdays = dow.split(',').map(Number).filter(n => !isNaN(n))
     }
+
+    // Merge: if all lines agree, keep that freq; any conflict → custom
+    if (detectedFreq === null) {
+      detectedFreq = lineFreq
+    } else if (detectedFreq !== lineFreq) {
+      detectedFreq = 'custom'
+    }
   }
+
+  // Default if nothing parsed
+  if (detectedFreq === null) detectedFreq = 'daily'
 
   // Deduplicate and sort times
   allTimes = [...new Set(allTimes)].sort()
@@ -88,6 +91,43 @@ function parseCronExpr(cronExpr) {
   if (!allWeekdays.length && detectedFreq === 'custom') allWeekdays = [1, 2, 3, 4, 5]
 
   return { freqMode: detectedFreq, times: allTimes, weekdays: allWeekdays }
+}
+
+/** Check if a dow field represents weekdays (1-5), regardless of format. */
+function _isWeekdayList(dow) {
+  if (!dow || dow === '*') return false
+  const nums = dow.split(',').map(Number).filter(n => !isNaN(n))
+  return nums.length === 5 && nums.every(n => n >= 1 && n <= 5) && new Set(nums).size === 5
+}
+
+/**
+ * Validate a cron expression against our fixed rule.
+ * Returns error message string if invalid, empty string if valid.
+ *
+ * Rule: multi-line; each line = 5 fields; minute/hour = single int; day/month = *; dow = * or list/range
+ */
+function validateCronExpr(cronExpr) {
+  if (!cronExpr || !cronExpr.trim()) return ''  // Empty is allowed (fallback to schedule)
+  const lines = cronExpr.trim().split(/\n/).map(l => l.trim()).filter(Boolean)
+  for (let i = 0; i < lines.length; i++) {
+    const fields = lines[i].split(/\s+/)
+    if (fields.length !== 5) return `第${i+1}行：必须有5个字段（分 时 日 月 周），当前: ${lines[i]}`
+    const [min, hour, day, month, dow] = fields
+    // minute: integer 0-59
+    const m = Number(min)
+    if (!Number.isInteger(m) || m < 0 || m > 59) return `第${i+1}行：分钟=${min} 必须是0-59的整数`
+    // hour: integer 0-23
+    const h = Number(hour)
+    if (!Number.isInteger(h) || h < 0 || h > 23) return `第${i+1}行：小时=${hour} 必须是0-23的整数`
+    // day/month must be *
+    if (day !== '*') return `第${i+1}行：日=${day} 必须是 *`
+    if (month !== '*') return `第${i+1}行：月=${month} 必须是 *`
+    // dow: * or valid range/list of 0-6
+    if (dow !== '*' && !/^(\d+(-\d+)?)(,\d+(-\d+)?)*$/.test(dow)) {
+      return `第${i+1}行：周=${dow} 格式错误，支持 * | 1-5 | 1,2,3,4,5`
+    }
+  }
+  return ''
 }
 
 function cronToLabel(cronExpr) {
@@ -259,29 +299,8 @@ export default function AssistantPanel() {
     }
   }
 
-  // ── Data migration: fix Cartesian product cron expressions ──────────
-  // Old buildCronExpr generated "M1,M2 H1,H2 * * DOW" which creates
-  // a Cartesian product of times. Convert to one-line-per-time format.
-  function fixCronCartesian(cronExpr) {
-    if (!cronExpr || !cronExpr.includes('\n')) {
-      const fields = cronExpr.trim().split(/\s+/)
-      if (fields.length !== 5) return cronExpr
-      const [min, hour, dom, mon, dow] = fields
-      // If both minute and hour have commas, it's a Cartesian product
-      if (min.includes(',') && hour.includes(',')) {
-        const mins = min.split(',').map(Number).filter(n => !isNaN(n))
-        const hours = hour.split(',').map(Number).filter(n => !isNaN(n))
-        const lines = []
-        for (const h of hours) {
-          for (const m of mins) {
-            lines.push(`${m} ${h} ${dom} ${mon} ${dow}`)
-          }
-        }
-        return lines.join('\n')
-      }
-    }
-    return cronExpr
-  }
+  // Cron storage rule is strict: one line per time. Do not auto-repair invalid cron here;
+  // backend validation returns an error and frontend displays it to the user.
 
   function normalizeConfig(raw) {
     const queue = raw.notification_queue || {
@@ -293,13 +312,7 @@ export default function AssistantPanel() {
       ...raw,
       notification_queue: queue,
       alert_groups: (raw.alert_groups || []).map(item => ({ chat_id: '', ...item })),
-      digest_groups: (raw.digest_groups || []).map(item => {
-        const fixed = { chat_id: '', ...item }
-        if (fixed.cron_expr) {
-          fixed.cron_expr = fixCronCartesian(fixed.cron_expr)
-        }
-        return fixed
-      }),
+      digest_groups: (raw.digest_groups || []).map(item => ({ chat_id: '', ...item })),
     }
   }
 
@@ -762,6 +775,14 @@ export default function AssistantPanel() {
                     onSave={() => {
                       const draft = digestDrafts[i]
                       if (!draft) return
+                      // Validate cron before save
+                      const cronErr = validateCronExpr(draft.cron_expr || '')
+                      if (cronErr) {
+                        setSaveError(cronErr)
+                        setSaveFlash('error')
+                        setTimeout(() => setSaveError(''), 3000)
+                        return
+                      }
                       const next = [...config.digest_groups]
                       next[i] = { ...next[i], ...draft }
                       setConfig(prev => ({ ...prev, digest_groups: next }))
@@ -811,9 +832,11 @@ export default function AssistantPanel() {
                     onDraftChange={setDigestDraft}
                     onSave={() => {
                       if (!digestDraft.chat_id) { setEditorError('请先选择群聊'); return }
+                      const cron_expr = digestDraft.cron_expr || '0 9 * * *'
+                      const cronErr = validateCronExpr(cron_expr)
+                      if (cronErr) { setEditorError(cronErr); return }
                       const selected = findGroup(digestDraft.chat_id)
                       const schedule = digestDraft.schedule?.length ? digestDraft.schedule : ['09:00']
-                      const cron_expr = digestDraft.cron_expr || '0 9 * * *'
                       const next = [...(config.digest_groups || []), {
                         ...digestDraft,
                         schedule,
@@ -1103,6 +1126,7 @@ function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCron
   const freqMode = parsed.freqMode
   const times = parsed.times
   const weekdays = parsed.weekdays
+  const cronError = validateCronExpr(cronExpr)
 
   function syncCron(newTimes, newFreq, newWeekdays) {
     const cron = buildCronExpr(newTimes, newFreq, newWeekdays)
@@ -1261,15 +1285,21 @@ function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCron
               className="overflow-hidden"
             >
               <div className="mt-2 space-y-2 pl-2">
-                <input
-                  type="text"
+                <textarea
                   value={cronExpr}
                   onChange={e => onCronExprChange(e.target.value)}
-                  placeholder="0 9,18 * * 1-5"
-                  className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm text-text-main font-mono placeholder:text-text-muted/65 focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                  placeholder={`0 9 * * 1-5\n30 12 * * 1-5\n0 18 * * 1-5`}
+                  rows={3}
+                  className={`w-full bg-bg-raised border rounded-lg px-3.5 py-2 text-sm text-text-main font-mono placeholder:text-text-muted/65 focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all resize-none ${
+                    cronError ? 'border-status-error' : 'border-border-main'
+                  }`}
                 />
+                {cronError && (
+                  <p className="text-xs text-status-error font-medium">{cronError}</p>
+                )}
                 <p className="text-xs text-text-muted">
-                  5字段: 分 时 日 月 周。如 <code className="text-text-muted">0 9,18 * * 1-5</code> = 工作日9/18点
+                  多行格式，每行一个时间点：<code className="text-text-muted">分 时 日 月 周</code>。例：
+                  <code className="text-text-muted">0 9 * * 1-5</code> = 工作日9点
                 </p>
               </div>
             </motion.div>
