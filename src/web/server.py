@@ -691,6 +691,7 @@ _onboarding_data = {
     "memory_consolidation_enabled": False,
 }
 _onboarding_lock = threading.Lock()
+_ilink_test_push_lock = threading.Lock()
 
 # Async step1 state
 _step1_state = {
@@ -2017,6 +2018,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
         # ── API: iLink — test push ──────────────────────────────────────
         if self.path == "/api/ilink/test-push":
+            # Prevent concurrent test-push (non-blocking lock check)
+            if not _ilink_test_push_lock.acquire(blocking=False):
+                self.send_json({"ok": False, "error": "已有测试推送正在进行，请等待完成"})
+                return
+
             # SSE stream: report each retry attempt in real time
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -2042,6 +2048,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 # 只检查是否绑定了账号，不检查 _last_push_ok（那是发送时才关心的）
                 if not ilink._account:
                     _send_sse("error", {"error": "iLink 未绑定，请先扫码绑定"})
+                    # Still release lock before returning
+                    _ilink_test_push_lock.release()
                     return
 
                 def on_retry(attempt, max_retries, delay, error):
@@ -2056,6 +2064,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 result = ilink.send_message(
                     "✅ wx-assist 推送测试成功！\n如果你看到这条消息，说明微信推送通道已正常工作。",
                     progress_callback=on_retry,
+                    max_retries=0,
                 )
 
                 if result.get("success"):
@@ -2073,6 +2082,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 friendly = f"推送异常：{e}。请尝试先给助手主动发送一条消息；如果仍失败，请重新扫码绑定。"
                 _send_sse("error", {"error": friendly})
                 update_status(wechat_online=False)
+            finally:
+                _ilink_test_push_lock.release()
             return
 
         # ── API: Assistant — trigger digest ─────────────────────────────

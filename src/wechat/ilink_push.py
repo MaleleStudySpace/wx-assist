@@ -387,15 +387,24 @@ class ILinkPush:
 
     # ── Public: send message ──────────────────────────────────────
 
-    def send_message(self, text: str, progress_callback=None) -> dict:
+    def send_message(self, text: str, progress_callback=None, max_retries: int = None) -> dict:
         """Send a text message to the bound WeChat user.
 
         Auto-splits long messages into multiple chunks (≤4000 chars each)
         at paragraph boundaries. Ported from wechat-claude-code's splitMessage.
 
+        Args:
+            text: Message content to send.
+            progress_callback: Optional callback for progress updates.
+            max_retries: Max retry attempts. None = use default SEND_MAX_RETRIES.
+                         For test-push, pass 0 to disable retries.
+
         Returns:
             {"success": bool, "error": str|None}
         """
+        if max_retries is None:
+            max_retries = SEND_MAX_RETRIES
+
         if not self._account:
             return {"success": False, "error": "iLink not bound"}
 
@@ -411,7 +420,7 @@ class ILinkPush:
             if len(chunks) > 1:
                 chunk = f"[{i + 1}/{len(chunks)}]\n{chunk}"
 
-            result = self._send_chunk(chunk, progress_callback)
+            result = self._send_chunk(chunk, progress_callback, max_retries)
             if not result.get("success"):
                 self._mark_push_failure(result.get("error", ""))
                 return result
@@ -419,7 +428,7 @@ class ILinkPush:
         self._mark_push_success()
         return {"success": True}
 
-    def _send_chunk(self, text: str, progress_callback=None) -> dict:
+    def _send_chunk(self, text: str, progress_callback=None, max_retries: int = SEND_MAX_RETRIES) -> dict:
         """Send a single text chunk with rate limiting and retry."""
 
         # Rate limiting: ensure MIN_SEND_INTERVAL_SEC between sends
@@ -444,7 +453,7 @@ class ILinkPush:
         }
 
         # Retry with exponential backoff on ret=-2 (rate limit)
-        for attempt in range(SEND_MAX_RETRIES + 1):
+        for attempt in range(max_retries + 1):
             try:
                 import requests
                 headers = _make_headers(self._account["bot_token"])
@@ -481,26 +490,26 @@ class ILinkPush:
 
                 # Rate limited: retry with backoff
                 if ret == RATE_LIMIT_RET:
-                    if attempt < SEND_MAX_RETRIES:
+                    if attempt < max_retries:
                         delay = SEND_RETRY_DELAYS[attempt] if attempt < len(SEND_RETRY_DELAYS) else 12.0
-                        logger.warning("iLink rate limited, retry %d/%d in %.1fs", attempt + 1, SEND_MAX_RETRIES, delay)
+                        logger.warning("iLink rate limited, retry %d/%d in %.1fs", attempt + 1, max_retries, delay)
                         if progress_callback:
-                            progress_callback(attempt + 1, SEND_MAX_RETRIES, delay, f"请求超时，{delay:.0f}秒后第{attempt+1}次重试")
+                            progress_callback(attempt + 1, max_retries, delay, f"请求超时，{delay:.0f}秒后第{attempt+1}次重试")
                         time.sleep(delay)
                         continue
                     self._last_send_time = time.monotonic()
-                    return {"success": False, "error": f"rate-limited after {SEND_MAX_RETRIES} retries"}
+                    return {"success": False, "error": f"rate-limited after {max_retries} retries"}
 
                 # Other error
                 self._last_send_time = time.monotonic()
                 return {"success": False, "error": f"ret={ret} errcode={errcode} errmsg={errmsg}"}
 
             except Exception as e:
-                if attempt < SEND_MAX_RETRIES:
+                if attempt < max_retries:
                     delay = SEND_RETRY_DELAYS[attempt] if attempt < len(SEND_RETRY_DELAYS) else 12.0
-                    logger.warning("iLink send error, retry %d/%d in %.1fs: %s", attempt + 1, SEND_MAX_RETRIES, delay, e)
+                    logger.warning("iLink send error, retry %d/%d in %.1fs: %s", attempt + 1, max_retries, delay, e)
                     if progress_callback:
-                        progress_callback(attempt + 1, SEND_MAX_RETRIES, delay, str(e))
+                        progress_callback(attempt + 1, max_retries, delay, str(e))
                     time.sleep(delay)
                     continue
                 self._last_send_time = time.monotonic()
