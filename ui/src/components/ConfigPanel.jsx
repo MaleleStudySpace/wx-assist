@@ -1251,6 +1251,17 @@ function PushSection() {
               </button>
             </div>
 
+            {/* 推送异常提示 — 微信可能静默吞消息 */}
+            <div className="mt-3 p-3 rounded-xl bg-status-warn-soft/40 border border-status-warn/15">
+              <p className="text-[11px] text-text-muted leading-relaxed">
+                💡 如果收不到推送消息，可能是推送通道过期。请尝试：
+              </p>
+              <ul className="text-[11px] text-text-muted leading-relaxed mt-1 list-disc list-inside space-y-0.5">
+                <li>给 Bot 的微信私聊发送任意消息重新激活</li>
+                <li>或解除绑定后重新扫码绑定</li>
+              </ul>
+            </div>
+
             {/* 推送进度弹窗 — SSE 流式展示每次重试状态 */}
             {pushModalVisible && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" style={{ backdropFilter: 'blur(4px)' }}>
