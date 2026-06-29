@@ -28,7 +28,6 @@ class TestAssistantConfig(unittest.TestCase):
     def test_default_config(self):
         cfg = config_mod.load_assistant_config()
         self.assertFalse(cfg.assistant_enabled)
-        self.assertTrue(cfg.allow_wechat_send)
         self.assertEqual(cfg.version, 1)
         self.assertEqual(cfg.alert_groups, [])
         self.assertEqual(cfg.digest_groups, [])
@@ -84,7 +83,6 @@ class TestAssistantConfig(unittest.TestCase):
         d = config_mod._config_to_dict(cfg)
         cfg2 = config_mod._dict_to_config(d)
         self.assertEqual(cfg2.assistant_enabled, cfg.assistant_enabled)
-        self.assertEqual(cfg2.allow_wechat_send, cfg.allow_wechat_send)
 
     def test_corrupted_config_recovery(self):
         """Corrupted JSON should fall back to defaults."""

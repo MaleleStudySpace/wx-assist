@@ -289,7 +289,6 @@ export default function AssistantPanel() {
     return {
       version: 1,
       assistant_enabled: false,
-      allow_wechat_send: false,
       alert_groups: [],
       digest_groups: [],
       notification_queue: { enabled: true, retention_hours: 24 },
@@ -1117,13 +1116,18 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
 function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCronExprChange }) {
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [customTimeInput, setCustomTimeInput] = useState('')
+  // Override parsed freqMode when user explicitly clicks a mode button.
+  // Without this, clicking "自定义" with weekdays=[1-5] generates cron "1,2,3,4,5"
+  // which parseCronExpr immediately re-interprets as "工作日", hiding the weekday selector.
+  const [freqModeOverride, setFreqModeOverride] = useState(null)
 
   // 从 cron_expr 解析基础模式；无 cron 时从 schedule 推断
   const parsed = cronExpr
     ? parseCronExpr(cronExpr)
     : { freqMode: 'daily', times: schedule.length ? schedule : ['09:00'], weekdays: [1,2,3,4,5] }
 
-  const freqMode = parsed.freqMode
+  // Use explicit override if set; otherwise fall back to parsed result
+  const freqMode = freqModeOverride ?? parsed.freqMode
   const times = parsed.times
   const weekdays = parsed.weekdays
   const cronError = validateCronExpr(cronExpr)
@@ -1132,9 +1136,19 @@ function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCron
     const cron = buildCronExpr(newTimes, newFreq, newWeekdays)
     onScheduleChange(newTimes)
     onCronExprChange(cron)
+    // After syncing cron, clear override so parseCronExpr takes over for display.
+    // Exception: if newFreq is 'custom' and the weekdays happen to be 1-5,
+    // keep the override so the weekday selector stays visible.
+    const reparsed = parseCronExpr(cron)
+    if (newFreq === 'custom' && (reparsed.freqMode === 'weekday' || reparsed.freqMode === 'daily')) {
+      setFreqModeOverride('custom')
+    } else {
+      setFreqModeOverride(null)
+    }
   }
 
   function handleFreqChange(mode) {
+    setFreqModeOverride(mode)
     const wds = mode === 'weekday' ? [1,2,3,4,5] : mode === 'daily' ? [] : weekdays
     syncCron(times, mode, wds)
   }
@@ -1856,7 +1870,7 @@ function SearchableGroupSelect({ groups, value, onChange, placeholder, allowClea
     ? groups.filter(g => g.group_name.toLowerCase().includes(query.toLowerCase()))
     : groups
 
-  const displayText = open ? query : (selected ? `${selected.group_name}（${selected.member_count} 人）` : '')
+  const displayText = open ? query : (selected ? selected.group_name : '')
 
   return (
     <div ref={ref} className="relative">
@@ -1893,7 +1907,6 @@ function SearchableGroupSelect({ groups, value, onChange, placeholder, allowClea
                 onClick={() => { onChange(g.chat_id); setQuery(''); setOpen(false) }}
               >
                 <span className="truncate">{g.group_name}</span>
-                <span className="text-xs text-text-muted shrink-0">{g.member_count} 人</span>
               </button>
             ))
           )}
