@@ -4,14 +4,40 @@ import { Newspaper, MagnifyingGlass, Clock, Plus, Trash, Pencil, FileText, Play,
 import { Toggle, Input, API_BASE } from './SharedComponents'
 
 // ── Preset cron schedules for easy selection ──
+// Fixed rule: one trigger per line, minute/hour single int, day/month *, dow range/list/star
 const CRON_PRESETS = [
   { label: '每天 9:00', cron: '0 9 * * *' },
   { label: '每天 12:00', cron: '0 12 * * *' },
   { label: '每天 20:30', cron: '30 20 * * *' },
   { label: '工作日 9:00', cron: '0 9 * * 1-5' },
-  { label: '每天 9+20点', cron: '0 9,20 * * *' },
+  { label: '每天 9+20点', cron: '0 9 * * *\n0 20 * * *' },
   { label: '手动触发', cron: '' },
 ]
+
+/**
+ * Validate a cron expression against our fixed rule.
+ * Returns error message string if invalid, empty string if valid.
+ * (Same logic as AssistantPanel.jsx)
+ */
+function validateCronExpr(cronExpr) {
+  if (!cronExpr || !cronExpr.trim()) return ''
+  const lines = cronExpr.trim().split(/\n/).map(l => l.trim()).filter(Boolean)
+  for (let i = 0; i < lines.length; i++) {
+    const fields = lines[i].split(/\s+/)
+    if (fields.length !== 5) return `第${i+1}行：必须有5个字段（分 时 日 月 周），当前: ${lines[i]}`
+    const [min, hour, day, month, dow] = fields
+    const m = Number(min)
+    if (!Number.isInteger(m) || m < 0 || m > 59) return `第${i+1}行：分钟=${min} 必须是0-59的整数`
+    const h = Number(hour)
+    if (!Number.isInteger(h) || h < 0 || h > 23) return `第${i+1}行：小时=${hour} 必须是0-23的整数`
+    if (day !== '*') return `第${i+1}行：日=${day} 必须是 *`
+    if (month !== '*') return `第${i+1}行：月=${month} 必须是 *`
+    if (dow !== '*' && !/^(\d+(-\d+)?)(,\d+(-\d+)?)*$/.test(dow)) {
+      return `第${i+1}行：周=${dow} 格式错误，支持 * | 1-5 | 1,2,3,4,5`
+    }
+  }
+  return ''
+}
 
 // ── Digest templates with clear descriptions ──
 const TEMPLATES = [
@@ -426,11 +452,19 @@ function GroupEditor({ group, accounts, onSave, onCancel }) {
           </div>
           <div>
             <p className="text-xs text-text-muted mb-1">自定义 Cron（分钟 小时 日 月 周）</p>
-            <Input
+            <textarea
               value={cronExpr}
-              onChange={setCronExpr}
-              placeholder="30 20 * * *"
+              onChange={e => setCronExpr(e.target.value)}
+              placeholder={`0 9 * * 1-5\n30 12 * * 1-5`}
+              rows={3}
+              className={`w-full bg-bg-raised border rounded-lg px-3 py-2 text-sm text-text-main font-mono placeholder:text-text-muted/65 focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all resize-none ${
+                validateCronExpr(cronExpr) ? 'border-status-error' : 'border-border-main'
+              }`}
             />
+            {validateCronExpr(cronExpr) && (
+              <p className="text-xs text-status-error font-medium mt-1">{validateCronExpr(cronExpr)}</p>
+            )}
+            <p className="text-xs text-text-muted mt-1">多行格式，每行一个时间点。例：<code className="text-text-muted">0 9 * * 1-5</code> = 工作日9点</p>
           </div>
         </div>
 
@@ -601,7 +635,7 @@ function GroupEditor({ group, accounts, onSave, onCancel }) {
             push_target: pushTarget ? 'ilink' : '',
             accounts: selectedAccounts,
           })}
-          disabled={!name.trim() || selectedAccounts.length === 0 || (template === 'custom' && !customPrompt.trim())}
+          disabled={!name.trim() || selectedAccounts.length === 0 || !!validateCronExpr(cronExpr) || (template === 'custom' && !customPrompt.trim())}
           className="flex-1 py-2.5 rounded-full bg-brand-green-hover text-white text-sm font-semibold
             hover:bg-brand-green-hover transition-colors cursor-pointer
             disabled:opacity-40 disabled:cursor-not-allowed"
