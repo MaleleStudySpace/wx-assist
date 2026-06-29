@@ -45,6 +45,83 @@ MSG_STATE_FINISH = 2
 ITEM_TEXT = 1
 
 
+# ── Message splitting (ported from wechat-claude-code send.ts) ──────
+
+def _find_safe_split(text: str, max_len: int) -> int:
+    """Find a safe split point that won't break formatting.
+
+    Priority: newline > sentence punctuation > space > hard cut.
+    """
+    # Try newline first (preserves list items, paragraphs)
+    idx = text.rfind('\n', 0, max_len)
+    if idx >= max_len * 0.3:
+        return idx
+    # Try sentence-ending punctuation
+    for i in range(max_len, int(max_len * 0.5) - 1, -1):
+        if i <= len(text) and text[i - 1] in '。！？.!?\n':
+            return i
+    # Try space (won't split mid-word)
+    idx = text.rfind(' ', 0, max_len)
+    if idx >= max_len * 0.3:
+        return idx
+    # Hard cut
+    return max_len
+
+
+def _split_by_newline(text: str, max_len: int) -> list[str]:
+    """Split a single oversized block at safe boundaries."""
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_len:
+            chunks.append(remaining)
+            break
+        split = _find_safe_split(remaining, max_len)
+        chunks.append(remaining[:split])
+        remaining = remaining[split:].lstrip('\n')
+    return chunks
+
+
+def split_message(text: str, max_len: int = MAX_MSG_LEN) -> list[str]:
+    """Split long text into chunks at paragraph boundaries.
+
+    Ported from wechat-claude-code's splitMessage().
+    Splits at double-newlines to keep logical blocks intact,
+    falls back to single-newline splitting for oversized blocks.
+    """
+    if len(text) <= max_len:
+        return [text]
+
+    blocks = text.split('\n\n')
+    chunks = []
+    current = ''
+
+    for block in blocks:
+        block = block.strip()
+        if not block:
+            continue
+        if not current:
+            if len(block) <= max_len:
+                current = block
+            else:
+                # Single oversized block — split further
+                chunks.extend(_split_by_newline(block, max_len))
+        elif len(current) + 2 + len(block) <= max_len:
+            current += '\n\n' + block
+        else:
+            chunks.append(current)
+            if len(block) <= max_len:
+                current = block
+            else:
+                chunks.extend(_split_by_newline(block, max_len))
+                current = ''
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
 # ── Utilities ────────────────────────────────────────────────────────
 
 def _generate_uin() -> str:
@@ -263,8 +340,8 @@ class ILinkPush:
     def send_message(self, text: str, progress_callback=None) -> dict:
         """Send a text message to the bound WeChat user.
 
-        Args:
-            text: Message content (will be truncated to 4000 chars)
+        Auto-splits long messages into multiple chunks (≤4000 chars each)
+        at paragraph boundaries. Ported from wechat-claude-code's splitMessage.
 
         Returns:
             {"success": bool, "error": str|None}
@@ -275,7 +352,23 @@ class ILinkPush:
         if not text or not text.strip():
             return {"success": False, "error": "text is empty"}
 
-        text = _truncate(text.strip())
+        chunks = split_message(text.strip())
+        if len(chunks) > 1:
+            logger.info("iLink message split into %d chunks (total %d chars)", len(chunks), len(text))
+
+        for i, chunk in enumerate(chunks):
+            # Add progress prefix for multi-chunk messages
+            if len(chunks) > 1:
+                chunk = f"[{i + 1}/{len(chunks)}]\n{chunk}"
+
+            result = self._send_chunk(chunk, progress_callback)
+            if not result.get("success"):
+                return result
+
+        return {"success": True}
+
+    def _send_chunk(self, text: str, progress_callback=None) -> dict:
+        """Send a single text chunk with rate limiting and retry."""
 
         # Rate limiting: ensure MIN_SEND_INTERVAL_SEC between sends
         now = time.monotonic()
