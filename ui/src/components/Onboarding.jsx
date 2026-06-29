@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle, Spinner, Lock, Sun, Moon } from '@phosphor-icons/react'
-import { Step1Prepare, Step2WeChatConfig, Step3AIConfig, Step4Features } from './OnboardingSteps'
+import { Step1Prepare, Step3AIConfig, Step4Features } from './OnboardingSteps'
 
 const iconVariants = {
   hover: { y: -1.5, scale: 1.05, transition: { type: 'spring', stiffness: 300, damping: 15 } }
@@ -9,9 +9,8 @@ const iconVariants = {
 
 const STEPS = [
   { id: 1, label: '环境诊断与连接', desc: '诊断系统 & 获取/输入连接凭证' },
-  { id: 2, label: '微信配置', desc: '配置聊天范围' },
-  { id: 3, label: 'AI 后端', desc: '配置 AI 服务' },
-  { id: 4, label: '功能设置', desc: '选择功能开关' },
+  { id: 2, label: 'AI 后端', desc: '配置 AI 服务' },
+  { id: 3, label: '功能设置', desc: '选择功能开关' },
 ]
 
 const pageTransition = {
@@ -22,7 +21,7 @@ const pageTransition = {
 
 export default function Onboarding({ onComplete }) {
   const [activeStep, setActiveStep] = useState(1)
-  const [stepDone, setStepDone] = useState({ 1: false, 2: false, 3: false, 4: false })
+  const [stepDone, setStepDone] = useState({ 1: false, 2: false, 3: false })
 
   // Onboarding manages its local storage theme state as well
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark')
@@ -40,8 +39,6 @@ export default function Onboarding({ onComplete }) {
     // Step 1
     key: '', wxid: '', db_path: '',
     // Step 2
-    wechat_groups: '*',
-    // Step 3
     ai_provider_base_url: '', ai_provider_api_key: '', ai_provider_type: 'auto', ai_provider_model: '',
   })
 
@@ -51,7 +48,7 @@ export default function Onboarding({ onComplete }) {
 
   function markDone(step) {
     setStepDone(prev => ({ ...prev, [step]: true }))
-    if (step < 4) setActiveStep(step + 1)
+    if (step < 3) setActiveStep(step + 1)
   }
 
   return (
@@ -165,12 +162,9 @@ export default function Onboarding({ onComplete }) {
                 <Step1Prepare data={data} updateData={updateData} onDone={() => markDone(1)} />
               )}
               {activeStep === 2 && (
-                <Step2WeChatConfig data={data} updateData={updateData} onDone={() => markDone(2)} />
+                <Step3AIConfig data={data} updateData={updateData} onDone={() => markDone(2)} />
               )}
               {activeStep === 3 && (
-                <Step3AIConfig data={data} updateData={updateData} onDone={() => markDone(3)} />
-              )}
-              {activeStep === 4 && (
                 <Step4Features data={data} updateData={updateData} onComplete={onComplete} />
               )}
             </motion.div>
