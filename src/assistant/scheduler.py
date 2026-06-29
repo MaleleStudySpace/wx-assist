@@ -353,7 +353,7 @@ class DigestScheduler:
                 response=digest_text,
                 latency_ms=llm_latency,
                 extra={
-                    "group_id": dg.group_id,
+                    "group_id": chat_id,
                     "group_name": dg.group_name,
                     "chat_id": chat_id,
                     "msg_count": len(filtered),
@@ -375,7 +375,7 @@ class DigestScheduler:
                 response=f"[Error: {e}]",
                 latency_ms=llm_latency,
                 extra={
-                    "group_id": dg.group_id,
+                    "group_id": chat_id,
                     "group_name": dg.group_name,
                     "chat_id": chat_id,
                     "msg_count": len(filtered),
@@ -404,7 +404,7 @@ class DigestScheduler:
                 response=new_memory or "",
                 latency_ms=mem_latency,
                 extra={
-                    "group_id": dg.group_id,
+                    "group_id": dg.chat_id or dg.group_name,
                     "group_name": dg.group_name,
                     "existing_memory_len": len(dg.memory or ""),
                 },
@@ -424,7 +424,7 @@ class DigestScheduler:
                 response=f"[Error: {e}]",
                 latency_ms=mem_latency,
                 extra={
-                    "group_id": dg.group_id,
+                    "group_id": dg.chat_id or dg.group_name,
                     "group_name": dg.group_name,
                     "error": str(e),
                 },

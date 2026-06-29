@@ -1285,15 +1285,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     self.send_json({"ok": True, "groups": groups})
                     return
                 if groups_raw == "*" or not groups_raw:
-                    # All groups: use one GROUP BY query instead of N per-group COUNT queries.
-                    # 性能优化原因：群助手首屏不需要精确实时成员数；这里统计的是
-                    # messages.db 历史消息中的 sender_id 去重数，不调用 WCDB DLL，避免慢查询。
+                    # All groups: just get distinct chat_ids, no member count needed.
                     rows = conn.execute(
                         """
-                        SELECT chat_id, COUNT(DISTINCT sender_id) as cnt
+                        SELECT DISTINCT chat_id
                         FROM messages
                         WHERE chat_id LIKE '%@chatroom%'
-                        GROUP BY chat_id
                         ORDER BY chat_id
                         """
                     ).fetchall()
@@ -1302,21 +1299,19 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         groups.append({
                             "chat_id": chat_id,
                             "group_name": group_names.get(chat_id, chat_id),
-                            "member_count": row["cnt"] if row else 0,
                         })
                 else:
                     # Specific group names — match against known chat_ids
                     wanted = [g.strip() for g in groups_raw.split(",") if g.strip()]
-                    # Get all chatroom IDs from messages with member counts in one query
+                    # Get all chatroom IDs from messages in one query
                     all_chats = conn.execute(
                         """
-                        SELECT chat_id, COUNT(DISTINCT sender_id) as cnt
+                        SELECT DISTINCT chat_id
                         FROM messages
                         WHERE chat_id LIKE '%@chatroom%'
-                        GROUP BY chat_id
                         """
                     ).fetchall()
-                    all_ids = {r["chat_id"]: r["cnt"] for r in all_chats}
+                    all_ids = [r["chat_id"] for r in all_chats]
                     for name in wanted:
                         # Try exact match first, then substring
                         chat_id = name
@@ -1329,7 +1324,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         groups.append({
                             "chat_id": chat_id,
                             "group_name": display_name,
-                            "member_count": all_ids.get(chat_id, 0),
                         })
 
                 conn.close()
@@ -1833,8 +1827,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     # Merge: update fields from body
                     if "assistant_enabled" in body:
                         existing.assistant_enabled = bool(body["assistant_enabled"])
-                    if "allow_wechat_send" in body:
-                        existing.allow_wechat_send = bool(body["allow_wechat_send"])
                     if "alert_groups" in body:
                         existing.alert_groups = _dict_to_config({"alert_groups": body["alert_groups"]}).alert_groups
                     if "oa_monitor_groups" in body:

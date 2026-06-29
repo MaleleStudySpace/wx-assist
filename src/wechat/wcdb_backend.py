@@ -201,11 +201,6 @@ class WcdbBackend(AbstractWeChatBackend):
         if not content:
             return False
 
-        if not _is_wechat_send_allowed():
-            logger.info("WeChat send disabled by config — dropping message")
-            op_log("SEND", "发送被配置禁用, 已丢弃 chat_id=%s", chat_id[:20])
-            return False
-
         group_name = self._talker_to_name(chat_id)
         if not group_name:
             logger.error("Cannot resolve chat_id=%s to group name", chat_id)
@@ -550,22 +545,4 @@ class WcdbBackend(AbstractWeChatBackend):
         No confirmation polling — the window controller already retries
         on failure, and polling WCDB adds 3s of latency for marginal gain.
         """
-        if not _is_wechat_send_allowed():
-            logger.info("WeChat send disabled by config — dropping message to '%s'", group_name)
-            return False
         return self._window.send_to_chat(group_name, content)
-
-
-def _is_wechat_send_allowed() -> bool:
-    """Check if WeChat message sending is allowed by assistant config.
-
-    Reads from assistant_config.json.  Returns False by default —
-    only returns True when allow_wechat_send is explicitly set to true.
-    """
-    try:
-        from src.assistant.config import load_assistant_config
-        cfg = load_assistant_config()
-        return cfg.allow_wechat_send
-    except Exception:
-        # Config not available or broken → deny (safe default)
-        return False
