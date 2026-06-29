@@ -2,6 +2,9 @@
 .env
 .env.*
 
+# Project CLAUDE.md — local machine instructions, not for upload
+CLAUDE.md
+
 # Data — ALL runtime data (databases, configs, caches, exports)
 data/
 !data/.gitkeep
