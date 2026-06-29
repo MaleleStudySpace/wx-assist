@@ -551,7 +551,7 @@ export default function AssistantPanel() {
         </div>
       </div>
 
-      {/* ── Keyword Alerts ─────────────────────────────────────── */}
+      {/* ── Instant Alerts: Keyword + OA ────────────────────────── */}
       <section className="relative">
         {!assistantOn && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-bg-main/60 backdrop-blur-[2px] rounded-2xl">
@@ -563,13 +563,20 @@ export default function AssistantPanel() {
           </div>
         )}
         <SectionHeader
-          title="关键词即时提醒"
+          title="即时提醒"
           accent="#f59e0b"
           icon={Lightning}
-          subtitle="检测到关键词时即时提醒，可推送到微信"
+          subtitle="关键词匹配 + 公众号新文章 即时推送至微信"
         />
         <div className={`bg-bg-card rounded-2xl border border-border-main shadow-sm overflow-hidden transition-opacity duration-300 ${!assistantOn ? 'opacity-40' : ''}`}>
-          <div className="p-6 space-y-3">
+          <div className="p-6 space-y-4">
+
+            {/* ── Keywords Alert Sub-section ── */}
+            <div>
+              <p className="text-xs font-semibold text-text-muted mb-2 flex items-center gap-1.5">
+                <Lightning size={12} />
+                关键词提醒
+              </p>
             {/* 已有群列表 */}
             <AnimatePresence>
               {(config.alert_groups || []).map((ag, i) => (
@@ -716,6 +723,37 @@ export default function AssistantPanel() {
                 + 添加提醒群
               </button>
             )}
+            </div>
+
+            {/* ── OA Monitor Sub-section ── */}
+            <div className="border-t border-border-main pt-4">
+              <p className="text-xs font-semibold text-text-muted mb-2 flex items-center gap-1.5">
+                <Bell size={12} />
+                公众号即时
+              </p>
+              {config.oa_monitor_groups && config.oa_monitor_groups.length > 0 ? (
+                <div className="space-y-1.5">
+                  {config.oa_monitor_groups.map(mg => (
+                    <div key={mg.id} className="flex items-center justify-between px-3.5 py-2 rounded-lg bg-bg-raised/50 border border-border-main">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${mg.enabled !== false ? 'bg-amber-500' : 'bg-text-muted/30'}`} />
+                        <span className="text-sm text-text-main truncate">{mg.name || mg.id}</span>
+                        <span className="text-xs text-text-muted shrink-0">{(mg.accounts || []).length} 个公众号</span>
+                        {mg.push_target === 'ilink' && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand-green/10 text-brand-green font-medium">推送</span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-text-muted">
+                        {mg.enabled !== false ? '启用' : '禁用'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-text-muted py-2">暂无公众号关注</p>
+              )}
+              <p className="text-xs text-text-muted mt-1.5">公众号关注在「公众号助手」中管理</p>
+            </div>
           </div>
         </div>
       </section>
