@@ -1243,9 +1243,14 @@ function PushSection() {
             <div className="flex items-center gap-2.5">
               <button
                 onClick={handleTestPush}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-brand-green-hover text-white text-xs font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer"
+                disabled={pushModalVisible}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-white text-xs font-semibold transition-colors ${
+                  pushModalVisible
+                    ? 'bg-brand-green-hover/50 cursor-not-allowed'
+                    : 'bg-brand-green-hover hover:bg-[#0d8c5c] cursor-pointer'
+                }`}
               >
-                <TestTube size={14} /> 发送测试消息
+                <TestTube size={14} /> {pushModalVisible ? '推送中...' : '发送测试消息'}
               </button>
               <button
                 onClick={handleUnbind}
