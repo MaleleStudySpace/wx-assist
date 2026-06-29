@@ -417,7 +417,7 @@ function FeaturesSection({ form, update }) {
   )
 }
 
-const sectionTitles = { ai: 'AI 后端配置', identity: '机器人身份', data: '数据路径', features: '功能开关', push: '微信推送', sandbox: 'AI 调试台' }
+const sectionTitles = { ai: 'AI 后端配置', identity: '聊天范围', data: '数据路径', features: '功能开关', push: '微信推送', sandbox: 'AI 调试台' }
 const sectionAccents = { ai: 'var(--brand-green)', identity: 'var(--status-info)', data: 'var(--brand-green)', features: 'var(--status-warn)', push: 'var(--brand-green)', sandbox: 'var(--color-purple-500, #8b5cf6)' }
 
 // ── Data Path Section (微信数据目录配置) ──────────────────────────────
@@ -1606,7 +1606,6 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
     ai_provider_base_url: '', ai_provider_api_key: '',
     ai_provider_type: 'auto', ai_provider_model: '',
     wechat_backend: 'wcdb', wechat_groups: '*',
-    trigger_keywords: [],
     log_level: 'INFO', wechat_data_dir: '',
   })
 
@@ -1708,7 +1707,6 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
           ai_provider_extra_body: form.ai_provider_extra_body || '',
           wechat_backend: form.wechat_backend,
           wechat_groups: form.wechat_groups,
-          trigger_keywords: form.trigger_keywords,
           log_level: form.log_level,
           wechat_data_dir: form.wechat_data_dir,
         }),
