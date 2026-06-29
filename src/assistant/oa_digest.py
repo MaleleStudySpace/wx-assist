@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import time
+import concurrent.futures
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -86,6 +87,11 @@ DIGEST_TEMPLATES = {
         "2. 保留关键数据和引言"
     ),
 }
+
+# Max articles per chunk for map-reduce digest (OA 摘要分块阈值)
+# 每块 ≤ 8 篇，每篇 max_content_chars=8000 → 块 ≤ 64K chars ≈ 16K tokens
+# DeepSeek 1M context window, 每块占用不到 2%, 留大量余量给 LLM 输出
+CHUNK_SIZE = 8
 
 
 # ── Digest History (dedup) ────────────────────────────────────────────
@@ -363,10 +369,49 @@ class OADigestService:
             template_key = group.digest_template or "default"
             system_prompt = DIGEST_TEMPLATES.get(template_key, DIGEST_TEMPLATES["default"])
 
-        # Build digest prompt
-        articles_text = []
+        # Build digest prompt — decide direct vs map-reduce
+        if len(new_articles) <= CHUNK_SIZE:
+            # 文章数少，直接一次 LLM 调用
+            article_text = self._build_article_text(new_articles, max_content_chars, scrape_full)
+            full_prompt = f"请对以下 {len(new_articles)} 篇公众号文章进行摘要：\n\n" + article_text
+            logger.debug(
+                "[OA-DIGEST] Calling LLM: %d articles, prompt=%d chars, template=%s (direct)",
+                len(new_articles), len(full_prompt),
+                "custom_prompt" if group.custom_prompt else (group.digest_template or "default"),
+            )
+            digest_text = call_llm(full_prompt, system_prompt, summarizer=self._summarizer)
+        else:
+            # 文章数多，Map-Reduce 分块并行
+            logger.info(
+                "[OA-DIGEST] Map-Reduce: %d articles, chunk_size=%d",
+                len(new_articles), CHUNK_SIZE,
+            )
+            digest_text = self._map_reduce_digest(
+                new_articles, system_prompt, max_content_chars, scrape_full,
+            )
+
+        # Mark as digested
         for art in new_articles:
-            # Format publish time
+            self._history.mark_digested(art.url)
+
+        logger.debug(
+            "[OA-DIGEST] Digest generated for group '%s': %d chars, %d articles covered",
+            group.name, len(digest_text), len(new_articles),
+        )
+
+        return {
+            "success": True,
+            "group_id": group_id,
+            "articles_count": len(new_articles),
+            "digest_text": digest_text,
+            "errors": [],
+        }
+
+    @staticmethod
+    def _build_article_text(articles, max_content_chars: int, scrape_full: bool) -> str:
+        """Build prompt text for a list of articles (shared by direct + map-reduce paths)."""
+        articles_text = []
+        for art in articles:
             pub_time_str = ""
             ts = art.pub_time or art.timestamp
             if ts:
@@ -389,7 +434,6 @@ class OADigestService:
                             art.title[:30], len(content), art.url[:80],
                         )
                     else:
-                        # Fallback to digest
                         article_text += f"\n摘要: {art.digest}\n"
                         logger.warning(
                             "[OA-DIGEST] Article '%s': scraped empty (url=%s), using digest fallback",
@@ -399,7 +443,6 @@ class OADigestService:
                     logger.warning("[OA-DIGEST] Article '%s': scrape failed (%s, url=%s), using digest", art.title[:30], e, art.url[:80])
                     article_text += f"\n摘要: {art.digest}\n"
             else:
-                # Non-WeChat URL or no URL — use digest directly
                 logger.debug(
                     "[OA-DIGEST] Article '%s': using digest (url=%s)",
                     art.title[:30], (art.url or "none")[:80],
@@ -409,32 +452,55 @@ class OADigestService:
             article_text += f"\n链接: {art.url}\n"
             articles_text.append(article_text)
 
-        full_prompt = f"请对以下 {len(new_articles)} 篇公众号文章进行摘要：\n\n" + "\n---\n".join(articles_text)
+        return "\n---\n".join(articles_text)
 
-        # Call LLM
-        logger.debug(
-            "[OA-DIGEST] Calling LLM: %d articles, prompt=%d chars, template=%s",
-            len(new_articles), len(full_prompt),
-            "custom_prompt" if group.custom_prompt else (group.digest_template or "default"),
-        )
-        digest_text = call_llm(full_prompt, system_prompt, summarizer=self._summarizer)
-
-        # Mark as digested
-        for art in new_articles:
-            self._history.mark_digested(art.url)
-
-        logger.debug(
-            "[OA-DIGEST] Digest generated for group '%s': %d chars, %d articles covered",
-            group.name, len(digest_text), len(new_articles),
+    def _map_reduce_digest(self, articles, system_prompt, max_content_chars, scrape_full) -> str:
+        """Map-Reduce: split into chunks → parallel LLM → merge summaries."""
+        chunks = [articles[i:i + CHUNK_SIZE] for i in range(0, len(articles), CHUNK_SIZE)]
+        logger.info(
+            "[OA-DIGEST] Map-Reduce: %d articles split into %d chunks of max %d",
+            len(articles), len(chunks), CHUNK_SIZE,
         )
 
-        return {
-            "success": True,
-            "group_id": group_id,
-            "articles_count": len(new_articles),
-            "digest_text": digest_text,
-            "errors": [],
-        }
+        # Map phase — parallel LLM calls
+        chunk_summaries = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            future_to_idx = {}
+            for idx, chunk in enumerate(chunks):
+                chunk_prompt = f"请对以下 {len(chunk)} 篇公众号文章进行摘要：\n\n" + self._build_article_text(chunk, max_content_chars, scrape_full)
+                future = pool.submit(call_llm, chunk_prompt, system_prompt, self._summarizer)
+                future_to_idx[future] = idx
+
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    chunk_summaries[idx] = future.result()
+                    logger.debug("[OA-DIGEST] Map chunk %d/%d completed", idx + 1, len(chunks))
+                except Exception as e:
+                    logger.error("[OA-DIGEST] Map chunk %d failed: %s", idx, e)
+                    chunk_summaries[idx] = ""
+
+        # Restore chunk order (as_completed returns in any order)
+        ordered = [chunk_summaries.get(i, "") for i in range(len(chunks))]
+        ordered = [s for s in ordered if s and s.strip()]
+        if not ordered:
+            return "摘要生成失败"
+
+        # Reduce phase — merge
+        return self._merge_summaries(ordered, system_prompt)
+
+    @staticmethod
+    def _merge_summaries(summaries: list[str], system_prompt) -> str:
+        """Merge multiple sub-digests into one final digest."""
+        if len(summaries) == 1:
+            return summaries[0]
+
+        merge_prompt = (
+            "以下是对同一批公众号文章的多段摘要，请合并成一篇连贯的最终摘要"
+            "，消除重复信息、按主题整理：\n\n"
+            + "\n---\n".join(f"第{i+1}段:\n{s}" for i, s in enumerate(summaries))
+        )
+        return call_llm(merge_prompt, system_prompt)
 
     @staticmethod
     def _calc_effective_lookback(group) -> int:

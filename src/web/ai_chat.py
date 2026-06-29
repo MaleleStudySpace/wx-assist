@@ -1100,6 +1100,11 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
                 extra={"original_tokens": context_tokens, "error": str(e)},
             )
             logger.warning("[SNS_SUMMARIZE] Pre-compress failed: %s", e)
+            # Truncate context to budget * 0.5 worth of chars (same as AI chat)
+            max_chars = int(token_budget * 0.5 * 1.5)
+            context_text = context_text[:max_chars] + "\n...(内容过长，已截断)"
+            context_tokens = _estimate_tokens(context_text)
+            logger.info("[SNS_SUMMARIZE] Pre-compress fallback: truncated to %d chars", len(context_text))
 
     # Build system prompt + user message
     system_prompt = (
