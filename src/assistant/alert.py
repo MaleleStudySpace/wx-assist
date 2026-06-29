@@ -5,6 +5,7 @@ import time
 from typing import Optional
 
 from .config import AssistantConfig
+from .digest import _strip_ids
 from .outbox import Outbox
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,8 @@ class AlertEngine:
         chat_id = msg.get("chat_id", "")
         group_name = msg.get("group_name", "")
         content = msg.get("content", "")
+        # Strip raw wxid/gh_ identifiers before keyword matching and display
+        content = _strip_ids(content)
         sender_name = msg.get("sender_name", "")
         timestamp = msg.get("timestamp", 0)
 
@@ -110,9 +113,9 @@ class AlertEngine:
                     "keywords": matched,
                     "message": content,
                     "display": (
-                        f"👤 **{sender_name}**\n"
-                        f"💬 {content}\n"
-                        + "🏷️ " + " ".join(f"`{kw}`" for kw in matched)
+                        f"👤 **发送者:** {sender_name}\n"
+                        f"💬 **消息:** {content}\n"
+                        + "🏷️ **匹配关键词:** " + " ".join(f"`{kw}`" for kw in matched)
                     ),
                 }, ensure_ascii=False)
                 nid = self._outbox.add(

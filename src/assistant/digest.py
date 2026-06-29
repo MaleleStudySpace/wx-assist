@@ -1,6 +1,7 @@
 """Digest engine — generates timed group chat summaries with filtering and memory."""
 
 import logging
+import re
 import time
 from typing import Optional
 
@@ -53,6 +54,40 @@ STYLE_PRESETS = {
     "极简速览": "\n\n## 摘要风格\n极简输出，每条摘要不超过一句话，只保留最重要的3-5个要点。用 • 列表格式。",
 }
 
+# ── Media type to LLM-safe placeholder ────────────────────────────
+# WCDB 4.x stores raw XML/JSON in content for non-text messages.
+# Replace with structured placeholders so LLM knows context without
+# seeing binary/encoded payloads.  When multimodal support is added,
+# replace the placeholder with the actual decoded content.
+MEDIA_PLACEHOLDERS = {
+    3: "{{ image }}",
+    34: "{{ voice }}",
+    43: "{{ video }}",
+    47: "{{ sticker }}",
+    49: "{{ app_message }}",
+}
+MEDIA_RAW_TYPES = frozenset({3, 34, 43, 47, 49})
+
+
+def _strip_ids(text: str) -> str:
+    """Remove raw wxid/gh_ identifiers from message content.
+
+    The WCDB _standardize() function already handles @wxid_xxx → @昵称,
+    but standalone wxid_xxx (e.g. from contact cards, reference replies)
+    still appears in content.  These are pure noise for LLM and matching.
+    """
+    if not text:
+        return ""
+    # Standalone wxid_xxx (not @wxid_xxx which was already resolved)
+    text = re.sub(r'wxid_[a-zA-Z0-9]+', '', text)
+    # OA account IDs
+    text = re.sub(r'gh_[a-zA-Z0-9]+', '', text)
+    # Clean up artifacts from removal: "wxid_xxx: 你好" → " : 你好" → ": 你好"
+    text = re.sub(r'\s+:\s*', ': ', text)
+    text = re.sub(r':\s+:', ':', text)
+    text = re.sub(r'\s{2,}', ' ', text)
+    return text.strip()
+
 
 def filter_messages(messages: list[dict], ignore_keywords: Optional[list[str]] = None) -> list[dict]:
     """Filter low-value messages from a list.
@@ -62,6 +97,9 @@ def filter_messages(messages: list[dict], ignore_keywords: Optional[list[str]] =
     - Very short messages
     - Common meaningless replies
     - Messages matching ignore keywords
+
+    For non-text media messages (image/voice/video/sticker/app), replaces
+    raw XML/JSON content with a clean placeholder so LLM only sees context.
     """
     ignore_set = set(kw.lower() for kw in (ignore_keywords or []))
 
@@ -88,8 +126,11 @@ def filter_messages(messages: list[dict], ignore_keywords: Optional[list[str]] =
         if any(ik in content_lower for ik in ignore_set):
             continue
 
-        # Skip pure image/voice/video placeholders
-        if content in ("[图片]", "[语音]", "[视频]", "[表情]", "[文件]", "[链接]"):
+        # Non-text media: replace raw content with placeholder, keep message
+        msg_type = msg.get("msg_type", 1)
+        if msg_type in MEDIA_RAW_TYPES:
+            msg["content"] = MEDIA_PLACEHOLDERS.get(msg_type, "{{ media }}")
+            result.append(msg)
             continue
 
         result.append(msg)
@@ -123,11 +164,13 @@ def build_digest_prompt(group_cfg: DigestGroup, messages: list[dict]) -> str:
             profile_lines.append(f"忽略内容: {', '.join(profile.ignore)}")
     profile_text = "\n".join(profile_lines) if profile_lines else "（未配置群档案）"
 
-    # Format messages
+    # Format messages with wxid stripped + media placeholder
     msg_lines = []
     for m in messages:
         sender = m.get("sender_name", "?")
         content = m.get("content", "")
+        # Strip raw wxid/gh_ identifiers from message text
+        content = _strip_ids(content)
         ts = m.get("timestamp", 0)
         time_str = time.strftime("%H:%M", time.localtime(ts)) if ts else ""
         if content:
