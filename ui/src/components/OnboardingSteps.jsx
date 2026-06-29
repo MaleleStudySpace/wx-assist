@@ -16,6 +16,20 @@ export function Step1Prepare({ data, updateData, onDone }) {
   const [manualWxid, setManualWxid] = useState(data.wxid || '')
   const [manualDbPath, setManualDbPath] = useState(data.db_path || '')
 
+  // Save wechat config (formerly Step 2) before advancing to AI config
+  async function saveWechatConfig(wxid, dbPath) {
+    try {
+      await fetch(`${API}/api/onboarding/step2`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wechat_backend: 'wcdb',
+          wxid: wxid || '',
+          db_path: dbPath || '',
+        }),
+      })
+    } catch {}
+  }
+
   // Pre-flight diagnostics state
   const [diagnostics, setDiagnostics] = useState(null)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(true)
@@ -75,7 +89,7 @@ export function Step1Prepare({ data, updateData, onDone }) {
             updateData({ key: s.result.key, wxid: s.result.wxid, db_path: s.result.db_path })
             setPhase('done')
             setBusy(false)
-            onDone()
+            saveWechatConfig(s.result.wxid, s.result.db_path).then(onDone)
           } else if (s.phase === 'timeout' || s.phase === 'error') {
             clearInterval(poll)
             setPhase(s.phase === 'timeout' ? 'timeout' : 'error')
@@ -92,12 +106,14 @@ export function Step1Prepare({ data, updateData, onDone }) {
   }
 
   function handleManualSubmit() {
+    const wxid = manualWxid.trim()
+    const dbPath = manualDbPath.trim()
     updateData({
       key: manualKey.trim(),
-      wxid: manualWxid.trim(),
-      db_path: manualDbPath.trim()
+      wxid: wxid,
+      db_path: dbPath,
     })
-    onDone()
+    saveWechatConfig(wxid, dbPath).then(onDone)
   }
 
   function renderChecklist() {
@@ -424,7 +440,7 @@ export function Step1Prepare({ data, updateData, onDone }) {
 
 // ── Step 2: WeChat Config ────────────────────────────────────────────
 
-export function Step2WeChatConfig({ data, updateData, onDone }) {
+function Step2WeChatConfig({ data, updateData, onDone }) {
   const [busy, setBusy] = useState(false)
   const valid = true  // no required fields
 
