@@ -2048,8 +2048,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 # 只检查是否绑定了账号，不检查 _last_push_ok（那是发送时才关心的）
                 if not ilink._account:
                     _send_sse("error", {"error": "iLink 未绑定，请先扫码绑定"})
-                    # Still release lock before returning
-                    _ilink_test_push_lock.release()
                     return
 
                 def on_retry(attempt, max_retries, delay, error):
