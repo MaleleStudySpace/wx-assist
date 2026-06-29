@@ -274,14 +274,19 @@ export default function AssistantPanel() {
   }, [filters.chat_id, filters.type, filters.status])
 
   // Scroll to editor when adding new alert/digest
+  // Delay 200ms to let AnimatePresence animation complete before scroll
   useEffect(() => {
     if (showAlertEditor && alertEditorRef.current) {
-      alertEditorRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setTimeout(() => {
+        alertEditorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 200)
     }
   }, [showAlertEditor])
   useEffect(() => {
     if (showDigestEditor && digestEditorRef.current) {
-      digestEditorRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setTimeout(() => {
+        digestEditorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 200)
     }
   }, [showDigestEditor])
 
@@ -615,6 +620,19 @@ export default function AssistantPanel() {
                       const draft = alertDrafts[i]
                       if (!draft) return
                       const next = [...config.alert_groups]
+                      // If chat_id changed, check for conflict with another group → merge
+                      if (draft.chat_id && draft.chat_id !== config.alert_groups[i].chat_id) {
+                        const conflictIdx = next.findIndex((g, idx) => idx !== i && g.chat_id === draft.chat_id)
+                        if (conflictIdx >= 0) {
+                          const merged = [...new Set([...next[conflictIdx].keywords, ...(draft.keywords || [])])]
+                          next[conflictIdx] = { ...next[conflictIdx], keywords: merged }
+                          next.splice(i, 1)
+                          setConfig(prev => ({ ...prev, alert_groups: next }))
+                          scheduleAutoSave({ ...config, alert_groups: next }, true)
+                          setAlertDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
+                          return
+                        }
+                      }
                       next[i] = { ...next[i], ...draft }
                       setConfig(prev => ({ ...prev, alert_groups: next }))
                       scheduleAutoSave({ ...config, alert_groups: next }, true)
@@ -660,7 +678,22 @@ export default function AssistantPanel() {
                     onSave={() => {
                       if (!alertDraft.chat_id) { setEditorError('请先选择群聊'); return }
                       const selected = findGroup(alertDraft.chat_id)
-                      const next = [...(config.alert_groups || []), {
+                      const groups = config.alert_groups || []
+
+                      // Same chat_id → merge keywords (dedup), don't create new row
+                      const existing = groups.find(g => g.chat_id === alertDraft.chat_id)
+                      if (existing) {
+                        const merged = [...new Set([...existing.keywords, ...alertDraft.keywords])]
+                        const next = groups.map(g =>
+                          g.chat_id === alertDraft.chat_id ? { ...g, keywords: merged } : g
+                        )
+                        updateAndSaveNow('alert_groups', next)
+                        setShowAlertEditor(false)
+                        setEditorError('')
+                        return
+                      }
+
+                      const next = [...groups, {
                         ...alertDraft,
                         group_name: selected?.group_name || alertDraft.group_name || '',
                       }]
@@ -724,6 +757,7 @@ export default function AssistantPanel() {
                     profileExpanded={!!expandedProfiles[i]}
                     draft={digestDrafts[i] || null}
                     defaultSystemPrompt={config.default_system_prompt}
+                    stylePresets={config.style_presets || {}}
                     onToggleExpand={() => {
                       const nextExpanded = !expandedDigests[i]
                       setExpandedDigests(prev => ({ ...prev, [i]: nextExpanded }))
@@ -782,6 +816,16 @@ export default function AssistantPanel() {
                         setTimeout(() => setSaveError(''), 3000)
                         return
                       }
+                      // If chat_id changed, check conflict with another digest group
+                      if (draft.chat_id && draft.chat_id !== config.digest_groups[i].chat_id) {
+                        const conflict = (config.digest_groups || []).find((g, idx) => idx !== i && g.chat_id === draft.chat_id)
+                        if (conflict) {
+                          setSaveError(`"${conflict.group_name || conflict.chat_id}" 已存在定时摘要配置`)
+                          setSaveFlash('error')
+                          setTimeout(() => setSaveError(''), 3000)
+                          return
+                        }
+                      }
                       const next = [...config.digest_groups]
                       next[i] = { ...next[i], ...draft }
                       setConfig(prev => ({ ...prev, digest_groups: next }))
@@ -828,12 +872,19 @@ export default function AssistantPanel() {
                     groups={groups}
                     error={editorError}
                     defaultSystemPrompt={config.default_system_prompt}
+                    stylePresets={config.style_presets || {}}
                     onDraftChange={setDigestDraft}
                     onSave={() => {
                       if (!digestDraft.chat_id) { setEditorError('请先选择群聊'); return }
                       const cron_expr = digestDraft.cron_expr || '0 9 * * *'
                       const cronErr = validateCronExpr(cron_expr)
                       if (cronErr) { setEditorError(cronErr); return }
+                      // Check duplicate chat_id in digest_groups
+                      if ((config.digest_groups || []).some(g => g.chat_id === digestDraft.chat_id)) {
+                        const name = findGroup(digestDraft.chat_id)?.group_name || digestDraft.chat_id
+                        setEditorError(`"${name}" 已存在定时摘要配置`)
+                        return
+                      }
                       const selected = findGroup(digestDraft.chat_id)
                       const schedule = digestDraft.schedule?.length ? digestDraft.schedule : ['09:00']
                       const next = [...(config.digest_groups || []), {
@@ -1324,7 +1375,7 @@ function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCron
   )
 }
 
-function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onSave, onCancel, defaultSystemPrompt }) {
+function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onSave, onCancel, defaultSystemPrompt, stylePresets }) {
   const bodyRef = useRef(null)
   // Use draft if available (editing), otherwise use saved values
   const values = draft || dg
@@ -1523,6 +1574,12 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                               >{s.label}</button>
                             ))}
                           </div>
+                          {/** 非自定义风格 → 显示对应提示词预览（只读） */}
+                          {values.profile?.style && values.profile.style !== 'custom' && (
+                            <div className="mt-1.5 p-2 rounded-lg bg-bg-inset border border-border-main text-xs text-text-muted max-h-16 overflow-y-auto whitespace-pre-wrap">
+                              {stylePresets?.[values.profile.style] || defaultSystemPrompt || '（暂无说明）'}
+                            </div>
+                          )}
                         </div>
                         {/* 自定义摘要指令 — 仅选中自定义时显示 */}
                         {(values.profile?.style || '') === 'custom' && (
@@ -1623,7 +1680,7 @@ function AlertGroupEditor({ draft, groups, error, onDraftChange, onSave, onCance
   )
 }
 
-function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCancel, defaultSystemPrompt }) {
+function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCancel, defaultSystemPrompt, stylePresets }) {
   const [profileOpen, setProfileOpen] = useState(false)
   return (
     <div className="border border-brand-green/30 rounded-xl p-4 space-y-3 bg-brand-green/[0.02]">
@@ -1734,6 +1791,12 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
                       >{s.label}</button>
                     ))}
                   </div>
+                  {/** 非自定义风格 → 显示对应提示词预览（只读） */}
+                  {draft.profile?.style && draft.profile.style !== 'custom' && (
+                    <div className="mt-1.5 p-2 rounded-lg bg-bg-inset border border-border-main text-xs text-text-muted max-h-16 overflow-y-auto whitespace-pre-wrap">
+                      {stylePresets?.[draft.profile.style] || defaultSystemPrompt || '（暂无说明）'}
+                    </div>
+                  )}
                 </div>
                 {/* 自定义摘要指令 — 仅选中自定义时显示 */}
                 {(draft.profile?.style || '') === 'custom' && (
