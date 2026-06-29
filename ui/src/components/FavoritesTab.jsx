@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Star, DownloadSimple, MagnifyingGlass, Clock, File, Image, Video, Link, FileText, Funnel, ArrowsDownUp, FolderOpen, Play, Microphone, ChatsCircle, CaretDown, ChatCircleDots, Tag } from '@phosphor-icons/react'
+import { Star, DownloadSimple, MagnifyingGlass, Clock, File, Image, Video, Link, FileText, Funnel, ArrowsDownUp, FolderOpen, Play, Pause, Microphone, ChatsCircle, CaretDown, ChatCircleDots, Tag } from '@phosphor-icons/react'
 import { Toggle, SectionHeader, API_BASE } from './SharedComponents'
 import ChatDrawer from './ChatDrawer'
 import AIChatPanel from './AIChatPanel'
@@ -18,6 +18,108 @@ const FAV_TYPE_LABELS = {
   16: '位置',
   17: '联系人',
   33: '文章',
+}
+
+/* ── Voice Player (play/pause + progress bar + duration) ───────────── */
+function VoicePlayer({ audioId, src, initialDuration, showDownload, compact }) {
+  const audioRef = useRef(null)
+  const barRef = useRef(null)
+  const rafRef = useRef(null)
+  const [playing, setPlaying] = useState(false)
+  const [duration, setDuration] = useState(initialDuration || 0)
+  const [currentTime, setCurrentTime] = useState(0)
+
+  function startProgress() {
+    const audio = audioRef.current
+    if (!audio || !audio.duration) return
+    function update() {
+      if (audio.paused) return
+      const pct = (audio.currentTime / audio.duration) * 100
+      if (barRef.current) barRef.current.style.width = `${pct}%`
+      setCurrentTime(audio.currentTime)
+      rafRef.current = requestAnimationFrame(update)
+    }
+    rafRef.current = requestAnimationFrame(update)
+  }
+
+  function stopProgress(reset) {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    if (reset && barRef.current) barRef.current.style.width = '0%'
+    if (reset) setCurrentTime(0)
+  }
+
+  function toggle(e) {
+    e.stopPropagation()
+    const audio = audioRef.current
+    if (!audio) return
+    if (audio.paused) {
+      audio.play().catch(() => {})
+    } else {
+      audio.pause()
+    }
+  }
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    const onPlay = () => { setPlaying(true); startProgress() }
+    const onPause = () => { setPlaying(false); stopProgress(false) }
+    const onEnded = () => { setPlaying(false); stopProgress(true) }
+    const onMeta = () => { if (audio.duration && isFinite(audio.duration)) setDuration(audio.duration) }
+    audio.addEventListener('play', onPlay)
+    audio.addEventListener('pause', onPause)
+    audio.addEventListener('ended', onEnded)
+    audio.addEventListener('loadedmetadata', onMeta)
+    return () => {
+      audio.removeEventListener('play', onPlay)
+      audio.removeEventListener('pause', onPause)
+      audio.removeEventListener('ended', onEnded)
+      audio.removeEventListener('loadedmetadata', onMeta)
+      stopProgress(true)
+    }
+  }, [])
+
+  const durationSec = duration > 0 && isFinite(duration) ? Math.round(duration) : (initialDuration || 0)
+
+  return (
+    <div className={`inline-flex items-center gap-2 ${compact ? 'py-0.5' : ''}`}>
+      <button
+        onClick={toggle}
+        className={`flex items-center justify-center rounded-full transition-colors flex-shrink-0
+          ${compact ? 'w-6 h-6' : 'w-7 h-7'}
+          ${playing ? 'bg-brand-green text-white' : 'bg-brand-green/15 text-brand-green'}`}
+        title={playing ? '暂停' : '播放'}
+      >
+        {playing ? <Pause size={compact ? 10 : 12} weight="fill" /> : <Play size={compact ? 10 : 12} weight="fill" className="ml-0.5" />}
+      </button>
+
+      {/* Progress bar + time */}
+      <div className={`flex items-center gap-1.5 ${compact ? '' : 'flex-1 min-w-0'}`}>
+        <div className={`bg-bg-card rounded-full overflow-hidden flex-shrink-0 ${compact ? 'w-16 h-1' : 'flex-1 h-1.5 max-w-[120px]'}`}>
+          <div ref={barRef} className="h-full bg-brand-green rounded-full transition-none" style={{ width: '0%' }} />
+        </div>
+        {durationSec > 0 && (
+          <span className={`text-text-muted/60 font-mono ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
+            {durationSec}s
+          </span>
+        )}
+      </div>
+
+      {showDownload && (
+        <a
+          href={showDownload}
+          download
+          onClick={e => e.stopPropagation()}
+          className="p-1.5 rounded-lg bg-bg-raised border border-border-main hover:border-brand-green/40 text-text-muted hover:text-text-main transition-colors flex-shrink-0"
+          title="下载"
+        >
+          <DownloadSimple size={12} />
+        </a>
+      )}
+
+      <audio ref={audioRef} id={audioId} src={src} preload="metadata" style={{ display: 'none' }} />
+    </div>
+  )
 }
 
 function FavTypeIcon({ type }) {
@@ -140,20 +242,15 @@ function NestedChatCard({ record, itemId }) {
                       {/* Voice */}
                       {subType === 3 && (
                         <div className="mt-0.5">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const audio = document.getElementById(`nestedvoice-${itemId}-${si}`);
-                              if (audio) audio.paused ? audio.play() : audio.pause();
-                            }}
-                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-raised border border-border-main hover:border-brand-green/40 transition-colors group text-xs"
-                          >
-                            <Play size={10} weight="fill" className="text-brand-green ml-0.5" />
-                            <span className="text-text-muted">语音</span>
-                            {sub.duration && <span className="text-text-muted/60">{(sub.duration / 1000).toFixed(1)}s</span>}
-                          </button>
-                          {sub.dataid && (
-                            <audio id={`nestedvoice-${itemId}-${si}`} src={`${API_BASE}/api/fav/voice/record?fav_id=${itemId}&dataid=${sub.dataid}`} preload="metadata" style={{ display: 'none' }} />
+                          {sub.dataid ? (
+                            <VoicePlayer
+                              audioId={`nestedvoice-${itemId}-${si}`}
+                              src={`${API_BASE}/api/fav/voice/record?fav_id=${itemId}&dataid=${sub.dataid}`}
+                              initialDuration={sub.duration ? Math.round(sub.duration / 1000) : 0}
+                              compact
+                            />
+                          ) : (
+                            <span className="text-xs text-text-muted">[语音]</span>
                           )}
                         </div>
                       )}
@@ -272,34 +369,12 @@ function FavCard({ item }) {
           </div>
           {isVoice ? (
             <div className="flex items-center gap-2 mt-1">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const audio = document.getElementById(`voice-${item.id}`);
-                  if (audio) audio.paused ? audio.play() : audio.pause();
-                }}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-raised border border-border-main hover:border-brand-green/40 transition-colors group"
-              >
-                <div className={`w-7 h-7 rounded-full flex items-center justify-center ${voiceDuration > 0 ? 'bg-brand-green/15 text-brand-green' : 'bg-text-muted/10 text-text-muted'}`}>
-                  <Play size={12} weight="fill" className="ml-0.5" />
-                </div>
-                <div className="flex flex-col items-start">
-                  <span className="text-xs text-text-main font-medium">{voiceDuration > 0 ? `${voiceDuration}s` : '语音消息'}</span>
-                  <span className="text-[10px] text-text-muted/60">点击播放</span>
-                </div>
-              </button>
-              {expanded && (
-                <a
-                  href={`${API_BASE}/api/fav/voice/download?id=${item.id}&format=wav`}
-                  download
-                  onClick={(e) => e.stopPropagation()}
-                  className="p-2 rounded-lg bg-bg-raised border border-border-main hover:border-brand-green/40 text-text-muted hover:text-text-main transition-colors"
-                  title="下载"
-                >
-                  <DownloadSimple size={14} />
-                </a>
-              )}
-              <audio id={`voice-${item.id}`} src={`${API_BASE}/api/fav/voice?id=${item.id}`} preload="metadata" style={{ display: 'none' }} />
+              <VoicePlayer
+                audioId={`voice-${item.id}`}
+                src={`${API_BASE}/api/fav/voice?id=${item.id}`}
+                initialDuration={voiceDuration}
+                showDownload={expanded ? `${API_BASE}/api/fav/voice/download?id=${item.id}&format=wav` : ''}
+              />
             </div>
           ) : item.content && !isImage ? (
             <p className="text-xs text-text-muted truncate mt-0.5">
@@ -448,25 +523,16 @@ function FavCard({ item }) {
                       )}
                       {/* Voice message */}
                       {recordType === 3 && (
-                        <div className="mt-1 flex items-center gap-1.5 max-w-[50%]">
-                          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-card text-xs text-text-muted flex-1">
-                            <Microphone size={12} className="text-brand-green" />
-                            <span className="text-brand-green">语音消息</span>
-                            {record.duration && <span className="text-text-muted text-xs">{(record.duration / 1000).toFixed(1)}s</span>}
-                          </div>
-                          {record.dataid && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const audio = document.getElementById(`chatvoice-${item.id}-${idx}`);
-                                if (audio) audio.paused ? audio.play() : audio.pause();
-                              }}
-                              className="p-1 rounded bg-brand-green-light/30 hover:bg-brand-green-light/50 text-brand-green transition-colors"
-                              title="播放"
-                            >▶</button>
-                          )}
-                          {record.dataid && (
-                            <audio id={`chatvoice-${item.id}-${idx}`} src={`${API_BASE}/api/fav/voice/record?fav_id=${item.id}&dataid=${record.dataid}`} preload="metadata" style={{ display: 'none' }} />
+                        <div className="mt-1">
+                          {record.dataid ? (
+                            <VoicePlayer
+                              audioId={`chatvoice-${item.id}-${idx}`}
+                              src={`${API_BASE}/api/fav/voice/record?fav_id=${item.id}&dataid=${record.dataid}`}
+                              initialDuration={record.duration ? Math.round(record.duration / 1000) : 0}
+                              compact
+                            />
+                          ) : (
+                            <span className="text-xs text-text-muted">[语音]</span>
                           )}
                         </div>
                       )}
