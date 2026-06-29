@@ -1,193 +1,163 @@
-# 摘星 · wx-assist
+<div align="center"></div>
+<blockquote>
 
-> AI 驱动的个人消息助理 — 群聊摘要、关键词提醒、公众号追踪、收藏管理、朋友圈归档。
-> **100% 本地运行 · 零数据上传 · 开源可审**
+你在微信里丢了多少东西？
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-blue?style=flat-square&logo=windows" alt="Platform" />
-  <img src="https://img.shields.io/badge/python-3.13-green?style=flat-square&logo=python" alt="Python" />
-  <img src="https://img.shields.io/badge/AI-Claude%20%7C%20DeepSeek-purple?style=flat-square" alt="AI Backend" />
-  <img src="https://img.shields.io/badge/ui-React%20%2B%20Tailwind-cyan?style=flat-square&logo=react" alt="UI" />
-  <img src="https://img.shields.io/badge/license-MIT-yellow?style=flat-square" alt="License" />
-</p>
+不是丢在聊天列表里的消息——那些 99+，你从来也没打算一条一条看。
 
----
+而是那些**你本该看到，却没看到的**。
 
-## ✨ 功能一览
+群里有人问"今晚聚餐去哪吃"，你看到时已经散场了。
+收藏了 500 条内容，想找那条"上次推荐的理发店在哪"，翻了 20 分钟也翻不到。
+关注了一堆公众号，每天的推送翻都翻不完，越积越多——最后索性不看了。
 
-### 🧠 AI 群聊摘要
+微信不会提醒你，不会帮你整理，不会帮你导出。
+它只会让红点越来越多，让收藏越来越深，让重要消息越来越远。
 
-对群里说一句「总结一下」，立刻获得按话题分类、附关键人物和时间线的摘要。支持定时调度、仅摘要未读、大消息量自动分片。
+从海量消息里，摘出最值得关注的。
 
-### 💬 AI 对话
-
-在收藏、朋友圈、群聊中直接与 AI 对话。SSE 流式响应 + Token 压缩，上下文可达 200K 字符。
-
-### 📰 公众号助手
-
-- 自动追踪关注的公众号文章
-- 按分组管理（科技、财经、生活…）
-- 每组可配置独立 AI 摘要提示词
-- 定时生成摘要
-- 智能回溯：自动向前搜索直到找到已读文章
-
-### ⭐ 收藏助手
-
-- 浏览微信收藏内容（文本/图片/视频/语音/链接/笔记）
-- 高清媒体资源导出
-- 标签分类筛选
-- AI 对话：基于收藏内容提问
-
-### 👁 朋友圈助手
-
-- 浏览朋友圈时间线（文字/图片/视频/链接）
-- 高清媒体资源导出
-- 内容归档快照
-- 批量导出为 JSON + HTML + 本地化图片
-
-### 💬 会话管理
-
-- 按联系人/群聊分组浏览聊天记录
-- 全文搜索（消息内容/发送者）
-- 高清图片查看
-- 语音播放
-- 导出聊天记录为 HTML
-
-### 🤖 群聊助手
-
-- 定时摘要：支持每天/工作日/自定义星期 + Cron 高阶配置
-- 关键词提醒：自定义触发词即时通知
-- 群成员搜索 + 共同群聊 + 好友标记
+</blockquote>
 
 ---
 
-## 🚀 快速开始
+<div align="center">
 
-### 前置要求
+**关键词提醒 · AI 群摘要 · 公众号速读 · 收藏整理 · AI 对话 · 朋友圈归档 · 聊天导出**
 
-- Windows 10/11
-- Python 3.13+
-- 微信 4.x（Windows 桌面版）
-- Node.js 22+
+所有提醒和摘要，直达微信通知
 
-### 1. 安装依赖
+<br>
 
-```bash
-pip install -r requirements.txt
-```
+100% 本地运行 · 零数据上传 · 开源可审 · 无需注册
 
-### 2. 配置
-
-```bash
-cp .env.example .env
-# 编辑 .env，填写 AI API Key 等配置
-```
-
-### 3. 启动
-
-**桌面模式（推荐）**：
-
-```bash
-python desktop.py
-```
-
-**仅 Web UI**：
-
-```powershell
-$env:PYTHONPATH='.'
-python -c "from src.web.server import start_web_server; import time
-t = start_web_server()
-while True: time.sleep(1)"
-# 另一个终端：
-Invoke-WebRequest -Uri 'http://127.0.0.1:17327/api/start' -Method POST
-```
-
-浏览器打开 `http://127.0.0.1:17327`，按引导完成首次设置。
-
-### 4. 打包 EXE
-
-```bash
-cd ui && npm install && npm run build && cd ..
-pyinstaller build.spec
-# 输出: dist/wx-assist.exe
-```
+</div>
 
 ---
 
-## ⚙️ 配置
+## 关键词即时提醒
 
-主要配置项通过 `.env` 文件管理：
+你设好关键词。群里一出现，微信直接收到通知。
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `AI_BACKEND` | AI 后端：`deepseek` 或 `claude` | `deepseek` |
-| `DEEPSEEK_API_KEY` | DeepSeek API Key | — |
-| `POLL_INTERVAL_SEC` | 消息轮询间隔（秒） | `1.0` |
-| `DEDUP_WINDOW_SEC` | 同群去重窗口（秒） | `60` |
+不是弹窗，不是邮件，不是浏览器提醒——就是微信消息本身。
 
-完整配置项见 [.env.example](.env.example)。
+> 群里说"紧急 BUG"，你 3 小时后才知道？现在不用了。
 
----
+- 预设关键词：紧急、BUG、线上问题……随你定
+- 命中即推送，直达微信
 
-## 🔒 安全设计
-
-- **数据纯本地**：所有消息数据仅在本机处理，不上传任何服务器
-- **API Key 本地存储**：AI API Key 仅保存在本地 `.env` 文件中
-- **PII 脱敏**：联网搜索前自动剥离手机号/身份证号/邮箱
-- **原子写入**：配置文件使用 `os.replace` 防止崩溃时损坏
+<!-- 📷 此处插入：关键词提醒 → 微信通知 效果截图 -->
 
 ---
 
-## 📁 项目结构
+## 群聊 AI 摘要
 
-```
-src/
-├── bot.py                  # Bot 主控
-├── config.py               # 配置加载
-├── router.py               # 消息路由
-├── summarize/              # AI 后端
-├── wechat/                 # 数据后端
-├── assistant/              # 群聊助手
-│   ├── config.py           # 助手配置管理
-│   ├── digest.py           # 摘要生成
-│   ├── alert.py            # 关键词提醒
-│   ├── outbox.py           # 通知队列
-│   └── scheduler.py        # 调度器
-├── web/                    # Web UI 服务器
-│   ├── server.py           # HTTP + WebSocket
-│   ├── api_handlers.py     # API 处理
-│   └── ai_chat.py          # AI 对话
-├── memory/                 # 聊天记忆
-├── proactive/              # 主动发言
-├── scheduler/              # 调度引擎
-├── guard/                  # 内容检测
-├── trigger/                # 触发词检测
-├── db/                     # 本地数据库
-└── utils/                  # 工具函数
-ui/                         # React 前端
-lib/                        # 依赖模块
-desktop.py                  # 桌面入口
-desktop_mac.py              # macOS 桌面入口
-build.spec                  # 打包配置
-```
+每到固定时间，AI 帮你生成一份群简报。
+
+谁做了什么决定、有什么待办、哪些问题还没解决——一目了然。
+
+> 不是让你一条一条看完 300 条消息，而是让你知道 300 条消息里最值得关注的 5 件事。
+
+- 按话题分类，重点标注决定和行动项
+- 支持群档案（群用途、关注点），摘要更精准
+- 可一键推送微信
+
+<!-- 📷 此处插入：群摘要预览截图 -->
 
 ---
 
-## 🧑‍💻 开发
+## 收藏整理
 
-```bash
-# 前端开发
-cd ui && npm install && npm run dev
+微信收藏就是你的知识库——但微信不让你管理它。
 
-# 后端开发
-$env:PYTHONPATH='.'
-python -c "from src.web.server import start_web_server; import time
-t = start_web_server()
-while True: time.sleep(1)"
-```
+500 条内容躺在那里，没有标签，没有搜索，没有导出。和你丢掉有什么区别？
+
+摘星帮你找回你的收藏：
+
+- 标签筛选 + 全文搜索
+- 按类型分类：文字、图片、链接、语音、聊天记录
+- AI 对话：问一句"关于项目排期的收藏有哪些"，直接给你答案
+- 一键导出——收藏的内容，导出来才是自己的
+
+<!-- 📷 此处插入：收藏助手界面截图 -->
 
 ---
 
-## 📄 License
+## 公众号 AI 速读
 
-[MIT](LICENSE)
+订阅了几十个公众号，每天的推送永远看不完。
+
+摘星让 AI 帮你读——每篇几句话，重点标注。按分组汇总，定时推送。
+
+> 让公众号从"焦虑源"变成"知识库"。
+
+- 定时生成，推送微信
+- 多种摘要模板：科技详报、娱乐简报、商业要点……
+- 智能回溯，不漏重要文章
+
+<!-- 📷 此处插入：公众号摘要截图 -->
+
+---
+
+## 朋友圈归档 & AI 回顾
+
+朋友圈的内容随时间沉底，翻不回去。
+
+一键导出为完整 HTML 页面——图片、视频、文字，全部保留。也可以像聊天一样问 AI"最近谁在找工作""谁发了旅行照片"，不用一条一条翻。
+
+<!-- 📷 此处插入：朋友圈归档效果截图 -->
+
+---
+
+## AI 对话
+
+问它"上周群里讨论了这个项目的哪些风险"，它能回答。
+
+基于真实数据，不是编造。SSE 流式输出，实时可见。
+
+<!-- 📷 此处插入：AI 对话界面截图 -->
+
+---
+
+## 聊天导出
+
+文字、图片、语音、视频——一键打包为精美的离线 HTML 档案。换手机？备份聊天记录？导出来，才是真正属于你的。
+
+<!-- 📷 此处插入：导出效果截图 -->
+
+---
+
+从海量消息里，摘出最值得关注的。
+
+---
+
+### 技术说明
+
+纯本地运行，数据不出本机。不操控微信窗口，不接入 Web API。
+
+详细架构、配置指南见 [doc/](doc/) 目录。
+
+技术栈：Python 3.13 · React 19 · Tailwind 4 · PyInstaller
+
+---
+
+### 致谢
+
+本项目基于 [cancelGuMu/webot](https://github.com/cancelGuMu/webot) 进行全面重构与扩展。感谢原作者的开源贡献。
+
+---
+
+### 免责声明
+
+1. 本项目纯本地运行，聊天数据不会离开本机。请自行做好数据备份。
+2. 仅供个人学习与本地使用。使用者应遵守相关法律法规及微信用户协议。
+3. 按"现状"提供，不提供任何明示或暗示的保证。
+4. AI 功能依赖第三方 API 服务（如 DeepSeek / Claude），请遵守对应服务商协议。
+5. 微信为腾讯公司注册商标。本项目与腾讯公司无关。
+
+---
+
+<div align="center">
+
+[doc/](doc/) · 用 ❤️ 和 ☕ 打造
+
+</div>
