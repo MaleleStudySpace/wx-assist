@@ -41,7 +41,7 @@ export default function App() {
   const [configSection, setConfigSection] = useState('ai')
   const [botStatus, setBotStatus] = useState(null)
   const [onboardingDone, setOnboardingDone] = useState(null) // null = loading
-  const [guideDone, setGuideDone] = useState(() => localStorage.getItem('wx-assist-guided') === '1')
+  const [showGuide, setShowGuide] = useState(false) // FeatureGuide only shows right after onboarding
   const [wsConnected, setWsConnected] = useState(false)
 
   // Theme state: default to 'dark' (Version 1: 夜航控制台) but can toggle to 'light' (正常模式)
@@ -143,7 +143,7 @@ export default function App() {
 
   // Onboarding
   if (!onboardingDone) {
-    return <Onboarding onComplete={() => setOnboardingDone(true)} />
+    return <Onboarding onComplete={() => { setShowGuide(true); setOnboardingDone(true) }} />
   }
 
   return (
@@ -249,11 +249,11 @@ export default function App() {
 
       {/* Main content */}
       <div className="ml-56">
-        {!guideDone ? (
-          /* Feature Guide takes over main content area */
+        {showGuide ? (
+          /* Feature Guide — only shown once immediately after onboarding completes */
           <FeatureGuide
             onTabChange={(tabId) => setActiveTab(tabId)}
-            onComplete={() => setGuideDone(true)}
+            onComplete={() => setShowGuide(false)}
             restrictedEnabled={!!status.restricted_features_enabled}
           />
         ) : (
