@@ -1621,23 +1621,61 @@ def handle_chat_sessions(params, config: AssistantConfig):
             s["unread_count"] = int(s.get("unread_count", 0) or 0)
             s["nTime"] = int(s.get("nTime", s.get("last_timestamp", 0) or 0))
 
-        # Resolve folded/muted state for ALL contacts from contact.extra_buffer.
-        # WeChat can fold individual chats too, not just groups.
+        # Resolve folded state from Contact.flag.
+        # WeChat 4.x stores fold state per-contact in the flag column:
+        #   Chatrooms: bit 28 (0x10000000) set → folded
+        #   Individuals (wxid_*): bit 9 (0x200) set → folded
+        # The DLL's get_contact_status only checks bit 28 (chatrooms),
+        # so we query Contact.flag directly for all contacts.
         all_ids = [s.get("username", "") for s in sessions]
         if all_ids:
             try:
                 t4 = time.monotonic()
-                status_map = client.get_contact_status(all_ids)
-                logger.info("[API-TRACE] /api/chat/sessions: get_contact_status took %.0fms",
-                            (time.monotonic() - t4) * 1000)
-                for s in sessions:
-                    uname = s.get("username", "")
-                    if uname in status_map:
-                        state = status_map.get(uname) or {}
-                        s["isFolded"] = bool(state.get("isFolded"))
-                        s["isMuted"] = bool(state.get("isMuted"))
+                account_dir = getattr(client, 'account_dir', '')
+                contact_db = os.path.join(account_dir, 'db_storage', 'contact', 'contact.db')
+                if not account_dir or not os.path.exists(contact_db):
+                    logger.warning("[FOLD-DBG] Contact DB not found: account_dir=%r contact_db=%s "
+                                   "exists=%s — skip fold detection",
+                                   account_dir, contact_db, os.path.exists(contact_db))
+                    for s in sessions:
+                        s["isFolded"] = False
+                        s["isMuted"] = False
+                else:
+                    # Batch query: 200 usernames per batch to stay under DLL JSON size limit (~500KB)
+                    batch_size = 200
+                    flag_map = {}
+                    for i in range(0, len(all_ids), batch_size):
+                        batch = all_ids[i:i + batch_size]
+                        quoted = [f"'{u}'" for u in batch]
+                        sql = f"SELECT username, flag FROM Contact WHERE username IN ({','.join(quoted)})"
+                        rows = client.exec_query(kind='contact', db_path=contact_db, sql=sql)
+                        if rows:
+                            for r in rows:
+                                uname = r.get("username", "")
+                                flag_val = int(r.get("flag", 0) or 0)
+                                if uname:
+                                    flag_map[uname] = flag_val
+
+                    for s in sessions:
+                        uname = s.get("username", "")
+                        flag_val = flag_map.get(uname, 0)
+                        if '@chatroom' in uname or uname.startswith('@') or uname.startswith('gh_'):
+                            s["isFolded"] = bool(flag_val & 0x10000000)
+                        elif uname.startswith('wxid_') or uname.startswith('qq'):
+                            s["isFolded"] = bool(flag_val & 0x200)
+                        else:
+                            s["isFolded"] = False
+                        s["isMuted"] = False
+                    logger.info("[API-TRACE] /api/chat/sessions: fold status from Contact.flag "
+                                "took %.0fms (%d contacts, %d folded)",
+                                (time.monotonic() - t4) * 1000,
+                                len(flag_map),
+                                sum(1 for s in sessions if s.get("isFolded")))
             except Exception as e:
-                logger.warning("Failed to load contact status: %s", e)
+                logger.warning("[FOLD-DBG] Failed to query Contact.flag for fold status: %s "
+                               "(account_dir=%r, contact_db=%s)",
+                               e, getattr(client, 'account_dir', 'N/A'),
+                               os.path.join(getattr(client, 'account_dir', ''), 'db_storage', 'contact', 'contact.db'))
 
         # Classify sessions into groups:
         # 1. Normal sessions (individuals, group chats)
