@@ -45,6 +45,22 @@ export default function SnsAiDrawer({ open, onClose, contacts = [] }) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [summaryText, chatMessages])
 
+  // Reopen → restore previous conversation
+  const prevOpen = useRef(open)
+  useEffect(() => {
+    if (open && !prevOpen.current) {
+      // Drawer just reopened — restore previous chat or summary
+      if (chatSession) {
+        setMode('chat')
+        // Focus input when returning to chat
+        setTimeout(() => inputRef.current?.focus(), 100)
+      } else if (summaryText) {
+        setMode('summary')
+      }
+    }
+    prevOpen.current = open
+  }, [open, chatSession, summaryText])
+
   // Reset on close
   const handleClose = () => {
     if (abortRef.current) abortRef.current.abort()
