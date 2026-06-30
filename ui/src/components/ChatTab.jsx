@@ -397,7 +397,7 @@ function SessionItem({ session, isActive, onSelect }) {
   const unread = session.unread_count || 0
 
   // Different icons/colors for fold types
-  const foldLabel = foldType === 'oa' ? '公众号' : '折叠的群聊'
+  const foldLabel = foldType === 'oa' ? '公众号' : '折叠的聊天'
   const foldIcon = foldType === 'oa' ? <FileText size={18} /> : <Chats size={18} />
 
   return (
@@ -880,7 +880,7 @@ export default function ChatTab() {
                   <X size={14} />
                 </button>
                 <span className="text-xs font-medium text-text-main">
-                  {foldedViewType === 'oa' ? '公众号' : '折叠的群聊'}
+                  {foldedViewType === 'oa' ? '公众号' : '折叠的聊天'}
                 </span>
                 <span className="text-xs text-text-muted ml-auto">
                   {foldedViewSessions.length} 个
@@ -965,7 +965,7 @@ export default function ChatTab() {
             ) : foldedView ? (
               foldedViewSessions.length === 0 ? (
                 <div className="text-center py-12 text-text-muted text-xs">
-                  <p>暂无{foldedViewType === 'oa' ? '公众号' : '折叠的群聊'}</p>
+                  <p>暂无{foldedViewType === 'oa' ? '公众号' : '折叠的聊天'}</p>
                 </div>
               ) : (
                 foldedViewSessions.map(s => (

@@ -1532,14 +1532,13 @@ def handle_chat_sessions(params, config: AssistantConfig):
             s["unread_count"] = int(s.get("unread_count", 0) or 0)
             s["nTime"] = int(s.get("nTime", s.get("last_timestamp", 0) or 0))
 
-        # Resolve folded/muted state for group chats from contact.extra_buffer.
-        # This is how WeChat marks groups folded into "折叠的群聊".
-        chatroom_ids = [s.get("username", "") for s in sessions
-                        if s.get("username", "").endswith("@chatroom")]
-        if chatroom_ids:
+        # Resolve folded/muted state for ALL contacts from contact.extra_buffer.
+        # WeChat can fold individual chats too, not just groups.
+        all_ids = [s.get("username", "") for s in sessions]
+        if all_ids:
             try:
                 t4 = time.monotonic()
-                status_map = client.get_contact_status(chatroom_ids)
+                status_map = client.get_contact_status(all_ids)
                 logger.info("[API-TRACE] /api/chat/sessions: get_contact_status took %.0fms",
                             (time.monotonic() - t4) * 1000)
                 for s in sessions:
@@ -1555,7 +1554,7 @@ def handle_chat_sessions(params, config: AssistantConfig):
         # 1. Normal sessions (individuals, group chats)
         # 2. Public accounts (gh_*) — should be folded into "公众号"
         #    Service accounts (服务号, verify_flag & 16) go to normal_sessions
-        # 3. Folded group chats — @placeholder_foldgroup
+        # 3. Folded chats (individual or group) — @placeholder_foldgroup
         # 4. Service accounts (服务号) — 微信支付, 信用卡还款 etc.
         #    These are gh_* but NOT content publishers, keep in normal list.
         service_gh_ids = _detect_service_accounts(client, sessions)
@@ -1580,8 +1579,8 @@ def handle_chat_sessions(params, config: AssistantConfig):
                 else:
                     # 真正的公众号/订阅号
                     oa_sessions.append(s)
-            elif uname.endswith("@chatroom") and s.get("isFolded"):
-                # 被微信折叠的群聊 → 不在主列表显示，点击折叠入口后展示
+            elif s.get("isFolded"):
+                # 被微信折叠的聊天（个人或群聊）→ 不在主列表显示，点击折叠入口后展示
                 folded_sessions.append(s)
             else:
                 normal_sessions.append(s)
@@ -1611,18 +1610,18 @@ def handle_chat_sessions(params, config: AssistantConfig):
             latest_display = latest_folded.get("displayName", "") or latest_folded.get("username", "")
             folded_entry = {
                 "username": "@placeholder_foldgroup",
-                "displayName": "折叠的群聊",
+                "displayName": "折叠的聊天",
                 "nTime": latest_folded.get("nTime", 0),
                 "unread_count": sum(s.get("unread_count", 0) for s in folded_sessions),
                 "avatarUrl": "",
                 "isFoldGroup": True,
                 "foldType": "foldgroup",
-                "summary": f"{latest_display}: ..." if latest_display else f"{len(folded_sessions)} 个群聊",
+                "summary": f"{latest_display}: ..." if latest_display else f"{len(folded_sessions)} 个聊天",
             }
         elif fold_placeholder:
             folded_entry = {
                 "username": "@placeholder_foldgroup",
-                "displayName": "折叠的群聊",
+                "displayName": "折叠的聊天",
                 "nTime": fold_placeholder.get("nTime", 0),
                 "unread_count": fold_placeholder.get("unread_count", 0),
                 "avatarUrl": "",
