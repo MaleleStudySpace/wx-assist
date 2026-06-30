@@ -1776,20 +1776,29 @@ class _UIHandler(SimpleHTTPRequestHandler):
             body = self.rfile.read(content_len) if content_len else b"{}"
             try:
                 data = json.loads(body)
+                env_path = _find_or_create_env()
                 with _onboarding_lock:
                     _onboarding_data["step2_done"] = True
                     _onboarding_data["wechat_backend"] = data.get("wechat_backend", "wcdb")
-                    if data.get("wxid"):
-                        _onboarding_data["wxid"] = data["wxid"]
-                    if data.get("db_path"):
-                        _onboarding_data["db_path"] = data["db_path"]
-                    # Save key to .env immediately so bot can start after onboarding
+                    # Save wxid/db_path/key to .env immediately
+                    wxid = data.get("wxid", "").strip()
+                    db_path = data.get("db_path", "").strip()
                     key = data.get("key", "").strip()
+                    if wxid:
+                        _onboarding_data["wxid"] = wxid
+                        _set_env_key(env_path, "WXID", wxid)
+                    if db_path:
+                        _onboarding_data["db_path"] = db_path
+                        _set_env_key(env_path, "DB_PATH", db_path)
                     if key:
                         _onboarding_data["key"] = key
-                        env_path = _find_or_create_env()
                         _set_env_key(env_path, "WCDB_KEY", key)
-                        import os as _os
+                    import os as _os
+                    if wxid:
+                        _os.environ["WXID"] = wxid
+                    if db_path:
+                        _os.environ["DB_PATH"] = db_path
+                    if key:
                         _os.environ["WCDB_KEY"] = key
                 self.send_json({"ok": True})
             except Exception as e:
