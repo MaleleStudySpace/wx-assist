@@ -178,7 +178,32 @@ def _find_wxid_and_dbpath(custom_base_dir: str = ""):
 
     If custom_base_dir is provided, scans that directory first.
     Otherwise falls back to Documents\\xwechat_files\\ and Documents\\WeChat Files\\.
+
+    Supports WXID/DB_PATH env overrides — when DB_PATH points to a valid file,
+    derives the base directory by walking up to the wxid_* parent.
     """
+    # 0. Env override (highest priority) — from config page modifications
+    import os as _os
+    env_wxid = _os.environ.get("WXID", "").strip()
+    env_db_path = _os.environ.get("DB_PATH", "").strip()
+    if env_wxid and env_db_path:
+        p = Path(env_db_path)
+        if p.exists():
+            # If it's a file, walk up to find wxid_* parent → its parent is base
+            if p.is_file():
+                parent = p.parent
+                while parent.parent != parent:
+                    if parent.name.startswith("wxid_"):
+                        base = str(parent.parent)
+                        logger.info("Env override (file→dir): wxid=%s base=%s", env_wxid, base)
+                        # Return wxid from env (may differ from dir name)
+                        return env_wxid, base
+                    parent = parent.parent
+            # If it's a directory, use directly
+            elif p.is_dir():
+                logger.info("Env override (dir): wxid=%s base=%s", env_wxid, env_db_path)
+                return env_wxid, env_db_path
+
     # Collect candidate base directories to scan
     candidates: list[Path] = []
 

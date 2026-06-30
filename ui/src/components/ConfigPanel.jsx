@@ -417,8 +417,237 @@ function FeaturesSection({ form, update }) {
   )
 }
 
-const sectionTitles = { ai: 'AI 后端配置', identity: '聊天范围', data: '数据路径', features: '功能开关', push: '微信推送', sandbox: 'AI 调试台' }
+const sectionTitles = { ai: 'AI 后端配置', identity: '聊天范围', data: '数据配置', features: '功能开关', push: '微信推送', sandbox: 'AI 调试台' }
 const sectionAccents = { ai: 'var(--brand-green)', identity: 'var(--status-info)', data: 'var(--brand-green)', features: 'var(--status-warn)', push: 'var(--brand-green)', sandbox: 'var(--color-purple-500, #8b5cf6)' }
+
+// ── Credentials Section (连接凭证配置) ─────────────────────────────────
+
+function CredentialsSection({ form, update }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState({ wxid: '', db_path: '', wcdb_key: '' })
+  const [keyVisible, setKeyVisible] = useState(false)
+  const [testResult, setTestResult] = useState(null)
+  const [testLoading, setTestLoading] = useState(false)
+
+  function startEdit() {
+    setDraft({ wxid: form.wxid || '', db_path: form.db_path || '', wcdb_key: '' })
+    setEditing(true)
+    setTestResult(null)
+  }
+
+  function cancelEdit() {
+    setEditing(false)
+    setDraft({ wxid: '', db_path: '', wcdb_key: '' })
+    setTestResult(null)
+  }
+
+  function saveEdit() {
+    update('wxid', draft.wxid)
+    update('db_path', draft.db_path)
+    if (draft.wcdb_key) {
+      update('wcdb_key', draft.wcdb_key)
+    }
+    setEditing(false)
+    setTestResult(null)
+  }
+
+  // Format validation for test connection
+  const keyFormatOk = !draft.wcdb_key || (draft.wcdb_key.length === 64 && /^[0-9a-fA-F]+$/.test(draft.wcdb_key))
+  const wxidFormatOk = !draft.wxid || draft.wxid.startsWith('wxid_')
+  const dbPathFormatOk = !draft.db_path || draft.db_path.length > 0
+
+  async function testConnection() {
+    setTestLoading(true)
+    setTestResult(null)
+    try {
+      const res = await fetch(`${API_BASE}/api/config/test-connection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: draft.wcdb_key || undefined,
+          wxid: draft.wxid || undefined,
+          db_path: draft.db_path || undefined,
+        }),
+      })
+      const data = await res.json()
+      setTestResult(data)
+    } catch {
+      setTestResult({ ok: false, error: '无法连接到服务器' })
+    }
+    setTestLoading(false)
+  }
+
+  return (
+    <div className={`border ${editing ? 'border-amber-500/40 bg-amber-500/[0.02]' : 'border-border-main'} rounded-xl overflow-hidden transition-all duration-200`}>
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border-main/40">
+        <div className="flex items-center gap-2">
+          <span className="text-base">🔑</span>
+          <h4 className="text-sm font-semibold text-text-main">连接凭证</h4>
+          {!editing && (
+            <span className="text-[11px] text-text-muted px-2 py-0.5 rounded-full bg-bg-raised border border-border-main">
+              {form.has_key ? '已配置' : '未配置密钥'}
+            </span>
+          )}
+        </div>
+        {!editing ? (
+          <button
+            onClick={startEdit}
+            className="text-xs px-3 py-1.5 rounded-full bg-bg-raised border border-border-main text-text-muted hover:text-text-main hover:border-text-muted/30 transition-colors cursor-pointer font-medium"
+          >✎ 编辑</button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={saveEdit}
+              disabled={!keyFormatOk || !wxidFormatOk || !dbPathFormatOk}
+              className="text-xs px-3 py-1.5 rounded-full bg-brand-green-hover text-white font-semibold hover:opacity-90 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+            >保存</button>
+            <button
+              onClick={cancelEdit}
+              className="text-xs px-3 py-1.5 rounded-full bg-bg-raised border border-border-main text-text-muted hover:text-text-main transition-colors cursor-pointer"
+            >取消</button>
+          </div>
+        )}
+      </div>
+
+      {/* Edit warning */}
+      {editing && (
+        <div className="mx-4 mt-3 flex items-start gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs text-amber-600 dark:text-amber-400">
+          <Warning size={14} weight="fill" className="shrink-0 mt-0.5" />
+          <span>修改连接凭据可能导致机器人无法启动，请谨慎操作。修改后需重启机器人才能生效。</span>
+        </div>
+      )}
+
+      {/* Body */}
+      <div className="px-4 py-3 space-y-3">
+        {/* Key */}
+        <div>
+          <label className="text-xs text-text-muted block mb-1 font-medium">WCDB 密钥</label>
+          {editing ? (
+            <div className="flex items-center gap-2">
+              <input
+                type={keyVisible ? 'text' : 'password'}
+                value={draft.wcdb_key}
+                onChange={e => setDraft(prev => ({ ...prev, wcdb_key: e.target.value }))}
+                placeholder={form.has_key ? '留空则保持现有密钥' : '输入64位十六进制密钥'}
+                className="flex-1 bg-bg-raised border border-border-main rounded-full pl-4 pr-3 py-2 text-sm font-mono text-text-main placeholder:text-text-muted/50 focus:outline-none focus:border-brand-green transition-colors"
+              />
+              <button
+                onClick={() => setKeyVisible(!keyVisible)}
+                className="shrink-0 p-2 text-text-muted hover:text-text-main transition-colors cursor-pointer"
+                title={keyVisible ? '隐藏密钥' : '显示密钥'}
+              >{keyVisible ? '🙈' : '👁'}</button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-sm font-mono bg-bg-raised border border-border-main rounded-full px-4 py-2 text-text-main/70">
+              <span>{form.has_key ? '••••••••••••••••' : '—'}</span>
+            </div>
+          )}
+          {editing && draft.wcdb_key && !keyFormatOk && (
+            <p className="text-xs text-status-error mt-1">❌ 密钥必须为64位十六进制字符（0-9, a-f）</p>
+          )}
+          {editing && draft.wcdb_key && keyFormatOk && (
+            <p className="text-xs text-brand-green mt-1">✅ 密钥格式正确</p>
+          )}
+        </div>
+
+        {/* wxid */}
+        <div>
+          <label className="text-xs text-text-muted block mb-1 font-medium">账号标识 (wxid)</label>
+          {editing ? (
+            <input
+              type="text"
+              value={draft.wxid}
+              onChange={e => setDraft(prev => ({ ...prev, wxid: e.target.value }))}
+              placeholder="wxid_xxxxxxxxxxxxxx"
+              className="w-full bg-bg-raised border border-border-main rounded-full pl-4 pr-3 py-2 text-sm font-mono text-text-main placeholder:text-text-muted/50 focus:outline-none focus:border-brand-green transition-colors"
+            />
+          ) : (
+            <div className="text-sm font-mono bg-bg-raised border border-border-main rounded-full px-4 py-2 text-text-main/70">
+              {form.wxid || '—'}
+            </div>
+          )}
+          {editing && draft.wxid && !wxidFormatOk && (
+            <p className="text-xs text-status-error mt-1">❌ 账号标识应以 wxid_ 开头</p>
+          )}
+        </div>
+
+        {/* db_path */}
+        <div>
+          <label className="text-xs text-text-muted block mb-1 font-medium">数据库路径</label>
+          {editing ? (
+            <input
+              type="text"
+              value={draft.db_path}
+              onChange={e => setDraft(prev => ({ ...prev, db_path: e.target.value }))}
+              placeholder="例如 C:\Users\...\session.db"
+              className="w-full bg-bg-raised border border-border-main rounded-full pl-4 pr-3 py-2 text-sm font-mono text-text-main placeholder:text-text-muted/50 focus:outline-none focus:border-brand-green transition-colors"
+            />
+          ) : (
+            <div className="text-sm font-mono bg-bg-raised border border-border-main rounded-full px-4 py-2 text-text-main/70 truncate" title={form.db_path}>
+              {form.db_path || '—'}
+            </div>
+          )}
+        </div>
+
+        {/* Test connection (edit mode only) */}
+        {editing && (
+          <div className="pt-2 space-y-3">
+            <button
+              onClick={testConnection}
+              disabled={testLoading || (!draft.wcdb_key && !form.has_key)}
+              className="flex items-center gap-2 px-4 py-2 rounded-full bg-bg-raised border border-border-main text-xs text-text-main font-medium hover:border-brand-green/40 transition-colors cursor-pointer disabled:opacity-40"
+            >
+              {testLoading ? (
+                <><CircleNotch size={14} className="animate-spin" /> 测试中...</>
+              ) : (
+                <><TestTube size={14} /> 测试连接</>
+              )}
+            </button>
+
+            {/* Test result */}
+            {testResult && (
+              <div className="space-y-1.5">
+                {testResult.error ? (
+                  <div className="flex items-center gap-2 px-3 py-2 bg-status-error-soft border border-status-error/20 rounded-lg text-xs text-status-error">
+                    <Warning size={14} weight="fill" />
+                    <span>{testResult.error}</span>
+                  </div>
+                ) : testResult.checks ? (
+                  Object.entries(testResult.checks).map(([key, check]) => (
+                    <div key={key} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs ${
+                      check.ok
+                        ? 'text-brand-green bg-brand-green-light/30'
+                        : check.message?.includes('未执行')
+                          ? 'text-text-muted bg-bg-raised'
+                          : 'text-status-error bg-status-error-soft'
+                    }`}>
+                      {check.ok ? '✅' : check.message?.includes('未执行') ? 'ℹ️' : '❌'}
+                      <span className="font-mono">{checkLabel(key)}</span>
+                      {check.message && check.message !== 'ok' && (
+                        <span className={check.ok ? 'text-brand-green/80' : ''}>— {check.message}</span>
+                      )}
+                    </div>
+                  ))
+                ) : null}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function checkLabel(key) {
+  const labels = {
+    key_format: '密钥格式',
+    wxid_format: '账号标识',
+    db_path_exists: '数据库文件',
+    wcdb_connect: 'WCDB 连接测试',
+  }
+  return labels[key] || key
+}
 
 // ── Data Path Section (微信数据目录配置) ──────────────────────────────
 
@@ -1607,6 +1836,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
     ai_provider_type: 'auto', ai_provider_model: '',
     wechat_backend: 'wcdb', wechat_groups: '*',
     log_level: 'INFO', wechat_data_dir: '',
+    wxid: '', db_path: '', has_key: false, wcdb_key: '',
   })
 
   async function handleExportConfig() {
@@ -1695,21 +1925,28 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
   async function handleSave() {
     setSaved(false)
     setSaveError('')
+    // If user didn't type a new key, exclude it from save
+    const body = {
+      ai_provider_base_url: form.ai_provider_base_url,
+      ai_provider_api_key: form.ai_provider_api_key,
+      ai_provider_type: form.ai_provider_type,
+      ai_provider_model: form.ai_provider_model,
+      ai_provider_extra_body: form.ai_provider_extra_body || '',
+      wechat_backend: form.wechat_backend,
+      wechat_groups: form.wechat_groups,
+      log_level: form.log_level,
+      wechat_data_dir: form.wechat_data_dir,
+      wxid: form.wxid,
+      db_path: form.db_path,
+    }
+    if (form.wcdb_key) {
+      body.wcdb_key = form.wcdb_key
+    }
     try {
       const res = await fetch(`${API_BASE}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ai_provider_base_url: form.ai_provider_base_url,
-          ai_provider_api_key: form.ai_provider_api_key,
-          ai_provider_type: form.ai_provider_type,
-          ai_provider_model: form.ai_provider_model,
-          ai_provider_extra_body: form.ai_provider_extra_body || '',
-          wechat_backend: form.wechat_backend,
-          wechat_groups: form.wechat_groups,
-          log_level: form.log_level,
-          wechat_data_dir: form.wechat_data_dir,
-        }),
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       if (data.ok) {
@@ -1776,7 +2013,12 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
               <div className="p-7">
                 {activeSection === 'ai' && <AiSection form={form} update={update} onOpenSandbox={() => setSandboxOpen(true)} />}
                 {activeSection === 'identity' && <IdentitySection form={form} update={update} />}
-                {activeSection === 'data' && <DataPathSection form={form} update={update} detectedDataDir={detectedDataDir} />}
+                {activeSection === 'data' && (
+                  <div className="space-y-4">
+                    <CredentialsSection form={form} update={update} />
+                    <DataPathSection form={form} update={update} detectedDataDir={detectedDataDir} />
+                  </div>
+                )}
                 {activeSection === 'features' && <FeaturesSection form={form} update={update} />}
                 {activeSection === 'push' && <PushSection />}
               </div>
