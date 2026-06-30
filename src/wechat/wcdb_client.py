@@ -330,7 +330,15 @@ class WcdbNativeClient:
             # missing, but _find_wxid_and_dbpath still works without them.
             pass
 
-        wxid, db_path = _find_wxid_and_dbpath(custom_dir)
+        wxid, base_dir = _find_wxid_and_dbpath(custom_dir)
+        # _find_wxid_and_dbpath returns (wxid, base_dir), need to derive dbPath
+        db_path = ""
+        if wxid and base_dir:
+            # Construct session.db path from wxid and base_dir
+            wxid_dir = Path(base_dir) / wxid
+            session_db = wxid_dir / "db_storage" / "session" / "session.db"
+            if session_db.exists():
+                db_path = str(session_db)
         self._config = {
             "myWxid": wxid,
             "dbPath": db_path,

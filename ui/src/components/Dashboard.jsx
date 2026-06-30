@@ -645,7 +645,7 @@ function KeyExtractionBanner() {
             <p className="text-sm font-mono text-text-main font-bold truncate">{result.wxid || '-'}</p>
           </div>
           <div className="bg-bg-raised border border-border-main rounded-lg p-3.5">
-            <p className="text-xs text-text-muted mb-1 font-medium">数据路径</p>
+            <p className="text-xs text-text-muted mb-1 font-medium">数据配置</p>
             <p className="text-xs font-mono text-text-main font-semibold truncate">{result.db_path ? result.db_path.split('\\').slice(-2).join('\\') : '-'}</p>
           </div>
         </motion.div>

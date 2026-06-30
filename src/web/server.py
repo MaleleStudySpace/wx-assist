@@ -231,13 +231,26 @@ def _run_step1_extraction():
                 _onboarding_data["db_path"] = db_path or ""
                 _onboarding_data["wechat_data_dir"] = base_dir or ""
 
-            # Persist the key to .env immediately so the bot can use it
-            # on restart without needing to complete the full onboarding flow.
+            # Persist the key + detected paths to .env immediately so the bot
+            # can use them on restart without needing to complete the full
+            # onboarding flow.
             env_path = _find_or_create_env()
             _set_env_key(env_path, "WCDB_KEY", key)
+            if wxid:
+                _set_env_key(env_path, "WXID", wxid)
+            if db_path:
+                _set_env_key(env_path, "DB_PATH", db_path)
+            if base_dir:
+                _set_env_key(env_path, "WECHAT_DATA_DIR", base_dir)
             # Also set in the current process for load_dotenv in this session
             import os as _os
             _os.environ["WCDB_KEY"] = key
+            if wxid:
+                _os.environ["WXID"] = wxid
+            if db_path:
+                _os.environ["DB_PATH"] = db_path
+            if base_dir:
+                _os.environ["WECHAT_DATA_DIR"] = base_dir
             # Clear the KEY_MISSING error so it doesn't reappear on page refresh
             update_status(error="")
 
@@ -1770,6 +1783,14 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         _onboarding_data["wxid"] = data["wxid"]
                     if data.get("db_path"):
                         _onboarding_data["db_path"] = data["db_path"]
+                    # Save key to .env immediately so bot can start after onboarding
+                    key = data.get("key", "").strip()
+                    if key:
+                        _onboarding_data["key"] = key
+                        env_path = _find_or_create_env()
+                        _set_env_key(env_path, "WCDB_KEY", key)
+                        import os as _os
+                        _os.environ["WCDB_KEY"] = key
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)})
