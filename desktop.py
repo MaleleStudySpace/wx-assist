@@ -230,8 +230,8 @@ def main():
     except Exception as e:
         logger_available = False
         try:
-            from src.web.server import logger
-            logger.warning("WebView2 不可用，正在使用浏览器: %s", e)
+            from src.web.server import logger as _srv_logger
+            _srv_logger.warning("WebView2 不可用，正在使用浏览器: %s", e)
             logger_available = True
         except Exception:
             pass

@@ -17,7 +17,7 @@ export function Step1Prepare({ data, updateData, onDone }) {
   const [manualDbPath, setManualDbPath] = useState(data.db_path || '')
 
   // Save wechat config (formerly Step 2) before advancing to AI config
-  async function saveWechatConfig(wxid, dbPath) {
+  async function saveWechatConfig(wxid, dbPath, key) {
     try {
       await fetch(`${API}/api/onboarding/step2`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -25,6 +25,7 @@ export function Step1Prepare({ data, updateData, onDone }) {
           wechat_backend: 'wcdb',
           wxid: wxid || '',
           db_path: dbPath || '',
+          key: key || '',
         }),
       })
     } catch {}
@@ -89,7 +90,7 @@ export function Step1Prepare({ data, updateData, onDone }) {
             updateData({ key: s.result.key, wxid: s.result.wxid, db_path: s.result.db_path })
             setPhase('done')
             setBusy(false)
-            saveWechatConfig(s.result.wxid, s.result.db_path).then(onDone)
+            saveWechatConfig(s.result.wxid, s.result.db_path, s.result.key).then(onDone)
           } else if (s.phase === 'timeout' || s.phase === 'error') {
             clearInterval(poll)
             setPhase(s.phase === 'timeout' ? 'timeout' : 'error')
@@ -113,7 +114,7 @@ export function Step1Prepare({ data, updateData, onDone }) {
       wxid: wxid,
       db_path: dbPath,
     })
-    saveWechatConfig(wxid, dbPath).then(onDone)
+    saveWechatConfig(wxid, dbPath, manualKey.trim()).then(onDone)
   }
 
   function renderChecklist() {
@@ -475,7 +476,7 @@ function Step2WeChatConfig({ data, updateData, onDone }) {
             <p className="text-sm font-mono font-bold text-text-main truncate">{data.wxid || '未检测到'}</p>
           </div>
           <div className="bg-bg-raised border border-border-main rounded-2xl p-4">
-            <p className="text-xs text-text-muted font-semibold mb-1">数据路径</p>
+            <p className="text-xs text-text-muted font-semibold mb-1">数据配置</p>
             <p className="text-xs font-mono text-text-muted truncate" title={data.db_path}>{data.db_path || '—'}</p>
           </div>
         </div>

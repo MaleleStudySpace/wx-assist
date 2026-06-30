@@ -24,7 +24,7 @@ const TABS = [
     id: 'config', label: '系统配置', icon: Gear,
     subs: [
       { id: 'ai', label: 'AI 后端配置' },
-      { id: 'data', label: '数据路径' },
+      { id: 'data', label: '数据配置' },
       { id: 'push', label: '消息推送' },
     ],
   },
