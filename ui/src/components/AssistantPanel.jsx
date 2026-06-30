@@ -633,6 +633,7 @@ export default function AssistantPanel() {
                           setConfig(prev => ({ ...prev, alert_groups: next }))
                           scheduleAutoSave({ ...config, alert_groups: next }, true)
                           setAlertDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
+                          setExpandedAlerts(prev => ({ ...prev, [i]: false }))
                           return
                         }
                       }
@@ -640,6 +641,7 @@ export default function AssistantPanel() {
                       setConfig(prev => ({ ...prev, alert_groups: next }))
                       scheduleAutoSave({ ...config, alert_groups: next }, true)
                       setAlertDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
+                      setExpandedAlerts(prev => ({ ...prev, [i]: false }))
                     }}
                     onCancel={() => {
                       setAlertDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
