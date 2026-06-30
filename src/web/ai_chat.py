@@ -110,14 +110,14 @@ def _send_sse_event(wfile, event: str, data: dict):
 
 # ── Context builders ──────────────────────────────────────────────
 
-def _build_sns_context(limit: int = 50, username: str = "") -> tuple[str, int, str]:
+def _build_sns_context(limit: int = 50, username: str = "") -> tuple[str, int, str, int]:
     """Build context text from WeChat Moments (朋友圈).
 
     Args:
         limit: Max number of posts to include.
         username: If provided, only include posts from this user.
 
-    Returns (context_text, estimated_tokens, source_name).
+    Returns (context_text, estimated_tokens, source_name, actual_post_count).
     """
     from .api_handlers import _get_wcdb_sns_reader
     reader = _get_wcdb_sns_reader()
@@ -129,10 +129,10 @@ def _build_sns_context(limit: int = 50, username: str = "") -> tuple[str, int, s
         posts = reader.get_timeline(limit=limit, usernames=usernames)
     except Exception as e:
         logger.error("Failed to read SNS timeline: %s", e)
-        return "", 0, "朋友圈"
+        return "", 0, "朋友圈", 0
 
     if not posts:
-        return "", 0, "朋友圈"
+        return "", 0, "朋友圈", 0
 
     # Format posts into context lines
     lines = []
@@ -220,7 +220,7 @@ def _build_sns_context(limit: int = 50, username: str = "") -> tuple[str, int, s
     tokens = _estimate_tokens(context)
     first_nickname = _get(posts[0], "nickname", "") if posts else ""
     source_name = "朋友圈" if not username else (f"朋友圈·{first_nickname}" if first_nickname else "朋友圈")
-    return context, tokens, source_name
+    return context, tokens, source_name, len(posts)
 
 def _flatten_chat_records_text(records: list, depth: int = 0, max_depth: int = 5) -> list[str]:
     """Recursively flatten chat records into text lines for LLM context.
@@ -678,7 +678,7 @@ def handle_ai_chat_start(body: dict) -> dict:
         else:
             source_name = "微信收藏"
     elif source_type == "moments":
-        context_text, context_tokens, source_name = _build_sns_context(
+        context_text, context_tokens, source_name, sns_post_count = _build_sns_context(
             limit=message_limit, username=source_id or "",
         )
         if not context_text:
@@ -770,8 +770,7 @@ def handle_ai_chat_start(body: dict) -> dict:
         tag_suffix = f"（标签：{tag_name}）" if tag_id and tag_name else ""
         context_summary = f"已加载 {line_count} 条收藏内容（{included}）{tag_suffix}"
     elif source_type == "moments":
-        post_count = len([l for l in context_text.split("\n") if l and not l.startswith("...")])
-        context_summary = f"已加载 {post_count} 条朋友圈内容"
+        context_summary = f"已加载 {sns_post_count} 条朋友圈内容"
     else:
         msg_count = len([l for l in context_text.split("\n") if l and not l.startswith("...")])
         time_desc = ""
@@ -1041,7 +1040,7 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
     username = body.get("username", "")
 
     # Build context from SNS
-    context_text, context_tokens, source_name = _build_sns_context(
+    context_text, context_tokens, source_name, _ = _build_sns_context(
         limit=limit, username=username,
     )
     logger.info(f"[SNS_SUMMARIZE] context built: tokens={context_tokens}, source={source_name}, text_len={len(context_text) if context_text else 0}")
@@ -1108,14 +1107,13 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
 
     # Build system prompt + user message
     system_prompt = (
-        "你是一个朋友圈内容分析助手。请对用户给出的朋友圈内容进行结构化总结。\n"
+        "你是一个朋友圈内容分析助手。请对以下朋友圈内容做结构化总结。\n"
         "要求：\n"
-        "- 用中文写，按主题分类归纳\n"
-        "- 每个主题标注关键人物和互动热度\n"
-        "- 突出有价值的信息（行业动态、生活重要事件、有深度的观点等）\n"
+        "- 用中文，按主题分类归纳\n"
+        "- 挑出值得关注的动态，标注「谁：内容」，附带时间\n"
+        "- 重点关注：行业动态、生活大事、新奇有趣的事\n"
         "- 忽略纯广告、无意义转发\n"
-        "- 最后附一个「朋友圈气象」小结：整体氛围、最活跃的人、最受欢迎的动态\n"
-        "- 可以适度使用 emoji 增加可读性"
+        "- 总长度控制在 500 字以内，不用每条都列"
     )
     user_message = f"请总结以下朋友圈内容：\n\n{context_text}"
 

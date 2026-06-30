@@ -29,6 +29,7 @@ export default function SnsAiDrawer({ open, onClose, contacts = [] }) {
   // Summary state
   const [summaryText, setSummaryText] = useState('')
   const [summaryStreaming, setSummaryStreaming] = useState(false)
+  const [elapsedSec, setElapsedSec] = useState(0)
 
   // Chat state (reuse AI chat session)
   const [chatSession, setChatSession] = useState(null)
@@ -40,26 +41,42 @@ export default function SnsAiDrawer({ open, onClose, contacts = [] }) {
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const abortRef = useRef(null)
+  // Tracks whether a summary was in progress when user closed the drawer
+  const summaryActiveRef = useRef(false)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [summaryText, chatMessages])
 
-  // Reopen → restore previous conversation
+  // Elapsed time counter during summary
+  useEffect(() => {
+    if (!summaryStreaming) { setElapsedSec(0); return }
+    setElapsedSec(0)
+    const interval = setInterval(() => {
+      setElapsedSec(s => s + 1)
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [summaryStreaming])
+
+  // Reopen → restore previous conversation or auto-restart aborted summary
   const prevOpen = useRef(open)
   useEffect(() => {
     if (open && !prevOpen.current) {
-      // Drawer just reopened — restore previous chat or summary
+      // Drawer just reopened
       if (chatSession) {
+        // 1) Chat in progress → restore chat mode
         setMode('chat')
-        // Focus input when returning to chat
         setTimeout(() => inputRef.current?.focus(), 100)
       } else if (summaryText) {
+        // 2) Completed summary text exists → show it
         setMode('summary')
+      } else if (summaryActiveRef.current) {
+        // 3) Summary was streaming when closed → auto-restart
+        startSummary()
       }
     }
     prevOpen.current = open
-  }, [open, chatSession, summaryText])
+  }, [open, chatSession, summaryText]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset on close
   const handleClose = () => {
@@ -71,6 +88,7 @@ export default function SnsAiDrawer({ open, onClose, contacts = [] }) {
 
   // ── Quick Summary ──────────────────────────────────────────────
   async function startSummary() {
+    summaryActiveRef.current = true
     setMode('summary')
     setSummaryText('')
     setSummaryStreaming(true)
@@ -126,6 +144,7 @@ export default function SnsAiDrawer({ open, onClose, contacts = [] }) {
         setSummaryText(`❌ 请求失败: ${e.message}`)
       }
     } finally {
+      summaryActiveRef.current = false
       setSummaryStreaming(false)
     }
   }
@@ -416,33 +435,61 @@ export default function SnsAiDrawer({ open, onClose, contacts = [] }) {
                 )}
               </div>
 
-              {/* Summary content */}
-              {summaryStreaming && !summaryText && (
-                <div className="flex items-center gap-2 text-sm text-text-muted py-8 justify-center">
-                  <div className="w-4 h-4 border-2 border-brand-green/30 border-t-brand-green rounded-full animate-spin" />
-                  <span>AI 正在总结<span className="text-text-muted/60">（首次生成约 30-40 秒）</span></span>
-                </div>
-              )}
-              <div className="prose prose-sm dark:prose-invert max-w-none text-text-main/90 leading-relaxed whitespace-pre-wrap">
-                {summaryText}
-                {summaryStreaming && (
-                  <span className="inline-flex items-center gap-1.5 ml-0.5">
-                    <span className="inline-block w-1.5 h-4 bg-brand-green/60 animate-pulse align-middle" />
-                    <span className="text-[11px] text-text-muted/50">生成中</span>
-                  </span>
-                )}
-              </div>
-
-              {/* Continue to chat after summary */}
-              {!summaryStreaming && summaryText && !chatSession && (
-                <div className="pt-4 border-t border-border-main/50">
+              {/* Summary content — error state */}
+              {!summaryStreaming && summaryText && summaryText.startsWith('❌') && (
+                <div className="flex flex-col items-center gap-4 py-12 justify-center">
+                  <div className="w-12 h-12 rounded-full bg-status-error/10 flex items-center justify-center">
+                    <X size={20} className="text-status-error" />
+                  </div>
+                  <p className="text-sm text-text-main text-center max-w-xs">{summaryText.replace(/^❌\s*/, '')}</p>
                   <button
-                    onClick={startChat}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-bg-raised border border-border-main text-text-main text-sm font-medium hover:border-brand-green/40 transition-colors cursor-pointer"
+                    onClick={startSummary}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-green-hover text-white text-sm font-medium hover:bg-[#0d8c5c] transition-colors cursor-pointer"
                   >
-                    <ChatCircle size={14} /> 继续追问
+                    <ArrowsClockwise size={14} /> 重新尝试
                   </button>
                 </div>
+              )}
+
+              {/* Summary content — loading */}
+              {summaryStreaming && !summaryText && (
+                <div className="flex flex-col items-center gap-3 py-12 justify-center">
+                  <div className="w-8 h-8 border-[3px] border-brand-green/20 border-t-brand-green rounded-full animate-spin" />
+                  <div className="text-center">
+                    <p className="text-sm text-text-main font-medium">AI 正在分析朋友圈内容...</p>
+                    <p className="text-xs text-text-muted/60 mt-1">
+                      {elapsedSec < 10
+                        ? '正在读取数据并生成摘要'
+                        : `已等待 ${elapsedSec} 秒，AI 正在努力生成中`}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Summary result — show during streaming AND when done (but not error) */}
+              {summaryText && !summaryText.startsWith('❌') && (
+                <>
+                  <div className="prose prose-sm dark:prose-invert max-w-none text-text-main/90 leading-relaxed whitespace-pre-wrap">
+                    {summaryText}
+                    {summaryStreaming && (
+                      <span className="inline-flex items-center gap-1.5 ml-0.5">
+                        <span className="inline-block w-1.5 h-4 bg-brand-green/60 animate-pulse align-middle" />
+                        <span className="text-[11px] text-text-muted/50">生成中</span>
+                      </span>
+                    )}
+                  </div>
+                  {/* Continue to chat after summary */}
+                  {!summaryStreaming && !chatSession && (
+                    <div className="pt-4 border-t border-border-main/50">
+                      <button
+                        onClick={startChat}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-bg-raised border border-border-main text-text-main text-sm font-medium hover:border-brand-green/40 transition-colors cursor-pointer"
+                      >
+                        <ChatCircle size={14} /> 继续追问
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
