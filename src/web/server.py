@@ -1430,7 +1430,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                                 k, v = line.split("=", 1)
                                 k = k.strip()
                                 v = v.strip()
-                                if v and k not in os.environ:
+                                if v and (k not in os.environ or not os.environ.get(k, "").strip()):
                                     os.environ[k] = v
                     except UnicodeDecodeError:
                         # Binary keys in .env — skip, env is already loaded
