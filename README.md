@@ -113,7 +113,6 @@ Demo 使用模拟数据，AI 功能真实调用。响应式设计，手机也能
 ```powershell
 pip install -r requirements.txt
 cd ui && npm install && npm run build && cd ..
-$env:PYTHONPATH='.'
 python desktop.py
 ```
 
