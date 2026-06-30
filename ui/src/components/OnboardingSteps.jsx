@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { CheckCircle, ArrowRight, Spinner, XCircle, Warning, MagnifyingGlass, CircleNotch, Lightning } from '@phosphor-icons/react'
-import { Field, Select, Input, spring, API_BASE } from './SharedComponents'
+import { CheckCircle, ArrowRight, Spinner, XCircle, Warning, MagnifyingGlass, CircleNotch, Lightning, ChatCircle, CaretDown, CaretRight } from '@phosphor-icons/react'
+import { Field, Select, Input, Toggle, spring, API_BASE } from './SharedComponents'
 
 const API = API_BASE
 
@@ -287,7 +287,7 @@ export function Step1Prepare({ data, updateData, onDone }) {
               disabled={!isManualValid}
               className={`w-48 py-2.5 rounded-full text-[14px] font-semibold tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer ${
                 isManualValid
-                  ? 'bg-bg-main text-bg-main hover:opacity-95'
+                  ? 'bg-brand-green-hover text-white hover:opacity-90'
                   : 'bg-bg-raised text-text-muted border border-border-main cursor-not-allowed'
               }`}
             >
@@ -486,7 +486,7 @@ function Step2WeChatConfig({ data, updateData, onDone }) {
           disabled={!valid || busy}
           className={`w-48 py-2.5 rounded-full text-[14px] font-semibold tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 ${
             valid
-              ? 'bg-bg-main text-bg-main hover:opacity-95'
+              ? 'bg-brand-green-hover text-white hover:opacity-90'
               : 'bg-bg-raised text-text-muted border border-border-main cursor-not-allowed'
           }`}
         >
@@ -502,11 +502,32 @@ function Step2WeChatConfig({ data, updateData, onDone }) {
 export function Step3AIConfig({ data, updateData, onDone }) {
   const [detecting, setDetecting] = useState(false)
   const [detectResult, setDetectResult] = useState(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [fullUrlMode, setFullUrlMode] = useState(false)
+
+  // When toggling fullUrlMode, also update provider_type to custom
+  function toggleFullUrlMode(val) {
+    setFullUrlMode(val)
+    if (val) {
+      updateData({ ai_provider_type: 'custom' })
+    } else {
+      if (data.ai_provider_type === 'custom') {
+        updateData({ ai_provider_type: 'openai' })
+      }
+    }
+    setDetectResult(null)
+  }
 
   async function handleDetect() {
     if (!data.ai_provider_base_url || !data.ai_provider_api_key) return
     setDetecting(true)
     setDetectResult(null)
+    // If fullUrlMode is on, don't detect — user provided complete URL
+    if (fullUrlMode) {
+      setDetectResult({ provider_type: 'custom', available_models: [], error: '' })
+      setDetecting(false)
+      return
+    }
     try {
       const res = await fetch(`${API}/api/assistant/ai/detect`, {
         method: 'POST',
@@ -557,12 +578,17 @@ export function Step3AIConfig({ data, updateData, onDone }) {
     onDone()
   }
 
-  const providerLabel = { openai: 'OpenAI 兼容', anthropic: 'Anthropic 兼容' }
-  const providerBadgeColor = { openai: 'bg-emerald-50 border-emerald-200 text-emerald-700', anthropic: 'bg-purple-50 border-purple-200 text-purple-700' }
+  const providerLabel = { openai: 'OpenAI 兼容', anthropic: 'Anthropic 兼容', custom: '自定义端点' }
+  const providerBadgeColor = { openai: 'bg-emerald-50 border-emerald-200 text-emerald-700', anthropic: 'bg-purple-50 border-purple-200 text-purple-700', custom: 'bg-amber-50 border-amber-200 text-amber-700' }
   const models = detectResult?.available_models?.length
     ? detectResult.available_models
     : (data.ai_provider_model ? [data.ai_provider_model] : [])
   const hasKey = (data.ai_provider_base_url || '').trim() && (data.ai_provider_api_key || '').trim()
+
+  const apiFormatOptions = [
+    { value: 'openai', desc: 'OpenAI Chat Completions 格式' },
+    { value: 'anthropic', desc: 'Anthropic 格式' },
+  ]
 
   return (
     <div>
@@ -573,12 +599,25 @@ export function Step3AIConfig({ data, updateData, onDone }) {
       </div>
 
       <div className="space-y-6 mt-4">
-        <Field label="服务端点" hint="填写服务端点地址，不要以斜杠结尾">
-          <Input
-            value={data.ai_provider_base_url || ''}
-            onChange={v => { updateData({ ai_provider_base_url: v }); setDetectResult(null) }}
-            placeholder="https://api.deepseek.com"
-          />
+        <Field label="AI 站点 URL" hint={fullUrlMode
+          ? '请填写完整请求 URL，将直接使用此 URL，不拼接路径'
+          : '输入 API 根地址，不要以斜杠结尾，例如 https://api.deepseek.com'}>
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <Input
+                value={data.ai_provider_base_url || ''}
+                onChange={v => { updateData({ ai_provider_base_url: v }); setDetectResult(null) }}
+                placeholder={fullUrlMode ? 'https://api.example.com/v2/chat/completions' : 'https://api.deepseek.com'}
+              />
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-text-muted whitespace-nowrap">完整 URL</span>
+              <Toggle
+                enabled={fullUrlMode}
+                onChange={toggleFullUrlMode}
+              />
+            </div>
+          </div>
         </Field>
 
         <Field label="API Key" hint="该站点的 API Key / Token">
@@ -590,7 +629,7 @@ export function Step3AIConfig({ data, updateData, onDone }) {
           />
         </Field>
 
-        {/* Detect button */}
+        {/* Detect + Test buttons side by side */}
         <div className="flex items-center gap-3 mb-5">
           <motion.button
             type="button"
@@ -627,22 +666,63 @@ export function Step3AIConfig({ data, updateData, onDone }) {
           </div>
         )}
 
-        {/* Model selection */}
-        <Field label="模型" hint={models.length > 0 ? '从检测到的模型中选择' : '手动输入模型 ID'}>
-          {models.length > 0 ? (
-            <Select
-              value={data.ai_provider_model || ''}
-              onChange={v => updateData({ ai_provider_model: v })}
-              options={models.map(m => ({ value: m, desc: m }))}
-            />
-          ) : (
-            <Input
-              value={data.ai_provider_model || ''}
-              onChange={v => updateData({ ai_provider_model: v })}
-              placeholder={data.ai_provider_type === 'anthropic' ? 'claude-sonnet-4-6' : 'gpt-4o'}
-            />
+        {/* Model selection — always Input, detected models as clickable chips */}
+        <Field label="模型" hint={models.length > 1
+          ? '点击下方模型标签选择，也可直接输入任意模型 ID'
+          : '输入模型 ID，如 deepseek-chat、gpt-4o、mimo-v2.5'}>
+          <Input
+            value={data.ai_provider_model || ''}
+            onChange={v => updateData({ ai_provider_model: v })}
+            placeholder="输入或选择模型 ID"
+          />
+          {models.length > 1 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              <span className="text-[10px] text-text-muted">检测到：</span>
+              {models.map(m => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => updateData({ ai_provider_model: m })}
+                  className={`px-2 py-0.5 rounded-full text-[11px] font-mono cursor-pointer transition-colors border ${
+                    data.ai_provider_model === m
+                      ? 'bg-brand-green-light text-brand-green border-brand-green/20 font-semibold'
+                      : 'bg-bg-raised text-text-muted border-border-main hover:border-text-muted/30'
+                  }`}
+                >{m}</button>
+              ))}
+            </div>
           )}
         </Field>
+
+        {/* Advanced options — collapsed by default */}
+        <button
+          type="button"
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-main transition-colors mt-5 mb-3 cursor-pointer"
+        >
+          {showAdvanced ? <CaretDown size={12} /> : <CaretRight size={12} />}
+          高级选项
+        </button>
+
+        {showAdvanced && (
+          <div className="space-y-4 pl-1">
+            <Field label="API 格式">
+              <Select
+                value={data.ai_provider_type === 'custom' ? 'openai' : (data.ai_provider_type || 'openai')}
+                onChange={v => updateData({ ai_provider_type: v })}
+                options={apiFormatOptions}
+              />
+            </Field>
+
+            <Field label="附加参数 (JSON)" hint='合并到请求体，覆盖默认值。如 {"temperature": 0.8, "top_p": 0.9}。常用: temperature, top_p, max_tokens, stop, presence_penalty, frequency_penalty'>
+              <Input
+                value={data.ai_provider_extra_body || ''}
+                onChange={v => updateData({ ai_provider_extra_body: v })}
+                placeholder='{"thinking":{"type":"disabled"}}'
+              />
+            </Field>
+          </div>
+        )}
 
         <div className="flex items-center gap-3">
           <motion.button
@@ -651,7 +731,7 @@ export function Step3AIConfig({ data, updateData, onDone }) {
             disabled={!hasKey || detecting}
             className={`w-48 py-2.5 rounded-full text-[14px] font-semibold tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 ${
               hasKey
-                ? 'bg-bg-main text-bg-main hover:opacity-95'
+                ? 'bg-brand-green-hover text-white hover:opacity-90'
                 : 'bg-bg-raised text-text-muted border border-border-main cursor-not-allowed'
             }`}
           >

@@ -147,6 +147,30 @@ def find_env_file() -> Path | None:
     for loc in locations:
         if loc.exists():
             return loc
+
+    # ── Auto-create .env from .env.example if missing ──────────────
+    # Pick the first writable target location (same order as locations)
+    target = locations[0] if locations else PROJECT_ROOT / ".env"
+
+    # Find .env.example source
+    example = None
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        example = Path(sys._MEIPASS) / ".env.example"
+    if not example or not example.exists():
+        example = PROJECT_ROOT / ".env.example"
+    if not example.exists():
+        example = Path.cwd() / ".env.example"
+
+    if example.exists():
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(example, target)
+            logger.info(".env not found, auto-created from %s → %s", example, target)
+            return target
+        except Exception as exc:
+            logger.warning("Failed to auto-create .env from %s: %s", example, exc)
+
     return None
 
 
