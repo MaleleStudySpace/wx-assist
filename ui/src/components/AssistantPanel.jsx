@@ -1075,16 +1075,16 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
         className="flex items-center gap-3 p-4 cursor-pointer hover:bg-bg-raised/30 transition-colors"
         onClick={onToggleExpand}
       >
-        <Toggle enabled={ag.enabled} onChange={onToggleEnabled} />
+        <Toggle enabled={values.enabled} onChange={onToggleEnabled} />
         <div className="flex-1 min-w-0">
           <span className="text-sm text-text-main font-medium truncate block">
-            {ag.group_name || `提醒群 #${index + 1}`}
+            {values.group_name || `提醒群 #${index + 1}`}
           </span>
           <div className="flex gap-1 mt-1 flex-wrap items-center">
-            {(ag.keywords || []).map((kw, ki) => (
+            {(values.keywords || []).map((kw, ki) => (
               <span key={ki} className="text-xs px-2 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">{kw}</span>
             ))}
-            {ag.push_target === 'ilink' && (
+            {values.push_target === 'ilink' && (
               <span className="text-xs px-1.5 py-0.5 rounded bg-status-warn-soft text-status-warn font-medium">推送</span>
             )}
           </div>
@@ -1401,10 +1401,10 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
         className="flex items-center gap-3 p-4 cursor-pointer hover:bg-bg-raised/30 transition-colors"
         onClick={onToggleExpand}
       >
-        <Toggle enabled={dg.enabled} onChange={onToggleEnabled} />
+        <Toggle enabled={values.enabled} onChange={onToggleEnabled} />
         <div className="flex-1 min-w-0">
           <span className="text-sm text-text-main font-medium truncate block">
-            {dg.group_name || `摘要群 #${index + 1}`}
+            {values.group_name || `摘要群 #${index + 1}`}
           </span>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             {headerSchedule ? (
@@ -1412,13 +1412,13 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
             ) : (
               <span className="text-xs text-status-warn">未设置时间</span>
             )}
-            {dg.lookback_hours && dg.lookback_hours !== 6 && (
-              <span className="text-xs text-text-muted">{dg.lookback_hours}h</span>
+            {values.lookback_hours && values.lookback_hours !== 6 && (
+              <span className="text-xs text-text-muted">{values.lookback_hours}h</span>
             )}
-            {dg.unread_only && (
+            {values.unread_only && (
               <span className="text-xs px-1.5 py-0.5 rounded bg-status-warn-soft text-status-warn font-medium">未读</span>
             )}
-            {dg.push_target === 'ilink' && (
+            {values.push_target === 'ilink' && (
               <span className="text-xs px-1.5 py-0.5 rounded bg-status-info-soft text-status-info font-medium">推送</span>
             )}
           </div>
