@@ -874,13 +874,16 @@ class WcdbNativeClient:
             self._dll.wcdb_free_string(out)
             return json.loads(data)
         except json.JSONDecodeError as e:
-            logger.debug("JSON parse error: %s", e)
-            self._dll.wcdb_free_string(out)
-            return {}
+            logger.warning("WCDB JSON parse error in %s — data may be truncated",
+                           getattr(func, "__name__", "dll_call"))
+            # wcdb_free_string already called above — double-free would crash
+            raise ValueError(f"WCDB query result too large or corrupted") from e
         except Exception as e:
             logger.warning("Unexpected error in _call_json for %s: %s",
                            func.__name__, e)
-            self._dll.wcdb_free_string(out)
+            # wcdb_free_string already called above — double-free would crash
+            # Only free if we got past line 874; if we crashed AT line 874,
+            # there's nothing we can do — the process is already dying.
             return {}
 
     def get_sessions(self, limit=500):

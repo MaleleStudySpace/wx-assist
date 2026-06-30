@@ -598,8 +598,11 @@ export default function AssistantPanel() {
                       }
                     }}
                     onToggleEnabled={v => {
-                      // Toggle updates draft only — save button persists
-                      setAlertDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || ag), enabled: v } }))
+                      // Toggle saves immediately — directly patch config, skip draft
+                      const next = [...config.alert_groups]
+                      next[i] = { ...next[i], enabled: v }
+                      setConfig(prev => ({ ...prev, alert_groups: next }))
+                      scheduleAutoSave({ ...config, alert_groups: next }, true)
                     }}
                     onDelete={() => {
                       const next = config.alert_groups.filter((_, idx) => idx !== i)
@@ -771,8 +774,11 @@ export default function AssistantPanel() {
                     }}
                     onToggleProfile={() => setExpandedProfiles(prev => ({ ...prev, [i]: !prev[i] }))}
                     onToggleEnabled={v => {
-                      // Toggle updates draft only — save button persists
-                      setDigestDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || dg), enabled: v } }))
+                      // Toggle saves immediately — directly patch config, skip draft
+                      const next = [...config.digest_groups]
+                      next[i] = { ...next[i], enabled: v }
+                      setConfig(prev => ({ ...prev, digest_groups: next }))
+                      scheduleAutoSave({ ...config, digest_groups: next }, true)
                     }}
                     onDelete={() => {
                       const next = config.digest_groups.filter((_, idx) => idx !== i)
@@ -1075,7 +1081,7 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
         className="flex items-center gap-3 p-4 cursor-pointer hover:bg-bg-raised/30 transition-colors"
         onClick={onToggleExpand}
       >
-        <Toggle enabled={values.enabled} onChange={onToggleEnabled} />
+        <Toggle enabled={ag.enabled} onChange={onToggleEnabled} />
         <div className="flex-1 min-w-0">
           <span className="text-sm text-text-main font-medium truncate block">
             {values.group_name || `提醒群 #${index + 1}`}
@@ -1401,7 +1407,7 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
         className="flex items-center gap-3 p-4 cursor-pointer hover:bg-bg-raised/30 transition-colors"
         onClick={onToggleExpand}
       >
-        <Toggle enabled={values.enabled} onChange={onToggleEnabled} />
+        <Toggle enabled={dg.enabled} onChange={onToggleEnabled} />
         <div className="flex-1 min-w-0">
           <span className="text-sm text-text-main font-medium truncate block">
             {values.group_name || `摘要群 #${index + 1}`}
