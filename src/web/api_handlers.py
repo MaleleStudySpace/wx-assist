@@ -266,7 +266,96 @@ def handle_fav_list(params, config: AssistantConfig):
         }
     except Exception as e:
         logger.error(f"Failed to list favorites: {e}")
-        return {"ok": False, "error": str(e)}
+        # Fallback: batch query hit oversized content, retry per-item
+        try:
+            t0 = time.monotonic()
+            from src.wechat.wcdb_fav_reader import WcdbFavReader
+
+            # Query metadata without content (always safe)
+            safe_sql = (
+                f"SELECT local_id, type, update_time, fromusr "
+                f"FROM fav_db_item "
+                f"ORDER BY update_time DESC "
+                f"LIMIT {limit} OFFSET {offset}"
+            )
+            safe_rows = reader._exec(safe_sql) or []
+            fallback_items = []
+            for r in safe_rows:
+                item = reader._parse_fav_row(r)
+                lid = r["local_id"]
+                # Try to load content for this single item
+                try:
+                    c_sql = f"SELECT content FROM fav_db_item WHERE local_id={lid}"
+                    c_rows = reader._exec(c_sql) or []
+                    if c_rows and c_rows[0].get("content"):
+                        content_str = c_rows[0]["content"]
+                        item["content_raw"] = content_str
+                        if content_str.strip().startswith("<favitem"):
+                            item.update(reader._parse_fav_xml(content_str))
+                except Exception:
+                    logger.warning("Fav content load failed for local_id=%s", lid)
+                fallback_items.append(item)
+
+            # Tags & tag bindings (separate small queries, unlikely to fail)
+            try:
+                tags_data = reader.get_tags() or []
+            except Exception:
+                tags_data = []
+            try:
+                bindings_data = reader.get_tag_bindings() or []
+            except Exception:
+                bindings_data = []
+
+            tag_map = {t.get("local_id", ""): t.get("name", "") for t in tags_data}
+            fav_tags = {}
+            for b in bindings_data:
+                tid = b.get("tag_local_id", "")
+                fid = b.get("fav_local_id", "")
+                if tid and fid:
+                    fav_tags.setdefault(str(fid), []).append(
+                        {"id": str(tid), "name": tag_map.get(tid, "")}
+                    )
+
+            favorites = []
+            for item in fallback_items:
+                raw_content = item.get("content_raw", "")
+                desc = item.get("description", "")
+                content = desc if desc else (
+                    raw_content if raw_content and not raw_content.strip().startswith("<") else ""
+                )
+                images = _extract_fav_image_info(item)
+                chat_records = item.get("chat_records", [])
+                ftype = int(item.get("type", 0))
+                if ftype == 14 and raw_content and "<datalist>" in raw_content:
+                    chat_records = _enrich_chat_records_metadata(chat_records, raw_content)
+                if ftype == 3 and raw_content and "<datalist>" in raw_content:
+                    chat_records = _enrich_chat_records_metadata(chat_records, raw_content)
+                if ftype == 14 and raw_content and "<recordxml>" in raw_content:
+                    chat_records = _enrich_nested_chat_records(chat_records, raw_content)
+
+                fav_id_str = str(item.get("local_id", ""))
+                favorites.append({
+                    "id": item.get("local_id", 0),
+                    "type": ftype,
+                    "type_name": item.get("type_name", ""),
+                    "create_time": item.get("update_time", 0),
+                    "datetime": item.get("datetime", ""),
+                    "title": item.get("title", ""),
+                    "content": content,
+                    "from_user": item.get("from_user", ""),
+                    "link": item.get("link", ""),
+                    "images": images,
+                    "chat_records": chat_records,
+                    "content_raw": raw_content,
+                    "tags": fav_tags.get(fav_id_str, []),
+                })
+
+            logger.info("[API-TRACE] /api/fav/list: fallback took %.0fms, %d items",
+                        (time.monotonic() - t0) * 1000, len(favorites))
+            return {"ok": True, "data": favorites, "total": len(favorites)}
+        except Exception as e2:
+            logger.error(f"Fallback query also failed: {e2}")
+            return {"ok": False, "error": str(e2)}
 
 
 def handle_fav_tags(params, config: AssistantConfig):

@@ -45,7 +45,7 @@ export function Toggle({ enabled, onChange }) {
   return (
     <button
       type="button"
-      onClick={() => onChange(!enabled)}
+      onClick={(e) => { e.stopPropagation(); onChange(!enabled) }}
       className={`relative w-11 h-6 rounded-full shrink-0 transition-colors duration-200 border cursor-pointer outline-none focus:ring-2 focus:ring-brand-green/20
         ${enabled ? 'bg-brand-green-light border-brand-green/30' : 'bg-bg-raised border-border-main'}`}
     >
