@@ -1666,6 +1666,13 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 # Write all accumulated data to .env
                 env_path = _find_or_create_env()
                 _write_onboarding_to_env(env_path)
+
+                # Re-load .env into os.environ with override=True so that
+                # load_config() picks up the new values without a restart.
+                # (load_dotenv at startup may have loaded empty values from
+                # the auto-created .env.example; this refresh overrides them.)
+                from dotenv import load_dotenv as _load_dotenv
+                _load_dotenv(env_path, override=True)
                 self.send_json({"ok": True})
             except Exception as e:
                 logger.exception("Onboarding step4 failed")
