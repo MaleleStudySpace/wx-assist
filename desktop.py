@@ -9,6 +9,7 @@ Usage:
     wx-assist.exe  (packaged version)
 """
 import atexit
+import logging
 import os
 import signal
 import sys
@@ -26,6 +27,7 @@ if getattr(sys, "frozen", False):
 # ── Process identity for hard-kill protection ────────────────────
 # Record our PID so atexit can kill us if graceful shutdown stalls.
 _OUR_PID = os.getpid()
+logger = logging.getLogger(__name__)
 
 
 def _write_crash_log(exc_info: str) -> None:
@@ -164,9 +166,6 @@ def main():
     from src.web.server import start_web_server
     web_thread = start_web_server()
 
-    # Bot starts STOPPED — user must click "启动机器人" in the UI.
-    # This prevents auto-startup races with WeChat login / key availability.
-
     # Wait for web server (raw TCP — bypasses Windows system proxy)
     import socket as _socket
     ready = False
@@ -193,6 +192,27 @@ def main():
         except Exception:
             pass
         return
+
+    # ── Auto-start bot when prerequisites are met ──────────────────
+    if not onboarding_needed:
+        # Check 1: WeChat process must be running (WCDB key depends on it)
+        import subprocess as _sp
+        wechat_ok = False
+        try:
+            r = _sp.run(
+                ["tasklist", "/FI", "IMAGENAME eq WeChat.exe", "/NH"],
+                capture_output=True, text=True, timeout=5,
+            )
+            wechat_ok = "WeChat.exe" in r.stdout
+        except Exception:
+            pass
+
+        if wechat_ok:
+            _t = threading.Thread(target=start_bot, daemon=True, name="bot-auto")
+            _t.start()
+            logger.info("Bot auto-started (onboarding done + WeChat running)")
+        else:
+            logger.info("Bot auto-start skipped: WeChat process not found")
 
     title = "微信助手 — 初始设置" if onboarding_needed else "微信助手 — Dashboard"
 

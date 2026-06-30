@@ -107,6 +107,9 @@ def _detect_wxid_and_db_path():
     """Auto-detect WeChat wxid and database path from common locations.
 
     Respects WECHAT_DATA_DIR env var as a custom base dir (scanned first).
+
+    Returns (wxid, db_path, base_dir) where base_dir is the wechat_data_dir
+    (the parent directory containing wxid_* folders).
     """
     import os as _os
 
@@ -134,14 +137,14 @@ def _detect_wxid_and_db_path():
         for wxid_dir in wxid_dirs:
             session_db = wxid_dir / "db_storage" / "session" / "session.db"
             if session_db.exists():
-                return wxid_dir.name, str(session_db)
+                return wxid_dir.name, str(session_db), str(base)
             # Older WeChat versions
             msg_dir = wxid_dir / "Msg"
             if msg_dir.exists():
                 db_files = sorted(msg_dir.glob("MSG*.db"), key=lambda f: f.stat().st_mtime, reverse=True)
                 if db_files:
-                    return wxid_dir.name, str(db_files[0])
-    return None, None
+                    return wxid_dir.name, str(db_files[0]), str(base)
+    return None, None, None
 
 
 def _set_env_key(env_path: Path, key: str, value: str) -> None:
@@ -150,9 +153,34 @@ def _set_env_key(env_path: Path, key: str, value: str) -> None:
     write_env_atomic(env_path, {key: value})
 
 
+def _infer_data_dir_from_dbpath(db_path: str) -> str:
+    """From a db_path, walk up parent dirs to find a wxid_* directory,
+    then return its parent (the wechat_data_dir).
+
+    Returns empty string if the path isn't in a standard WeChat layout.
+    """
+    try:
+        p = Path(db_path).resolve().parent
+        while p.parent != p:
+            if p.name.startswith("wxid_"):
+                return str(p.parent)
+            p = p.parent
+    except Exception:
+        pass
+    return ""
+
+
 def _write_onboarding_to_env(env_path):
     """Write accumulated onboarding data to .env file atomically (file-lock protected)."""
     from src.config import write_env_atomic
+
+    # If wechat_data_dir wasn't detected (e.g. manual input), try to infer
+    data_dir = _onboarding_data.get("wechat_data_dir", "")
+    if not data_dir:
+        db_path = _onboarding_data.get("db_path", "")
+        if db_path:
+            data_dir = _infer_data_dir_from_dbpath(db_path)
+
     env_map = {
         "AI_PROVIDER_BASE_URL": _onboarding_data.get("ai_provider_base_url", ""),
         "AI_PROVIDER_API_KEY": _onboarding_data.get("ai_provider_api_key", ""),
@@ -161,6 +189,9 @@ def _write_onboarding_to_env(env_path):
         "WECHAT_BACKEND": _onboarding_data.get("wechat_backend", "wcdb"),
         "MEMORY_CONSOLIDATION_ENABLED": str(_onboarding_data.get("memory_consolidation_enabled", False)).lower(),
         "WCDB_KEY": _onboarding_data.get("key", ""),
+        "WXID": _onboarding_data.get("wxid", ""),
+        "DB_PATH": _onboarding_data.get("db_path", ""),
+        "WECHAT_DATA_DIR": data_dir,
         "ONBOARDING_DONE": "true",
     }
     # Filter out None values
@@ -192,12 +223,13 @@ def _run_step1_extraction():
                                on_progress=_on_progress)
 
         if key:
-            wxid, db_path = _detect_wxid_and_db_path()
+            wxid, db_path, base_dir = _detect_wxid_and_db_path()
             with _onboarding_lock:
                 _onboarding_data["step1_done"] = True
                 _onboarding_data["key"] = key
                 _onboarding_data["wxid"] = wxid or ""
                 _onboarding_data["db_path"] = db_path or ""
+                _onboarding_data["wechat_data_dir"] = base_dir or ""
 
             # Persist the key to .env immediately so the bot can use it
             # on restart without needing to complete the full onboarding flow.
@@ -955,7 +987,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
         # Extract path without query params
         post_path = self.path.split("?")[0] if "?" in self.path else self.path
 
-        if post_path in ("/api/config", "/api/config/import", "/api/start", "/api/stop",
+        if post_path in ("/api/config", "/api/config/import", "/api/config/test-connection", "/api/start", "/api/stop",
                          "/api/nicknames",
                          "/api/onboarding/reset",
                          "/api/onboarding/step1", "/api/onboarding/step2",
@@ -1078,6 +1110,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "memory_consolidation_enabled": raw.get("MEMORY_CONSOLIDATION_ENABLED", "false").lower() == "true",
                     "log_level": raw.get("LOG_LEVEL", "INFO"),
                     "wechat_data_dir": raw.get("WECHAT_DATA_DIR", ""),
+                    "wxid": raw.get("WXID", ""),
+                    "db_path": raw.get("DB_PATH", ""),
+                    "has_key": bool(raw.get("WCDB_KEY", "")),
                 },
                 "detected_data_dir": _detect_default_data_dir(),
             })
@@ -1139,6 +1174,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         "MEMORY_CONSOLIDATION_ENABLED": str(config.get("memory_consolidation_enabled", False)).lower(),
                         "LOG_LEVEL": config.get("log_level"),
                         "WECHAT_DATA_DIR": config.get("wechat_data_dir"),
+                        "WCDB_KEY": config.get("wcdb_key"),
+                        "WXID": config.get("wxid"),
+                        "DB_PATH": config.get("db_path"),
                     }
                     seen = set()
                     for line in lines:
@@ -1167,6 +1205,106 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     })
             except Exception as e:
                 logger.exception("Failed to save config")
+                self.send_json({"ok": False, "error": str(e)})
+            return
+
+        # ── API: Test connection (credential validation) ────────────────
+        if self.path == "/api/config/test-connection":
+            content_len = min(int(self.headers.get("Content-Length", 0)), self.MAX_BODY_SIZE)
+            body = self.rfile.read(content_len) if content_len else b"{}"
+            try:
+                data = json.loads(body)
+                # Use provided values or fall back to current .env
+                env_path = _find_or_create_env()
+                raw = {}
+                if env_path.exists():
+                    for line in env_path.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            raw[k.strip()] = v.strip()
+
+                key = data.get("key") or raw.get("WCDB_KEY", "")
+                wxid = data.get("wxid") or raw.get("WXID", "")
+                db_path = data.get("db_path") or raw.get("DB_PATH", "")
+
+                checks = {}
+
+                # 1. Key format
+                if key and (len(key) != 64 or not all(c in "0123456789abcdefABCDEF" for c in key)):
+                    checks["key_format"] = {"ok": False, "message": "密钥不是有效的64位十六进制字符串"}
+                elif not key:
+                    checks["key_format"] = {"ok": False, "message": "密钥未配置"}
+                else:
+                    checks["key_format"] = {"ok": True}
+
+                # 2. wxid format
+                if wxid and not wxid.startswith("wxid_"):
+                    checks["wxid_format"] = {"ok": False, "message": "账号标识应以 wxid_ 开头"}
+                elif not wxid:
+                    checks["wxid_format"] = {"ok": False, "message": "账号标识未配置"}
+                else:
+                    checks["wxid_format"] = {"ok": True}
+
+                # 3. db_path existence
+                if db_path:
+                    p = Path(db_path)
+                    if not p.exists():
+                        checks["db_path_exists"] = {"ok": False, "message": f"文件不存在: {db_path}"}
+                    elif not p.is_file():
+                        checks["db_path_exists"] = {"ok": False, "message": f"路径不是文件: {db_path}"}
+                    else:
+                        checks["db_path_exists"] = {"ok": True}
+                else:
+                    checks["db_path_exists"] = {"ok": False, "message": "数据库路径未配置"}
+
+                # 4. Full WCDB connection test (only if bot is not running)
+                checks["wcdb_connect"] = {"ok": False, "message": "未执行（需保存后重启机器人以验证）"}
+                all_format_ok = all(v["ok"] for v in checks.values() if v is not None)
+                if all_format_ok and not _bot_control.is_running():
+                    try:
+                        from src.wechat.wcdb_client import WcdbNativeClient
+                        # Set env vars so WCDB client picks them up
+                        old_key = os.environ.get("WCDB_KEY", "")
+                        old_wxid = os.environ.get("WXID", "")
+                        old_db = os.environ.get("DB_PATH", "")
+                        os.environ["WCDB_KEY"] = key
+                        os.environ["WXID"] = wxid
+                        os.environ["DB_PATH"] = db_path
+                        try:
+                            client = WcdbNativeClient()
+                            client.init()
+                            client.open()
+                            sessions = client.get_sessions(limit=1)
+                            count = len(sessions) if isinstance(sessions, list) else 0
+                            client.close()
+                            checks["wcdb_connect"] = {
+                                "ok": True,
+                                "message": f"连接成功，已检测到 {count} 个会话",
+                            }
+                        except Exception as e:
+                            err_msg = str(e)
+                            # Map common errors
+                            if "session.db not found" in err_msg:
+                                err_msg = "数据库路径有误：未找到 session.db"
+                            elif "wcdb_open_account" in err_msg.lower():
+                                err_msg = "WCDB 连接失败：密钥与数据库不匹配"
+                            elif "wcdb_init" in err_msg.lower():
+                                err_msg = "WCDB 引擎初始化失败"
+                            checks["wcdb_connect"] = {"ok": False, "message": err_msg}
+                        finally:
+                            os.environ["WCDB_KEY"] = old_key
+                            os.environ["WXID"] = old_wxid
+                            os.environ["DB_PATH"] = old_db
+                    except Exception as e:
+                        checks["wcdb_connect"] = {"ok": False, "message": f"连接测试异常: {e}"}
+
+                overall_ok = all(v["ok"] for v in checks.values() if v is not None)
+                self.send_json({
+                    "ok": overall_ok,
+                    "checks": checks,
+                })
+            except Exception as e:
                 self.send_json({"ok": False, "error": str(e)})
             return
 
@@ -1559,7 +1697,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             with _onboarding_lock:
                 db_path = _onboarding_data.get("db_path")
             if not db_path:
-                _, detected_db = _detect_wxid_and_db_path()
+                _, detected_db, _ = _detect_wxid_and_db_path()
                 if detected_db:
                     db_path = detected_db
 
