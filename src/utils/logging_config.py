@@ -32,9 +32,16 @@ def setup_logging(level: str = "INFO", log_file: str | None = None) -> None:
     # Remove existing handlers to avoid duplicates on reload
     root_logger.handlers.clear()
 
-    # Console handler
+    # Console handler — use UTF-8 with 'replace' to handle emoji
+    # that cannot be encoded in the system default codepage (GBK on zh-CN).
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(logging.Formatter(fmt, datefmt))
+    try:
+        console_handler.stream = open(
+            sys.stdout.fileno(), mode="w", encoding="utf-8", errors="replace", closefd=False
+        )
+    except Exception:
+        pass  # Fallback: keep default stream
     root_logger.addHandler(console_handler)
 
     # File handler (optional, with rotation)
