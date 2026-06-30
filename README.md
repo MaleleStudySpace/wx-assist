@@ -118,6 +118,16 @@ python desktop.py
 
 首次启动进入引导流程，按提示操作即可。
 
+**本地构建 EXE**
+
+在快速开始的基础上，额外执行：
+
+```powershell
+pyinstaller build.spec --noconfirm
+```
+
+产物位于 `dist/wx-assist.exe`，双击即可运行。
+
 ## 致谢
 
 本项目在 AI 辅助编程下完成，底层实现参考了多个优秀开源项目。在此对以下前辈及开源贡献者表示最诚挚的感谢：
