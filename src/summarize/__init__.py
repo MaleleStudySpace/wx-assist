@@ -84,7 +84,10 @@ def create_summarizer(config) -> AbstractSummarizer:
                 extra_body=extra_body,
             )
 
-    raise ValueError(
-        "AI_PROVIDER_BASE_URL 和 AI_PROVIDER_API_KEY 未设置。"
-        "请在 .env 或 Web 仪表盘中配置 AI 提供商。"
+    # No AI configured — return a stub that logs warnings instead of crashing
+    logger.warning(
+        "AI_PROVIDER_BASE_URL / AI_PROVIDER_API_KEY 未配置，"
+        "AI 功能不可用。其他功能正常运行。"
     )
+    from .stub_backend import StubSummarizer
+    return StubSummarizer()
