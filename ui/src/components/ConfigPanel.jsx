@@ -498,7 +498,7 @@ function DataPathSection({ form, update, detectedDataDir }) {
   // ── Detect API ────────────────────────────────────────────────
 
   async function handleDetect() {
-    const path = (form.wechat_data_dir || '').trim()
+    const path = (typeof form.wechat_data_dir === 'string' ? form.wechat_data_dir : '').trim()
     if (!path) {
       setDetectError('请先输入或选择目录路径')
       setTimeout(() => setDetectError(''), 4000)
@@ -527,7 +527,7 @@ function DataPathSection({ form, update, detectedDataDir }) {
     setDetecting(false)
   }
 
-  const hasCustomPath = (form.wechat_data_dir || '').trim().length > 0
+  const hasCustomPath = (typeof form.wechat_data_dir === 'string' ? form.wechat_data_dir : '').trim().length > 0
 
   return (
     <div>
@@ -538,7 +538,7 @@ function DataPathSection({ form, update, detectedDataDir }) {
             <input
               type="text"
               value={form.wechat_data_dir || ''}
-              onChange={v => { update('wechat_data_dir', v); setDetectResult(null) }}
+              onChange={e => { update('wechat_data_dir', e.target.value); setDetectResult(null) }}
               placeholder={detectedDataDir || '自动检测中...'}
               className="w-full bg-bg-raised border border-border-main rounded-full pl-5 pr-5 py-2.5 text-[14px] text-text-main
                          placeholder:text-text-muted font-mono tabular-nums

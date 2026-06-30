@@ -196,7 +196,15 @@ def _find_wxid_and_dbpath(custom_base_dir: str = ""):
             )
 
     # 2. Default auto-detection paths
-    documents = Path.home() / "Documents"
+    # Use Windows known-folder API to get the real Documents path
+    # (users may have relocated Documents to D:\ etc.)
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        ctypes.windll.shell32.SHGetFolderPathW(0, 5, 0, 0, buf)  # CSIDL_PERSONAL = 5
+        documents = Path(buf.value)
+    except Exception:
+        documents = Path.home() / "Documents"
     for default_base in (documents / "xwechat_files", documents / "WeChat Files"):
         if default_base not in candidates:
             candidates.append(default_base)
@@ -226,8 +234,10 @@ def _find_wxid_and_dbpath(custom_base_dir: str = ""):
                 return wxid, str(base)
 
     raise FileNotFoundError(
-        "Cannot find WeChat data directory. Make sure WeChat is installed "
-        "and you have logged in at least once."
+        "未找到微信数据目录。可能原因：\n"
+        "1. 微信未安装或未登录过；\n"
+        "2. 微信数据目录不在默认位置（如已迁移到其他盘）。\n"
+        "请在系统配置 → 数据路径中手动指定微信数据目录（即包含 wxid_* 文件夹的父目录）。"
     )
 
 
