@@ -301,7 +301,7 @@ def load_config() -> BotConfig:
         "wechat_backend": os.getenv("WECHAT_BACKEND", "wcdb").strip(),
         "wechat_data_dir": os.getenv("WECHAT_DATA_DIR", "").strip(),
         "admin_wxid": os.getenv("ADMIN_WXID", "").strip(),
-        "db_path": os.getenv("DB_PATH", "data/messages.db").strip(),
+        "db_path": os.getenv("LOCAL_DB_PATH", "data/messages.db").strip(),
         "poll_interval_sec": float(os.getenv("POLL_INTERVAL_SEC", "1.0")),
         "chunk_size": int(os.getenv("CHUNK_SIZE", "400")),
         "enable_restricted_features": os.getenv("ENABLE_RESTRICTED_FEATURES", "false").strip().lower() == "true",
