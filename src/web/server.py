@@ -1434,12 +1434,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             break
                 groups_raw = _decode_wechat_groups(groups_raw)
 
-                db_path = "data/messages.db"
-                if env_path and env_path.exists():
-                    for line in env_path.read_text(encoding="utf-8").splitlines():
-                        if line.strip().startswith("DB_PATH="):
-                            db_path = line.strip().split("=", 1)[1].strip().strip('"').strip("'")
-                            break
+                # Use LOCAL_DB_PATH (via config.db_path) for the local messages DB.
+                # DB_PATH in .env points to WeChat's encrypted session DB —
+                # cannot be opened with plain sqlite3.
+                from src.config import load_config
+                db_path = load_config().db_path
 
                 conn = sqlite3.connect(db_path)
                 conn.row_factory = sqlite3.Row
