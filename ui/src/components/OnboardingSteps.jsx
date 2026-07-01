@@ -391,7 +391,7 @@ export function Step1Prepare({ data, updateData, onDone }) {
                 placeholder="例如：wxid_xxxxxxxxxxxxxx"
               />
             </Field>
-            <Field label="聊天数据库路径 (db_path)" hint="微信设置 → 账号与存储 → 存储位置">
+            <Field label="聊天数据库路径 (db_path)" hint="微信设置 → 账号与存储 → 存储位置 → 数据目录下的 db_storage/session/">
               <div className="flex items-center gap-2">
                 <Input
                   value={manualDbPath}
@@ -975,7 +975,7 @@ export function Step2DataDir({ data, updateData, onDone }) {
         )}
 
         {/* Data dir input + browse + detect */}
-        <Field label="微信数据目录" hint="包含 wxid_* 文件夹的父目录路径">
+        <Field label="微信数据目录" hint="微信设置 → 账号与存储 → 存储位置">
           <div className="flex items-start gap-2">
             <div className="flex-1 relative">
               <input
