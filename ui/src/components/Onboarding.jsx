@@ -170,13 +170,15 @@ export default function Onboarding({ onComplete }) {
               </span>
             </div>
 
-            {/* Skip onboarding — persists only for this session */}
-            <button
-              onClick={onComplete}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-full text-xs font-medium border border-border-main bg-bg-raised text-text-muted hover:text-text-main hover:border-text-muted/30 transition-all cursor-pointer"
-            >
-              跳过引导 · 直接使用
-            </button>
+            {/* Skip onboarding — only shown after Step 2 is done (Step 1 & 2 are required) */}
+            {(stepDone[2] || activeStep >= 3) && (
+              <button
+                onClick={onComplete}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-full text-xs font-medium border border-border-main bg-bg-raised text-text-muted hover:text-text-main hover:border-text-muted/30 transition-all cursor-pointer"
+              >
+                跳过引导 · 直接使用
+              </button>
+            )}
           </div>
         </div>
       </div>

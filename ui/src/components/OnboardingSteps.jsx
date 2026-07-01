@@ -602,10 +602,46 @@ export function Step2DataDir({ data, updateData, onDone }) {
   }
 
   function navigateUp() {
+    // If at drive root (e.g. "C:\"), go back to drive list
+    if (/^[A-Z]:\\$/.test(browsePath) || /^[A-Z]:$/.test(browsePath)) {
+      setBrowsePath('')
+      setBrowseEntries([])
+      loadDriveList()
+      return
+    }
     const parent = browsePath.split('\\').slice(0, -1).join('\\')
-    if (parent.length >= 1) {
+    if (parent.length >= 2) {
       loadBrowseDir(parent)
     }
+  }
+
+  async function loadDriveList() {
+    setBrowseLoading(true)
+    setBrowseError('')
+    try {
+      const res = await fetch(`${API}/api/browse`)
+      const d = await res.json()
+      if (d.ok && d.entries?.length > 0) {
+        setBrowsePath('')
+        setBrowseInput('')
+        setBrowseEntries(d.entries)
+      } else {
+        // Fallback: construct drive list from common drives
+        const drives = []
+        for (const letter of ['C', 'D', 'E', 'F', 'G']) {
+          drives.push({ name: `${letter}:`, path: `${letter}:\\`, is_dir: true })
+        }
+        setBrowseEntries(drives)
+      }
+    } catch {
+      // Fallback drive list
+      const drives = []
+      for (const letter of ['C', 'D', 'E', 'F', 'G']) {
+        drives.push({ name: `${letter}:`, path: `${letter}:\\`, is_dir: true })
+      }
+      setBrowseEntries(drives)
+    }
+    setBrowseLoading(false)
   }
 
   function navigateTo(entryPath) {

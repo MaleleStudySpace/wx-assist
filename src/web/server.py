@@ -1163,6 +1163,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "wxid": raw.get("WXID", ""),
                     "db_path": raw.get("DB_PATH", ""),
                     "has_key": bool(raw.get("WCDB_KEY", "")),
+                    "key_preview": raw.get("WCDB_KEY", ""),
                 },
                 "detected_data_dir": _detect_default_data_dir(),
             })

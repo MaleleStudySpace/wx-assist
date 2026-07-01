@@ -426,6 +426,7 @@ function CredentialsSection({ form, update }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState({ wxid: '', db_path: '', wcdb_key: '' })
   const [keyVisible, setKeyVisible] = useState(false)
+  const [viewKeyVisible, setViewKeyVisible] = useState(false)
   const [testResult, setTestResult] = useState(null)
   const [testLoading, setTestLoading] = useState(false)
 
@@ -540,7 +541,14 @@ function CredentialsSection({ form, update }) {
             </div>
           ) : (
             <div className="flex items-center gap-2 text-sm font-mono bg-bg-raised border border-border-main rounded-full px-4 py-2 text-text-main/70">
-              <span>{form.has_key ? '••••••••••••••••' : '—'}</span>
+              <span>{form.has_key ? (viewKeyVisible ? form.key_preview : '••••••••••••••••') : '—'}</span>
+              {form.has_key && (
+                <button
+                  onClick={() => setViewKeyVisible(!viewKeyVisible)}
+                  className="shrink-0 p-1 text-text-muted hover:text-text-main transition-colors cursor-pointer ml-auto"
+                  title={viewKeyVisible ? '隐藏密钥' : '显示密钥'}
+                >{viewKeyVisible ? '🙈' : '👁'}</button>
+              )}
             </div>
           )}
           {editing && draft.wcdb_key && !keyFormatOk && (
@@ -708,8 +716,13 @@ function DataPathSection({ form, update, detectedDataDir }) {
   }
 
   function navigateUp() {
+    // If at drive root (e.g. "C:\"), go back to drive list
+    if (/^[A-Z]:\\$/.test(browsePath) || /^[A-Z]:$/.test(browsePath)) {
+      loadBrowseDir('')
+      return
+    }
     const parent = browsePath.split('\\').slice(0, -1).join('\\')
-    if (parent.length >= 1) {
+    if (parent.length >= 2) {
       loadBrowseDir(parent)
     }
   }
@@ -1836,7 +1849,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
     ai_provider_type: 'auto', ai_provider_model: '',
     wechat_backend: 'wcdb', wechat_groups: '*',
     log_level: 'INFO', wechat_data_dir: '',
-    wxid: '', db_path: '', has_key: false, wcdb_key: '',
+    wxid: '', db_path: '', has_key: false, key_preview: '', wcdb_key: '',
   })
 
   async function handleExportConfig() {
