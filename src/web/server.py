@@ -224,41 +224,78 @@ def _run_step1_extraction():
 
         if key:
             wxid, db_path, base_dir = _detect_wxid_and_db_path()
-            with _onboarding_lock:
-                _onboarding_data["step1_done"] = True
-                _onboarding_data["key"] = key
-                _onboarding_data["wxid"] = wxid or ""
-                _onboarding_data["db_path"] = db_path or ""
-                _onboarding_data["wechat_data_dir"] = base_dir or ""
 
-            # Persist the key + detected paths to .env immediately so the bot
-            # can use them on restart without needing to complete the full
-            # onboarding flow.
+            # Persist the key to .env immediately so the bot can use it
+            # on restart without needing to complete the full onboarding flow.
             env_path = _find_or_create_env()
             _set_env_key(env_path, "WCDB_KEY", key)
-            if wxid:
-                _set_env_key(env_path, "WXID", wxid)
-            if db_path:
-                _set_env_key(env_path, "DB_PATH", db_path)
-            if base_dir:
-                _set_env_key(env_path, "WECHAT_DATA_DIR", base_dir)
-            # Also set in the current process for load_dotenv in this session
             import os as _os
             _os.environ["WCDB_KEY"] = key
-            if wxid:
-                _os.environ["WXID"] = wxid
-            if db_path:
-                _os.environ["DB_PATH"] = db_path
-            if base_dir:
-                _os.environ["WECHAT_DATA_DIR"] = base_dir
-            # Clear the KEY_MISSING error so it doesn't reappear on page refresh
-            update_status(error="")
 
-            with _step1_lock:
-                _step1_state["phase"] = "done"
-                _step1_state["message"] = "密钥获取成功"
-                _step1_state["result"] = {"key": key, "wxid": wxid or "", "db_path": db_path or ""}
-                _step1_state["running"] = False
+            # Check if wxid/db_path auto-detection succeeded
+            skip_step2 = False
+            if wxid and db_path:
+                # Auto-detection succeeded: derive wechat_data_dir if missing
+                if not base_dir:
+                    base_dir = _infer_data_dir_from_dbpath(db_path)
+
+                # Save all detected paths to .env
+                _set_env_key(env_path, "WXID", wxid)
+                _set_env_key(env_path, "DB_PATH", db_path)
+                if base_dir:
+                    _set_env_key(env_path, "WECHAT_DATA_DIR", base_dir)
+                    _os.environ["WECHAT_DATA_DIR"] = base_dir
+                if wxid:
+                    _os.environ["WXID"] = wxid
+                if db_path:
+                    _os.environ["DB_PATH"] = db_path
+
+                # Mark Step 2 as skippable (data dir auto-detected)
+                skip_step2 = True
+
+                # Update onboarding data
+                with _onboarding_lock:
+                    _onboarding_data["step1_done"] = True
+                    _onboarding_data["key"] = key
+                    _onboarding_data["wxid"] = wxid or ""
+                    _onboarding_data["db_path"] = db_path or ""
+                    _onboarding_data["wechat_data_dir"] = base_dir or ""
+
+                # Clear the KEY_MISSING error so it doesn't reappear on page refresh
+                update_status(error="")
+
+                with _step1_lock:
+                    _step1_state["phase"] = "done"
+                    _step1_state["message"] = "密钥获取成功"
+                    _step1_state["result"] = {
+                        "key": key,
+                        "wxid": wxid or "",
+                        "db_path": db_path or "",
+                        "wechat_data_dir": base_dir or "",
+                        "skip_step2": skip_step2
+                    }
+                    _step1_state["running"] = False
+            else:
+                # Auto-detection failed (wxid/db_path not found)
+                # User will need to configure data dir in Step 2
+                with _onboarding_lock:
+                    _onboarding_data["step1_done"] = True
+                    _onboarding_data["key"] = key
+                    _onboarding_data["wxid"] = ""
+                    _onboarding_data["db_path"] = ""
+                    _onboarding_data["wechat_data_dir"] = ""
+
+                with _step1_lock:
+                    _step1_state["phase"] = "done_need_step2"
+                    _step1_state["message"] = "密钥获取成功，请配置数据目录"
+                    _step1_state["result"] = {
+                        "key": key,
+                        "wxid": "",
+                        "db_path": "",
+                        "wechat_data_dir": "",
+                        "skip_step2": skip_step2  # False
+                    }
+                    _step1_state["running"] = False
         else:
             with _step1_lock:
                 _step1_state["phase"] = "timeout"
@@ -1770,7 +1807,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             self.send_json(s)
             return
 
-        # ── API: Onboarding step 2 - WeChat identity ──────────────────
+        # ── API: Onboarding step 2 - Data directory config ─────────────
         if self.path == "/api/onboarding/step2":
             content_len = min(int(self.headers.get("Content-Length", 0)), self.MAX_BODY_SIZE)
             body = self.rfile.read(content_len) if content_len else b"{}"
@@ -1780,7 +1817,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 with _onboarding_lock:
                     _onboarding_data["step2_done"] = True
                     _onboarding_data["wechat_backend"] = data.get("wechat_backend", "wcdb")
-                    # Save wxid/db_path/key to .env immediately
+
+                    # Save key/wxid/db_path if provided (backward compat)
                     wxid = data.get("wxid", "").strip()
                     db_path = data.get("db_path", "").strip()
                     key = data.get("key", "").strip()
@@ -1793,6 +1831,26 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     if key:
                         _onboarding_data["key"] = key
                         _set_env_key(env_path, "WCDB_KEY", key)
+
+                    # New: accept wechat_data_dir and auto-derive wxid/db_path
+                    wechat_data_dir = data.get("wechat_data_dir", "").strip()
+                    if wechat_data_dir:
+                        _onboarding_data["wechat_data_dir"] = wechat_data_dir
+                        _set_env_key(env_path, "WECHAT_DATA_DIR", wechat_data_dir)
+
+                        # Auto-derive wxid/db_path from wechat_data_dir
+                        import os as _os
+                        _os.environ["WECHAT_DATA_DIR"] = wechat_data_dir
+                        derived_wxid, derived_db_path, _ = _detect_wxid_and_db_path()
+                        if derived_wxid:
+                            _onboarding_data["wxid"] = derived_wxid
+                            _set_env_key(env_path, "WXID", derived_wxid)
+                            _os.environ["WXID"] = derived_wxid
+                        if derived_db_path:
+                            _onboarding_data["db_path"] = derived_db_path
+                            _set_env_key(env_path, "DB_PATH", derived_db_path)
+                            _os.environ["DB_PATH"] = derived_db_path
+
                     import os as _os
                     if wxid:
                         _os.environ["WXID"] = wxid
@@ -1800,7 +1858,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         _os.environ["DB_PATH"] = db_path
                     if key:
                         _os.environ["WCDB_KEY"] = key
-                self.send_json({"ok": True})
+
+                self.send_json({
+                    "ok": True,
+                    "wxid": _onboarding_data.get("wxid", ""),
+                    "db_path": _onboarding_data.get("db_path", ""),
+                })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)})
             return

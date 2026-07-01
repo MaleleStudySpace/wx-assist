@@ -1,16 +1,19 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle, Spinner, Lock, Sun, Moon } from '@phosphor-icons/react'
-import { Step1Prepare, Step3AIConfig, Step4Features } from './OnboardingSteps'
+import { Step1Prepare, Step2DataDir, Step3AIConfig, Step4Features } from './OnboardingSteps'
 
 const iconVariants = {
   hover: { y: -1.5, scale: 1.05, transition: { type: 'spring', stiffness: 300, damping: 15 } }
 }
 
-const STEPS = [
-  { id: 1, label: '环境诊断与连接', desc: '诊断系统 & 获取/输入连接凭证' },
-  { id: 2, label: 'AI 后端', desc: '配置 AI 服务' },
-  { id: 3, label: '功能设置', desc: '选择功能开关' },
+// Steps are defined dynamically — Step 2 may be skipped if wxid/db_path
+// auto-detection succeeds in Step 1.
+const ALL_STEPS = [
+  { id: 1, label: '环境诊断与连接', desc: '诊断系统 & 获取连接凭证' },
+  { id: 2, label: '数据目录配置', desc: '指定微信数据目录' },
+  { id: 3, label: 'AI 后端', desc: '配置 AI 服务' },
+  { id: 4, label: '功能设置', desc: '选择功能开关' },
 ]
 
 const pageTransition = {
@@ -21,7 +24,10 @@ const pageTransition = {
 
 export default function Onboarding({ onComplete }) {
   const [activeStep, setActiveStep] = useState(1)
-  const [stepDone, setStepDone] = useState({ 1: false, 2: false, 3: false })
+  const [stepDone, setStepDone] = useState({ 1: false, 2: false, 3: false, 4: false })
+  // Whether Step 2 (data dir config) should be shown.
+  // Set to false when Step 1 auto-detects wxid/db_path successfully.
+  const [showStep2, setShowStep2] = useState(true)
 
   // Onboarding manages its local storage theme state as well
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark')
@@ -37,8 +43,8 @@ export default function Onboarding({ onComplete }) {
 
   const [data, setData] = useState({
     // Step 1
-    key: '', wxid: '', db_path: '',
-    // Step 2
+    key: '', wxid: '', db_path: '', wechat_data_dir: '',
+    // Step 3
     ai_provider_base_url: '', ai_provider_api_key: '', ai_provider_type: 'auto', ai_provider_model: '',
   })
 
@@ -46,9 +52,37 @@ export default function Onboarding({ onComplete }) {
     setData(prev => ({ ...prev, ...updates }))
   }
 
-  function markDone(step) {
-    setStepDone(prev => ({ ...prev, [step]: true }))
-    if (step < 3) setActiveStep(step + 1)
+  // Build the visible steps list based on showStep2
+  const steps = showStep2 ? ALL_STEPS : ALL_STEPS.filter(s => s.id !== 2)
+
+  // Map logical step IDs to sequential display indices
+  function getStepIndex(stepId) {
+    return steps.findIndex(s => s.id === stepId)
+  }
+
+  function markDone(stepId) {
+    setStepDone(prev => ({ ...prev, [stepId]: true }))
+
+    // Determine the next step
+    const currentIdx = getStepIndex(stepId)
+    if (currentIdx < steps.length - 1) {
+      setActiveStep(steps[currentIdx + 1].id)
+    }
+  }
+
+  // Called by Step1 when it knows whether to skip Step 2
+  function handleStep1Done(skipStep2) {
+    if (skipStep2) {
+      // wxid/db_path auto-detected — skip Step 2
+      setShowStep2(false)
+      setStepDone(prev => ({ ...prev, 1: true, 2: true }))
+      // Go directly to Step 3 (AI config)
+      setActiveStep(3)
+    } else {
+      // Need Step 2 for data dir config
+      setShowStep2(true)
+      markDone(1)
+    }
   }
 
   return (
@@ -69,10 +103,10 @@ export default function Onboarding({ onComplete }) {
             </div>
 
             <nav className="space-y-1">
-              {STEPS.map(({ id, label, desc }) => {
+              {steps.map(({ id, label, desc }, idx) => {
                 const done = stepDone[id]
                 const active = activeStep === id
-                const locked = !done && !active && !stepDone[id - 1]
+                const locked = !done && !active && (idx > 0 && !stepDone[steps[idx - 1]?.id])
 
                 return (
                   <div key={id}>
@@ -159,12 +193,15 @@ export default function Onboarding({ onComplete }) {
           <AnimatePresence mode="wait">
             <motion.div key={activeStep} variants={pageTransition} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.18 }}>
               {activeStep === 1 && (
-                <Step1Prepare data={data} updateData={updateData} onDone={() => markDone(1)} />
+                <Step1Prepare data={data} updateData={updateData} onDone={handleStep1Done} />
               )}
-              {activeStep === 2 && (
-                <Step3AIConfig data={data} updateData={updateData} onDone={() => markDone(2)} />
+              {activeStep === 2 && showStep2 && (
+                <Step2DataDir data={data} updateData={updateData} onDone={() => markDone(2)} />
               )}
               {activeStep === 3 && (
+                <Step3AIConfig data={data} updateData={updateData} onDone={() => markDone(3)} />
+              )}
+              {activeStep === 4 && (
                 <Step4Features data={data} updateData={updateData} onComplete={onComplete} />
               )}
             </motion.div>
