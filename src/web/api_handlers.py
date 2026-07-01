@@ -1314,8 +1314,27 @@ def handle_fav_export(params, config: AssistantConfig):
         search_kw = (params.get("search", [""])[0] or "")
         date_range = (params.get("date_range", [""])[0] or "")
 
-        # Fetch items
-        items_raw = reader.get_items(limit=5000)
+        # Fetch items — with fallback for oversized content
+        try:
+            items_raw = reader.get_items(limit=5000)
+        except Exception as e:
+            logger.error("Batch read favorites for export failed: %s, falling back to per-item load", e)
+            safe_sql = (
+                "SELECT local_id, type, update_time, fromusr "
+                "FROM fav_db_item ORDER BY update_time DESC LIMIT 5000"
+            )
+            safe_rows = reader._exec(safe_sql) or []
+            items_raw = []
+            for r in safe_rows:
+                item = reader._parse_fav_row(r)
+                lid = r["local_id"]
+                try:
+                    full = reader.get_by_id(lid)
+                    if full:
+                        item.update(full)
+                except Exception:
+                    logger.warning("Fav content load failed for local_id=%s in export", lid)
+                items_raw.append(item)
         items = [_resolve_fav_item_for_export(it) for it in items_raw]
 
         # Build tag mapping (same as handle_fav_list) for tag filtering

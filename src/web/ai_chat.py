@@ -277,8 +277,24 @@ def _build_favorites_context(tag_id: str | None = None,
     try:
         items = reader.get_items(limit=5000)
     except Exception as e:
-        logger.error("Failed to read favorites: %s", e)
-        return "", 0
+        logger.error("Batch read favorites failed: %s, falling back to per-item load", e)
+        # Fallback: query metadata without content (always safe), then load content per-item
+        safe_sql = (
+            "SELECT local_id, type, update_time, fromusr "
+            "FROM fav_db_item ORDER BY update_time DESC LIMIT 5000"
+        )
+        safe_rows = reader._exec(safe_sql) or []
+        items = []
+        for r in safe_rows:
+            item = reader._parse_fav_row(r)
+            lid = r["local_id"]
+            try:
+                full = reader.get_by_id(lid)
+                if full:
+                    item.update(full)
+            except Exception:
+                logger.warning("Fav content load failed for local_id=%s in AI context", lid)
+            items.append(item)
 
     # ── Tag filter ──
     if tag_id:
