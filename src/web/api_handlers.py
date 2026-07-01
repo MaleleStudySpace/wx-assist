@@ -625,8 +625,8 @@ def _extract_fav_image_info(item: dict) -> list[dict]:
         for img in image_list:
             dataurl = img.get("dataurl")
             if dataurl:
-                # Protobuf CDN URLs (306/307) — use local V2 cache decryption
-                if isinstance(dataurl, str) and (dataurl.startswith("306") or dataurl.startswith("307") or dataurl.startswith("306c") or dataurl.startswith("306b") or dataurl.startswith("306d") or dataurl.startswith("307c") or dataurl.startswith("307b")):
+                # Protobuf CDN URLs (305/306/307) — use local V2 cache decryption
+                if isinstance(dataurl, str) and dataurl.startswith(("305", "306", "307")):
                     images.append({"url": dataurl, "key": "v2_cache", "fullmd5": img.get("fullmd5"), "fullsize": img.get("fullsize")})
                 else:
                     images.append({"url": dataurl, "key": img.get("datakey", 0)})
@@ -639,7 +639,7 @@ def _extract_fav_image_info(item: dict) -> list[dict]:
         if isinstance(ic, dict):
             dataurl = ic.get("dataurl")
             if dataurl:
-                if isinstance(dataurl, str) and (dataurl.startswith("306") or dataurl.startswith("307") or dataurl.startswith("306c") or dataurl.startswith("306b") or dataurl.startswith("306d")):
+                if isinstance(dataurl, str) and dataurl.startswith(("305", "306", "307")):
                     images.append({"url": dataurl, "key": "v2_cache", "fullmd5": ic.get("fullmd5"), "fullsize": ic.get("fullsize")})
                 else:
                     images.append({"url": dataurl, "key": ic.get("datakey", 0)})
@@ -836,7 +836,7 @@ def _download_fav_media(items: list[dict], export_dir: str, broadcast=None) -> d
                     data = None
 
                     # V2 cache: use V2CacheManager (local .dat file decryption)
-                    if key == "v2_cache" or (isinstance(url, str) and url.startswith(("306", "307"))):
+                    if key == "v2_cache" or (isinstance(url, str) and url.startswith(("305", "306", "307"))):
                         data = _decrypt_fav_v2_media(int(item['id']), fullmd5, fullsize)
 
                     # CDN URL: use ISAAC-64 download_and_decrypt

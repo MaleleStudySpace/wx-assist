@@ -295,8 +295,8 @@ function FavCard({ item }) {
     const sizeParam = thumb ? 'thumb' : 'original'
     // Case 1: img object provided with url
     if (img?.url) {
-      // Protobuf-encoded CDN URLs (start with 306/307) — use local V2 cache decryption
-      if (img.url.startsWith('306') || img.url.startsWith('307')) {
+      // Protobuf-encoded CDN URLs (start with 305/306/307) — use local V2 cache decryption
+      if (img.url.startsWith('305') || img.url.startsWith('306') || img.url.startsWith('307')) {
         return `${API_BASE}/api/fav/image?id=${itemId}&size=${sizeParam}`
       }
       // Explicit v2_cache marker (from our API fix)
