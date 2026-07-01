@@ -429,17 +429,128 @@ function CredentialsSection({ form, update }) {
   const [viewKeyVisible, setViewKeyVisible] = useState(false)
   const [testResult, setTestResult] = useState(null)
   const [testLoading, setTestLoading] = useState(false)
+  // File picker state
+  const [filePickerOpen, setFilePickerOpen] = useState(false)
+  const [filePickerPath, setFilePickerPath] = useState('')
+  const [filePickerEntries, setFilePickerEntries] = useState([])
+  const [filePickerLoading, setFilePickerLoading] = useState(false)
+  const [filePickerError, setFilePickerError] = useState('')
+  const [filePickerInput, setFilePickerInput] = useState('')
+  const [filePickerDriveList, setFilePickerDriveList] = useState([])
+  const [selectedFile, setSelectedFile] = useState('')
 
   function startEdit() {
-    setDraft({ wxid: form.wxid || '', db_path: form.db_path || '', wcdb_key: '' })
+    setDraft({
+      wxid: form.wxid || '',
+      db_path: form.db_path || '',
+      wcdb_key: form.has_key ? (form.key_preview || '') : ''
+    })
     setEditing(true)
     setTestResult(null)
+    setKeyVisible(false) // 默认密文显示
   }
 
   function cancelEdit() {
     setEditing(false)
     setDraft({ wxid: '', db_path: '', wcdb_key: '' })
     setTestResult(null)
+  }
+
+  // ── File picker for db_path ──────────────────────────────────
+
+  function openFilePicker() {
+    const initialPath = draft.db_path ? draft.db_path.split('\\').slice(0, -1).join('\\') : ''
+    setFilePickerInput(initialPath)
+    setFilePickerOpen(true)
+    setSelectedFile('')
+    // Load drive list
+    if (!filePickerDriveList.length) {
+      fetch(`${API_BASE}/api/browse`).then(r => r.json()).then(d => {
+        if (d.ok && d.entries?.length > 0) setFilePickerDriveList(d.entries)
+        else {
+          const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+          setFilePickerDriveList(drives)
+        }
+      }).catch(() => {
+        const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+        setFilePickerDriveList(drives)
+      })
+    }
+    if (initialPath) {
+      loadFilePickerDir(initialPath)
+    } else {
+      loadFilePickerDriveList()
+    }
+  }
+
+  async function loadFilePickerDir(path) {
+    setFilePickerLoading(true)
+    setFilePickerError('')
+    try {
+      const params = path ? `?path=${encodeURIComponent(path)}` : ''
+      const res = await fetch(`${API_BASE}/api/browse${params}`)
+      const d = await res.json()
+      if (d.ok) {
+        setFilePickerPath(d.current_path || '')
+        setFilePickerInput(d.current_path || '')
+        setFilePickerEntries(d.entries || [])
+      } else {
+        setFilePickerError(d.error || '无法读取目录')
+      }
+    } catch {
+      setFilePickerError('无法连接到服务器')
+    }
+    setFilePickerLoading(false)
+  }
+
+  async function loadFilePickerDriveList() {
+    setFilePickerLoading(true)
+    setFilePickerError('')
+    setFilePickerPath('')
+    setFilePickerInput('')
+    try {
+      const res = await fetch(`${API_BASE}/api/browse`)
+      const d = await res.json()
+      if (d.ok && d.entries?.length > 0) {
+        setFilePickerDriveList(d.entries)
+        setFilePickerEntries(d.entries)
+      } else {
+        const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+        setFilePickerDriveList(drives)
+        setFilePickerEntries(drives)
+      }
+    } catch {
+      const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+      setFilePickerDriveList(drives)
+      setFilePickerEntries(drives)
+    }
+    setFilePickerLoading(false)
+  }
+
+  function filePickerNavigateUp() {
+    if (/^[A-Z]:\\?$/.test(filePickerPath.replace(/\\$/, ''))) {
+      loadFilePickerDriveList()
+      return
+    }
+    const parts = filePickerPath.split('\\').filter(Boolean)
+    if (parts.length > 1) {
+      loadFilePickerDir(parts.slice(0, -1).join('\\') + '\\')
+    }
+  }
+
+  function filePickerNavigateTo(entryPath) {
+    loadFilePickerDir(entryPath)
+  }
+
+  function filePickerSwitchDrive(drivePath) {
+    loadFilePickerDir(drivePath)
+  }
+
+  function selectFile() {
+    if (selectedFile) {
+      setDraft(prev => ({ ...prev, db_path: selectedFile }))
+    }
+    setFilePickerOpen(false)
   }
 
   function saveEdit() {
@@ -584,13 +695,22 @@ function CredentialsSection({ form, update }) {
         <div>
           <label className="text-xs text-text-muted block mb-1 font-medium">数据库路径</label>
           {editing ? (
-            <input
-              type="text"
-              value={draft.db_path}
-              onChange={e => setDraft(prev => ({ ...prev, db_path: e.target.value }))}
-              placeholder="例如 C:\Users\...\session.db"
-              className="w-full bg-bg-raised border border-border-main rounded-full pl-4 pr-3 py-2 text-sm font-mono text-text-main placeholder:text-text-muted/50 focus:outline-none focus:border-brand-green transition-colors"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={draft.db_path}
+                onChange={e => setDraft(prev => ({ ...prev, db_path: e.target.value }))}
+                placeholder="例如 C:\Users\...\session.db"
+                className="flex-1 bg-bg-raised border border-border-main rounded-full pl-4 pr-3 py-2 text-sm font-mono text-text-main placeholder:text-text-muted/50 focus:outline-none focus:border-brand-green transition-colors"
+              />
+              <button
+                type="button"
+                onClick={openFilePicker}
+                className="shrink-0 px-3 py-2 bg-bg-main border border-border-main rounded-full text-[13px] text-text-main font-medium hover:border-brand-green hover:text-brand-green-hover transition-colors cursor-pointer"
+              >
+                浏览...
+              </button>
+            </div>
           ) : (
             <div className="text-sm font-mono bg-bg-raised border border-border-main rounded-full px-4 py-2 text-text-main/70 truncate" title={form.db_path}>
               {form.db_path || '—'}
@@ -643,6 +763,137 @@ function CredentialsSection({ form, update }) {
           </div>
         )}
       </div>
+
+      {/* ── File Picker Modal for db_path ────────────────────────── */}
+      {filePickerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-main/60 backdrop-blur-sm" onClick={() => setFilePickerOpen(false)}>
+          <div
+            className="bg-bg-card border border-border-main rounded-2xl shadow-2xl w-[560px] max-h-[520px] flex flex-col overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-border-main/60">
+              <h4 className="text-sm font-semibold text-text-main">选择数据库文件</h4>
+              <button
+                type="button"
+                onClick={() => setFilePickerOpen(false)}
+                className="text-text-muted hover:text-text-main transition-colors cursor-pointer leading-none text-lg"
+              >&times;</button>
+            </div>
+
+            {/* Path input */}
+            <div className="px-5 py-3 border-b border-border-main/40">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={filePickerInput}
+                  onChange={e => setFilePickerInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); const t = filePickerInput.trim(); if (t) loadFilePickerDir(t) } }}
+                  placeholder="粘贴或输入路径，回车跳转..."
+                  className="flex-1 bg-bg-raised border border-border-main rounded-full px-4 py-2 text-[13px] text-text-main placeholder:text-text-muted font-mono
+                             focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/15 transition-all duration-200 hover:border-text-muted/30"
+                />
+                <button
+                  type="button"
+                  onClick={() => { const t = filePickerInput.trim(); if (t) loadFilePickerDir(t) }}
+                  disabled={!filePickerInput.trim()}
+                  className="shrink-0 px-4 py-2 bg-brand-green-light border border-brand-green/20 rounded-full text-[13px] text-brand-green-hover dark:text-brand-green font-semibold hover:bg-brand-green/10 transition-colors cursor-pointer disabled:opacity-40"
+                >跳转</button>
+              </div>
+            </div>
+
+            {/* Path breadcrumb */}
+            <div className="px-5 py-2.5 bg-bg-raised/50 border-b border-border-main/40">
+              <div className="flex items-center gap-1.5 text-xs font-mono text-text-muted">
+                <button
+                  type="button"
+                  onClick={filePickerNavigateUp}
+                  className="text-text-muted hover:text-text-main cursor-pointer transition-colors"
+                  title="上级目录"
+                >↑</button>
+                <span className="truncate">{filePickerPath || '此电脑'}</span>
+              </div>
+            </div>
+
+            {/* Entry list — shows files AND directories */}
+            <div className="flex-1 overflow-y-auto px-2 py-1.5">
+              {filePickerLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <svg className="animate-spin h-5 w-5 text-text-muted" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                </div>
+              ) : filePickerError ? (
+                <div className="p-4 text-xs text-status-error text-center">{filePickerError}</div>
+              ) : filePickerEntries.length === 0 ? (
+                <div className="p-4 text-xs text-text-muted text-center">此目录为空</div>
+              ) : (
+                filePickerEntries.map((entry, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => {
+                      if (entry.is_dir) {
+                        filePickerNavigateTo(entry.path)
+                      } else {
+                        setSelectedFile(entry.path)
+                      }
+                    }}
+                    className={`w-full text-left px-3 py-2 rounded-xl text-[13px] cursor-pointer flex items-center gap-2.5 font-mono transition-colors ${
+                      selectedFile === entry.path
+                        ? 'bg-brand-green-light text-brand-green-hover dark:text-brand-green'
+                        : 'text-text-main hover:bg-bg-raised'
+                    }`}
+                  >
+                    <span className="text-base shrink-0">{entry.is_dir ? '📁' : '📄'}</span>
+                    <span className="truncate">{entry.name}</span>
+                  </button>
+                ))
+              )}
+            </div>
+
+            {/* Footer with drive list */}
+            <div className="border-t border-border-main/60">
+              {filePickerDriveList.length > 0 && (
+                <div className="px-5 py-2 border-b border-border-main/30 flex items-center gap-1.5">
+                  <span className="text-[11px] text-text-muted mr-1">盘符:</span>
+                  {filePickerDriveList.map((drive, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => filePickerSwitchDrive(drive.path)}
+                      className={`px-2.5 py-1 rounded-md text-xs font-mono font-semibold transition-colors cursor-pointer ${
+                        filePickerPath && filePickerPath.startsWith(drive.path)
+                          ? 'bg-brand-green-light text-brand-green-hover dark:text-brand-green border border-brand-green/20'
+                          : 'bg-bg-raised text-text-muted hover:text-text-main border border-border-main/40'
+                      }`}
+                    >{drive.name}</button>
+                  ))}
+                </div>
+              )}
+              <div className="px-5 py-3.5 flex items-center justify-between">
+                <p className="text-xs text-text-muted truncate max-w-[300px] font-mono">
+                  {selectedFile ? `已选: ${selectedFile.split('\\').slice(-2).join('\\')}` : (filePickerPath || '此电脑')}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFilePickerOpen(false)}
+                    className="px-4 py-2 rounded-full border border-border-main bg-bg-main text-xs text-text-muted hover:text-text-main transition-colors cursor-pointer font-medium"
+                  >取消</button>
+                  <button
+                    type="button"
+                    onClick={selectFile}
+                    disabled={!selectedFile}
+                    className="px-4 py-2 rounded-full bg-brand-green-hover text-white text-xs font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                  >选择此文件</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -666,6 +917,7 @@ function DataPathSection({ form, update, detectedDataDir }) {
   const [browseLoading, setBrowseLoading] = useState(false)
   const [browseError, setBrowseError] = useState('')
   const [browseInput, setBrowseInput] = useState('')
+  const [driveList, setDriveList] = useState([])
   const [detectResult, setDetectResult] = useState(null)
   const [detecting, setDetecting] = useState(false)
   const [detectError, setDetectError] = useState('')
@@ -697,7 +949,52 @@ function DataPathSection({ form, update, detectedDataDir }) {
     const initialPath = form.wechat_data_dir || detectedDataDir || ''
     setBrowseInput(initialPath)
     setBrowseOpen(true)
-    loadBrowseDir(initialPath)
+    // Load drive list for the footer
+    if (!driveList.length) {
+      fetch(`${API_BASE}/api/browse`).then(r => r.json()).then(d => {
+        if (d.ok && d.entries?.length > 0) setDriveList(d.entries)
+        else {
+          const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+          setDriveList(drives)
+        }
+      }).catch(() => {
+        const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+        setDriveList(drives)
+      })
+    }
+    if (initialPath) {
+      loadBrowseDir(initialPath)
+    } else {
+      loadDriveList()
+    }
+  }
+
+  async function loadDriveList() {
+    setBrowseLoading(true)
+    setBrowseError('')
+    setBrowsePath('')
+    setBrowseInput('')
+    try {
+      const res = await fetch(`${API_BASE}/api/browse`)
+      const d = await res.json()
+      if (d.ok && d.entries?.length > 0) {
+        setDriveList(d.entries)
+        setBrowseEntries(d.entries)
+      } else {
+        const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+        setDriveList(drives)
+        setBrowseEntries(drives)
+      }
+    } catch {
+      const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+      setDriveList(drives)
+      setBrowseEntries(drives)
+    }
+    setBrowseLoading(false)
+  }
+
+  function switchToDrive(drivePath) {
+    loadBrowseDir(drivePath)
   }
 
   function handleBrowseGo() {
@@ -717,12 +1014,13 @@ function DataPathSection({ form, update, detectedDataDir }) {
 
   function navigateUp() {
     // If at drive root (e.g. "C:\"), go back to drive list
-    if (/^[A-Z]:\\$/.test(browsePath) || /^[A-Z]:$/.test(browsePath)) {
-      loadBrowseDir('')
+    if (/^[A-Z]:\\?$/.test(browsePath.replace(/\\$/, ''))) {
+      loadDriveList()
       return
     }
-    const parent = browsePath.split('\\').slice(0, -1).join('\\')
-    if (parent.length >= 2) {
+    const parts = browsePath.split('\\').filter(Boolean)
+    if (parts.length > 1) {
+      const parent = parts.slice(0, -1).join('\\') + '\\'
       loadBrowseDir(parent)
     }
   }
@@ -964,26 +1262,47 @@ function DataPathSection({ form, update, detectedDataDir }) {
               )}
             </div>
 
-            {/* Footer */}
-            <div className="px-5 py-3.5 border-t border-border-main/60 flex items-center justify-between">
-              <p className="text-xs text-text-muted truncate max-w-[340px] font-mono">
-                当前: {browsePath || '—'}
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setBrowseOpen(false)}
-                  className="px-4 py-2 rounded-full border border-border-main bg-bg-main text-xs text-text-muted hover:text-text-main transition-colors cursor-pointer font-medium"
-                >
-                  取消
-                </button>
-                <button
-                  type="button"
-                  onClick={selectCurrentPath}
-                  className="px-4 py-2 rounded-full bg-brand-green-hover text-white text-xs font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer"
-                >
-                  选择此目录
-                </button>
+            {/* Footer with drive list */}
+            <div className="border-t border-border-main/60">
+              {/* Drive list */}
+              {driveList.length > 0 && (
+                <div className="px-5 py-2 border-b border-border-main/30 flex items-center gap-1.5">
+                  <span className="text-[11px] text-text-muted mr-1">盘符:</span>
+                  {driveList.map((drive, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => switchToDrive(drive.path)}
+                      className={`px-2.5 py-1 rounded-md text-xs font-mono font-semibold transition-colors cursor-pointer ${
+                        browsePath && browsePath.startsWith(drive.path)
+                          ? 'bg-brand-green-light text-brand-green-hover dark:text-brand-green border border-brand-green/20'
+                          : 'bg-bg-raised text-text-muted hover:text-text-main border border-border-main/40'
+                      }`}
+                    >{drive.name}</button>
+                  ))}
+                </div>
+              )}
+              <div className="px-5 py-3.5 flex items-center justify-between">
+                <p className="text-xs text-text-muted truncate max-w-[340px] font-mono">
+                  当前: {browsePath || '此电脑'}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBrowseOpen(false)}
+                    className="px-4 py-2 rounded-full border border-border-main bg-bg-main text-xs text-text-muted hover:text-text-main transition-colors cursor-pointer font-medium"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={selectCurrentPath}
+                    disabled={!browsePath}
+                    className="px-4 py-2 rounded-full bg-brand-green-hover text-white text-xs font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                  >
+                    选择此目录
+                  </button>
+                </div>
               </div>
             </div>
           </div>

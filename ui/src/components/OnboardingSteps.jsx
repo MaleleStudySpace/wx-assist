@@ -487,6 +487,7 @@ export function Step2DataDir({ data, updateData, onDone }) {
   const [browseError, setBrowseError] = useState('')
   const [browseInput, setBrowseInput] = useState('')
   const [dataDir, setDataDir] = useState(data.wechat_data_dir || '')
+  const [driveList, setDriveList] = useState([])
 
   // Auto-detect on mount
   useEffect(() => {
@@ -583,7 +584,24 @@ export function Step2DataDir({ data, updateData, onDone }) {
     const initialPath = dataDir || ''
     setBrowseInput(initialPath)
     setBrowseOpen(true)
-    loadBrowseDir(initialPath || 'C:\\')
+    // Load drive list for the footer
+    if (!driveList.length) {
+      fetch(`${API}/api/browse`).then(r => r.json()).then(d => {
+        if (d.ok && d.entries?.length > 0) setDriveList(d.entries)
+        else {
+          const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+          setDriveList(drives)
+        }
+      }).catch(() => {
+        const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+        setDriveList(drives)
+      })
+    }
+    if (initialPath) {
+      loadBrowseDir(initialPath)
+    } else {
+      loadDriveList()
+    }
   }
 
   function handleBrowseGo() {
@@ -602,15 +620,14 @@ export function Step2DataDir({ data, updateData, onDone }) {
   }
 
   function navigateUp() {
-    // If at drive root (e.g. "C:\"), go back to drive list
-    if (/^[A-Z]:\\$/.test(browsePath) || /^[A-Z]:$/.test(browsePath)) {
-      setBrowsePath('')
-      setBrowseEntries([])
+    // If at drive root (e.g. "C:\" or "C:"), go back to drive list
+    if (/^[A-Z]:\\?$/.test(browsePath.replace(/\\$/, ''))) {
       loadDriveList()
       return
     }
-    const parent = browsePath.split('\\').slice(0, -1).join('\\')
-    if (parent.length >= 2) {
+    const parts = browsePath.split('\\').filter(Boolean)
+    if (parts.length > 1) {
+      const parent = parts.slice(0, -1).join('\\') + '\\'
       loadBrowseDir(parent)
     }
   }
@@ -618,19 +635,21 @@ export function Step2DataDir({ data, updateData, onDone }) {
   async function loadDriveList() {
     setBrowseLoading(true)
     setBrowseError('')
+    setBrowsePath('')
+    setBrowseInput('')
     try {
       const res = await fetch(`${API}/api/browse`)
       const d = await res.json()
       if (d.ok && d.entries?.length > 0) {
-        setBrowsePath('')
-        setBrowseInput('')
+        setDriveList(d.entries)
         setBrowseEntries(d.entries)
       } else {
-        // Fallback: construct drive list from common drives
+        // Fallback: construct drive list
         const drives = []
         for (const letter of ['C', 'D', 'E', 'F', 'G']) {
           drives.push({ name: `${letter}:`, path: `${letter}:\\`, is_dir: true })
         }
+        setDriveList(drives)
         setBrowseEntries(drives)
       }
     } catch {
@@ -639,9 +658,14 @@ export function Step2DataDir({ data, updateData, onDone }) {
       for (const letter of ['C', 'D', 'E', 'F', 'G']) {
         drives.push({ name: `${letter}:`, path: `${letter}:\\`, is_dir: true })
       }
+      setDriveList(drives)
       setBrowseEntries(drives)
     }
     setBrowseLoading(false)
+  }
+
+  function switchToDrive(drivePath) {
+    loadBrowseDir(drivePath)
   }
 
   function navigateTo(entryPath) {
@@ -908,26 +932,47 @@ export function Step2DataDir({ data, updateData, onDone }) {
               )}
             </div>
 
-            {/* Footer */}
-            <div className="px-5 py-3.5 border-t border-border-main/60 flex items-center justify-between">
-              <p className="text-xs text-text-muted truncate max-w-[340px] font-mono">
-                当前: {browsePath || '—'}
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setBrowseOpen(false)}
-                  className="px-4 py-2 rounded-full border border-border-main bg-bg-main text-xs text-text-muted hover:text-text-main transition-colors cursor-pointer font-medium"
-                >
-                  取消
-                </button>
-                <button
-                  type="button"
-                  onClick={selectCurrentPath}
-                  className="px-4 py-2 rounded-full bg-brand-green-hover text-white text-xs font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer"
-                >
-                  选择此目录
-                </button>
+            {/* Footer with drive list */}
+            <div className="border-t border-border-main/60">
+              {/* Drive list */}
+              {driveList.length > 0 && (
+                <div className="px-5 py-2 border-b border-border-main/30 flex items-center gap-1.5">
+                  <span className="text-[11px] text-text-muted mr-1">盘符:</span>
+                  {driveList.map((drive, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => switchToDrive(drive.path)}
+                      className={`px-2.5 py-1 rounded-md text-xs font-mono font-semibold transition-colors cursor-pointer ${
+                        browsePath && browsePath.startsWith(drive.path)
+                          ? 'bg-brand-green-light text-brand-green-hover dark:text-brand-green border border-brand-green/20'
+                          : 'bg-bg-raised text-text-muted hover:text-text-main border border-border-main/40'
+                      }`}
+                    >{drive.name}</button>
+                  ))}
+                </div>
+              )}
+              <div className="px-5 py-3.5 flex items-center justify-between">
+                <p className="text-xs text-text-muted truncate max-w-[340px] font-mono">
+                  当前: {browsePath || '此电脑'}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBrowseOpen(false)}
+                    className="px-4 py-2 rounded-full border border-border-main bg-bg-main text-xs text-text-muted hover:text-text-main transition-colors cursor-pointer font-medium"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={selectCurrentPath}
+                    disabled={!browsePath}
+                    className="px-4 py-2 rounded-full bg-brand-green-hover text-white text-xs font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                  >
+                    选择此目录
+                  </button>
+                </div>
               </div>
             </div>
           </div>
