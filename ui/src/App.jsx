@@ -61,9 +61,24 @@ export default function App() {
   useEffect(() => {
     async function check() {
       try {
-        const res = await fetch(`${API_BASE}/api/onboarding/status`)
-        const d = await res.json()
+        const [statusRes, configRes] = await Promise.all([
+          fetch(`${API_BASE}/api/onboarding/status`),
+          fetch(`${API_BASE}/api/load-config`)
+        ])
+        const d = await statusRes.json()
+        const config = await configRes.json()
         setOnboardingDone(d.onboarding_done)
+
+        // Auto-start bot if onboarding done AND WECHAT_DATA_DIR + WCDB_KEY both have values
+        if (d.onboarding_done) {
+          const hasWechatDataDir = config.config?.wechat_data_dir?.length > 0
+          const hasWcdbKey = config.config?.has_key
+          if (hasWechatDataDir && hasWcdbKey) {
+            try {
+              await fetch(`${API_BASE}/api/start`, { method: 'POST' })
+            } catch {}
+          }
+        }
       } catch {
         setTimeout(check, 1000) // Retry every 1s until server is ready
       }

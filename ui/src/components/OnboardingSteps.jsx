@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { CheckCircle, ArrowRight, Spinner, XCircle, Warning, MagnifyingGlass, CircleNotch, Lightning, ChatCircle, CaretDown, CaretRight } from '@phosphor-icons/react'
+import { CheckCircle, ArrowRight, Spinner, XCircle, Warning, MagnifyingGlass, CircleNotch, Lightning, ChatCircle, CaretDown, CaretRight, Folder } from '@phosphor-icons/react'
 import { Field, Select, Input, Toggle, spring, API_BASE } from './SharedComponents'
 
 const API = API_BASE
@@ -16,8 +16,108 @@ export function Step1Prepare({ data, updateData, onDone }) {
   const [manualWxid, setManualWxid] = useState(data.wxid || '')
   const [manualDbPath, setManualDbPath] = useState(data.db_path || '')
 
+  // ── File picker for db_path ──────────────────────────────────
+  const [showDbFilePicker, setShowDbFilePicker] = useState(false)
+  const [dbPickerPath, setDbPickerPath] = useState('')
+  const [dbPickerEntries, setDbPickerEntries] = useState([])
+  const [dbPickerLoading, setDbPickerLoading] = useState(false)
+  const [dbPickerError, setDbPickerError] = useState('')
+  const [dbPickerInput, setDbPickerInput] = useState('')
+  const [dbPickerDriveList, setDbPickerDriveList] = useState([])
+  const [dbSelectedFile, setDbSelectedFile] = useState('')
+
+  async function loadDbPickerDir(path) {
+    setDbPickerLoading(true)
+    setDbPickerError('')
+    try {
+      const params = path ? `?path=${encodeURIComponent(path)}` : ''
+      const res = await fetch(`${API}/api/browse${params}`)
+      const d = await res.json()
+      if (d.ok) {
+        setDbPickerPath(d.current_path || '')
+        setDbPickerInput(d.current_path || '')
+        setDbPickerEntries(d.entries || [])
+        setDbSelectedFile('')
+      } else {
+        setDbPickerError(d.error || '无法读取目录')
+      }
+    } catch {
+      setDbPickerError('无法连接到服务器')
+    }
+    setDbPickerLoading(false)
+  }
+
+  function openDbFilePicker() {
+    const initialPath = manualDbPath ? manualDbPath.split('\\').slice(0, -1).join('\\') : ''
+    setDbPickerInput(initialPath)
+    setShowDbFilePicker(true)
+    setDbSelectedFile('')
+    if (!dbPickerDriveList.length) {
+      fetch(`${API}/api/browse`).then(r => r.json()).then(d => {
+        if (d.ok && d.entries?.length > 0) setDbPickerDriveList(d.entries)
+        else setDbPickerDriveList(['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true })))
+      }).catch(() => setDbPickerDriveList(['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))))
+    }
+    if (initialPath) {
+      loadDbPickerDir(initialPath)
+    } else {
+      loadDbPickerDriveList()
+    }
+  }
+
+  async function loadDbPickerDriveList() {
+    setDbPickerLoading(true)
+    setDbPickerError('')
+    setDbPickerPath('')
+    setDbPickerInput('')
+    try {
+      const res = await fetch(`${API}/api/browse`)
+      const d = await res.json()
+      if (d.ok && d.entries?.length > 0) {
+        setDbPickerDriveList(d.entries)
+        setDbPickerEntries(d.entries)
+      } else {
+        const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+        setDbPickerDriveList(drives)
+        setDbPickerEntries(drives)
+      }
+    } catch {
+      const drives = ['C', 'D', 'E', 'F', 'G'].map(l => ({ name: `${l}:`, path: `${l}:\\`, is_dir: true }))
+      setDbPickerDriveList(drives)
+      setDbPickerEntries(drives)
+    }
+    setDbPickerLoading(false)
+  }
+
+  function dbPickerNavigateUp() {
+    if (/^[A-Z]:\\?$/.test(dbPickerPath.replace(/\\$/, ''))) {
+      loadDbPickerDriveList()
+      return
+    }
+    const parts = dbPickerPath.split('\\').filter(Boolean)
+    if (parts.length > 1) {
+      loadDbPickerDir(parts.slice(0, -1).join('\\') + '\\')
+    }
+  }
+
+  function dbPickerSwitchDrive(drivePath) {
+    loadDbPickerDir(drivePath)
+  }
+
+  function selectDbFile() {
+    if (dbSelectedFile) {
+      setManualDbPath(dbSelectedFile)
+    }
+    setShowDbFilePicker(false)
+  }
+
+  // Open file picker when state changes
+  useEffect(() => {
+    if (showDbFilePicker) openDbFilePicker()
+  }, [showDbFilePicker])
+
   // Save wechat config (formerly Step 2) before advancing to AI config
-  async function saveWechatConfig(wxid, dbPath, key) {
+  async function saveWechatConfig(wxid, dbPath, key, wechatDataDir) {
     try {
       await fetch(`${API}/api/onboarding/step2`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -26,6 +126,7 @@ export function Step1Prepare({ data, updateData, onDone }) {
           wxid: wxid || '',
           db_path: dbPath || '',
           key: key || '',
+          wechat_data_dir: wechatDataDir || '',
         }),
       })
     } catch {}
@@ -97,12 +198,12 @@ export function Step1Prepare({ data, updateData, onDone }) {
               // wxid/db_path auto-detected — skip Step 2
               setPhase('done')
               setBusy(false)
-              saveWechatConfig(s.result.wxid, s.result.db_path, s.result.key).then(() => onDone(true))
+              saveWechatConfig(s.result.wxid, s.result.db_path, s.result.key, s.result.wechat_data_dir || '').then(() => onDone(true))
             } else {
               // wxid/db_path not detected — show message, proceed to Step 2
               setPhase('done_need_step2')
               setBusy(false)
-              saveWechatConfig('', '', s.result.key).then(() => onDone(false))
+              saveWechatConfig('', '', s.result.key, s.result.wechat_data_dir || '').then(() => onDone(false))
             }
           } else if (s.phase === 'timeout' || s.phase === 'error') {
             clearInterval(poll)
@@ -290,12 +391,22 @@ export function Step1Prepare({ data, updateData, onDone }) {
                 placeholder="例如：wxid_xxxxxxxxxxxxxx"
               />
             </Field>
-            <Field label="聊天数据库路径 (db_path)" hint="微信本地 session.db 或 MSG.db 的绝对路径">
-              <Input
-                value={manualDbPath}
-                onChange={setManualDbPath}
-                placeholder="例如：C:\Users\Username\Documents\WeChat Files\wxid_...\db_storage\session\session.db"
-              />
+            <Field label="聊天数据库路径 (db_path)" hint="微信设置 → 账号与存储 → 存储位置">
+              <div className="flex items-center gap-2">
+                <Input
+                  value={manualDbPath}
+                  onChange={setManualDbPath}
+                  placeholder="例如：C:\Users\...\db_storage\session\session.db"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowDbFilePicker(true)}
+                  className="shrink-0 p-2.5 rounded-full bg-bg-raised border border-border-main hover:border-brand-green hover:bg-brand-green-light text-text-muted hover:text-brand-green transition-all cursor-pointer"
+                  title="浏览"
+                >
+                  <Folder size={18} />
+                </button>
+              </div>
             </Field>
             <motion.button
               whileTap={{ scale: 0.97 }} whileHover={{ scale: 1.02 }}
@@ -309,6 +420,89 @@ export function Step1Prepare({ data, updateData, onDone }) {
             >
               <ArrowRight size={18} /> 保存并下一步
             </motion.button>
+
+            {/* ── File Picker Modal for db_path ────────────────────────── */}
+            {showDbFilePicker && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowDbFilePicker(false)}>
+                <div className="bg-bg-card border border-border-main rounded-2xl w-[520px] max-h-[70vh] flex flex-col shadow-xl" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-border-main">
+                    <h4 className="text-sm font-semibold text-text-main">选择数据库文件</h4>
+                    <button onClick={() => setShowDbFilePicker(false)} className="text-text-muted hover:text-text-main text-lg leading-none cursor-pointer">&times;</button>
+                  </div>
+                  {/* Path bar */}
+                  <div className="px-4 py-2 border-b border-border-main/50 flex items-center gap-2">
+                    <button onClick={dbPickerNavigateUp} className="text-xs text-brand-green hover:underline cursor-pointer shrink-0">↑ 上级</button>
+                    <input
+                      type="text" value={dbPickerInput}
+                      onChange={e => setDbPickerInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') loadDbPickerDir(dbPickerInput) }}
+                      className="flex-1 bg-bg-raised border border-border-main rounded-lg px-3 py-1.5 text-xs font-mono text-text-main focus:outline-none focus:border-brand-green"
+                    />
+                    <button onClick={() => loadDbPickerDir(dbPickerInput)} className="text-xs text-brand-green hover:underline cursor-pointer shrink-0">前往</button>
+                  </div>
+                  {/* Entries */}
+                  <div className="flex-1 overflow-y-auto px-3 py-2 min-h-[200px]">
+                    {dbPickerLoading && <p className="text-xs text-text-muted text-center py-8">加载中...</p>}
+                    {dbPickerError && <p className="text-xs text-status-error text-center py-4">{dbPickerError}</p>}
+                    {!dbPickerLoading && !dbPickerError && dbPickerEntries.map((entry, i) => (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          if (entry.is_dir) {
+                            loadDbPickerDir(entry.path)
+                          } else {
+                            setDbSelectedFile(entry.path)
+                          }
+                        }}
+                        className={`w-full text-left px-3 py-2 text-sm rounded-lg flex items-center gap-2 transition-colors cursor-pointer ${
+                          dbSelectedFile === entry.path
+                            ? 'bg-brand-green/10 text-brand-green-hover dark:text-brand-green'
+                            : 'text-text-main hover:bg-bg-raised'
+                        }`}
+                      >
+                        <span>{entry.is_dir ? '📁' : '📄'}</span>
+                        <span className="truncate">{entry.name}</span>
+                        {!entry.is_dir && <span className="ml-auto text-[10px] text-text-muted font-mono">{entry.size || ''}</span>}
+                      </button>
+                    ))}
+                    {!dbPickerLoading && !dbPickerError && dbPickerEntries.length === 0 && (
+                      <p className="text-xs text-text-muted text-center py-8">空目录</p>
+                    )}
+                  </div>
+                  {/* Footer: drive list + select */}
+                  <div className="border-t border-border-main px-4 py-3 space-y-2">
+                    {dbPickerDriveList.length > 0 && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {dbPickerDriveList.map((d, i) => (
+                          <button
+                            key={i}
+                            onClick={() => dbPickerSwitchDrive(d.path)}
+                            className={`px-2.5 py-1 text-xs font-mono rounded-full border cursor-pointer transition-colors ${
+                              dbPickerPath?.startsWith(d.path)
+                                ? 'bg-brand-green/10 border-brand-green/30 text-brand-green-hover dark:text-brand-green'
+                                : 'bg-bg-raised border-border-main text-text-muted hover:text-text-main hover:border-text-muted/30'
+                            }`}
+                          >{d.name}</button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between">
+                      {dbSelectedFile && <p className="text-xs text-text-muted font-mono truncate max-w-[300px]" title={dbSelectedFile}>已选: {dbSelectedFile.split('\\').pop()}</p>}
+                      {!dbSelectedFile && <p className="text-xs text-text-muted">点击文件选择，点击文件夹进入</p>}
+                      <button
+                        onClick={selectDbFile}
+                        disabled={!dbSelectedFile}
+                        className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-all cursor-pointer ${
+                          dbSelectedFile
+                            ? 'bg-brand-green-hover text-white hover:opacity-90'
+                            : 'bg-bg-raised text-text-muted border border-border-main cursor-not-allowed'
+                        }`}
+                      >选择此文件</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <>

@@ -1834,6 +1834,13 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
                     # New: accept wechat_data_dir and auto-derive wxid/db_path
                     wechat_data_dir = data.get("wechat_data_dir", "").strip()
+
+                    # If wechat_data_dir not provided but db_path is, infer it
+                    if not wechat_data_dir and db_path:
+                        inferred = _infer_data_dir_from_dbpath(db_path)
+                        if inferred:
+                            wechat_data_dir = inferred
+
                     if wechat_data_dir:
                         _onboarding_data["wechat_data_dir"] = wechat_data_dir
                         _set_env_key(env_path, "WECHAT_DATA_DIR", wechat_data_dir)
@@ -1858,6 +1865,13 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         _os.environ["DB_PATH"] = db_path
                     if key:
                         _os.environ["WCDB_KEY"] = key
+
+                    # Mark onboarding as done when WECHAT_DATA_DIR is set —
+                    # this prevents forced re-onboarding on next launch even if
+                    # the user skips steps 3/4.
+                    if wechat_data_dir:
+                        _set_env_key(env_path, "ONBOARDING_DONE", "true")
+                        _os.environ["ONBOARDING_DONE"] = "true"
 
                 self.send_json({
                     "ok": True,
