@@ -2629,12 +2629,20 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "WCDB fav reader not initialized"})
                     return
 
-                favs = fav_reader.get_items(limit=5000, offset=0)
+                # Try batch query first, fall back to single-item on JSON truncation
                 fav_item = None
-                for f in favs:
-                    if int(f.get("local_id") or 0) == fav_id:
-                        fav_item = f
-                        break
+                try:
+                    favs = fav_reader.get_items(limit=5000, offset=0)
+                    for f in favs:
+                        if int(f.get("local_id") or 0) == fav_id:
+                            fav_item = f
+                            break
+                except Exception:
+                    # Fallback: get_by_id when batch query triggers JSON truncation
+                    try:
+                        fav_item = fav_reader.get_by_id(fav_id)
+                    except Exception:
+                        pass
 
                 if not fav_item:
                     self.send_json({"ok": False, "error": "Favorite item not found"})
@@ -2759,12 +2767,19 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "WCDB fav reader not initialized"})
                     return
 
-                favs = fav_reader.get_items(limit=5000, offset=0)
+                # Try batch query first, fall back to single-item on JSON truncation
                 fav_item = None
-                for f in favs:
-                    if int(f.get("local_id") or 0) == fav_id:
-                        fav_item = f
-                        break
+                try:
+                    favs = fav_reader.get_items(limit=5000, offset=0)
+                    for f in favs:
+                        if int(f.get("local_id") or 0) == fav_id:
+                            fav_item = f
+                            break
+                except Exception:
+                    try:
+                        fav_item = fav_reader.get_by_id(fav_id)
+                    except Exception:
+                        pass
 
                 if not fav_item:
                     self.send_json({"ok": False, "error": "Favorite item not found"})
@@ -2867,13 +2882,19 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "WCDB fav reader not initialized"})
                     return
 
-                # Get favorite item via the working reader
-                favs = fav_reader.get_items(limit=5000, offset=0)
+                # Try batch query first, fall back to single-item on JSON truncation
                 fav_item = None
-                for f in favs:
-                    if int(f.get("local_id") or 0) == fav_id:
-                        fav_item = f
-                        break
+                try:
+                    favs = fav_reader.get_items(limit=5000, offset=0)
+                    for f in favs:
+                        if int(f.get("local_id") or 0) == fav_id:
+                            fav_item = f
+                            break
+                except Exception:
+                    try:
+                        fav_item = fav_reader.get_by_id(fav_id)
+                    except Exception:
+                        pass
 
                 if not fav_item:
                     self.send_json({"ok": False, "error": "Favorite item not found"})
