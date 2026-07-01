@@ -85,12 +85,25 @@ export function Step1Prepare({ data, updateData, onDone }) {
           if (s.phase === 'waiting_exit' || s.phase === 'waiting_login'
               || s.phase === 'hooking' || s.phase === 'hooking_restart') {
             setMsg(s.message || '')
-          } else if (s.phase === 'done' && s.result) {
+          } else if ((s.phase === 'done' || s.phase === 'done_need_step2') && s.result) {
             clearInterval(poll)
-            updateData({ key: s.result.key, wxid: s.result.wxid, db_path: s.result.db_path })
-            setPhase('done')
-            setBusy(false)
-            saveWechatConfig(s.result.wxid, s.result.db_path, s.result.key).then(onDone)
+            updateData({
+              key: s.result.key,
+              wxid: s.result.wxid || '',
+              db_path: s.result.db_path || '',
+              wechat_data_dir: s.result.wechat_data_dir || '',
+            })
+            if (s.result.skip_step2) {
+              // wxid/db_path auto-detected — skip Step 2
+              setPhase('done')
+              setBusy(false)
+              saveWechatConfig(s.result.wxid, s.result.db_path, s.result.key).then(() => onDone(true))
+            } else {
+              // wxid/db_path not detected — show message, proceed to Step 2
+              setPhase('done_need_step2')
+              setBusy(false)
+              saveWechatConfig('', '', s.result.key).then(() => onDone(false))
+            }
           } else if (s.phase === 'timeout' || s.phase === 'error') {
             clearInterval(poll)
             setPhase(s.phase === 'timeout' ? 'timeout' : 'error')
@@ -114,7 +127,9 @@ export function Step1Prepare({ data, updateData, onDone }) {
       wxid: wxid,
       db_path: dbPath,
     })
-    saveWechatConfig(wxid, dbPath, manualKey.trim()).then(onDone)
+    // If wxid/db_path provided, skip Step 2; otherwise go to Step 2
+    const skipStep2 = !!(wxid && dbPath)
+    saveWechatConfig(wxid, dbPath, manualKey.trim()).then(() => onDone(skipStep2))
   }
 
   function renderChecklist() {
@@ -432,6 +447,25 @@ export function Step1Prepare({ data, updateData, onDone }) {
                 </div>
               </div>
             )}
+
+            {phase === 'done_need_step2' && (
+              <div className="space-y-5">
+                <div className="bg-brand-green-light border border-brand-green/20 rounded-2xl p-5 flex items-center gap-3">
+                  <CheckCircle size={24} weight="fill" className="text-brand-green-hover dark:text-brand-green" />
+                  <div>
+                    <p className="text-sm font-semibold text-brand-green-hover dark:text-brand-green">凭证获取成功</p>
+                    <p className="text-xs text-text-muted">请继续配置数据目录</p>
+                  </div>
+                </div>
+                <div className="bg-status-warn-soft border border-status-warn/20 rounded-2xl p-4 flex items-start gap-3">
+                  <Warning size={20} weight="fill" className="text-status-warn shrink-0 mt-0.5" />
+                  <div className="text-sm text-status-warn">
+                    <p className="font-semibold mb-1">未能自动检测到数据目录</p>
+                    <p className="text-xs text-text-muted font-normal">请在下一步手动选择微信数据目录，系统将自动推导出账号信息。</p>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -439,61 +473,430 @@ export function Step1Prepare({ data, updateData, onDone }) {
   )
 }
 
-// ── Step 2: WeChat Config ────────────────────────────────────────────
+// ── Step 2: Data Directory Config ─────────────────────────────────────
 
-function Step2WeChatConfig({ data, updateData, onDone }) {
+export function Step2DataDir({ data, updateData, onDone }) {
   const [busy, setBusy] = useState(false)
-  const valid = true  // no required fields
+  const [detecting, setDetecting] = useState(false)
+  const [detectResult, setDetectResult] = useState(null)
+  const [detectError, setDetectError] = useState('')
+  const [browseOpen, setBrowseOpen] = useState(false)
+  const [browsePath, setBrowsePath] = useState('')
+  const [browseEntries, setBrowseEntries] = useState([])
+  const [browseLoading, setBrowseLoading] = useState(false)
+  const [browseError, setBrowseError] = useState('')
+  const [browseInput, setBrowseInput] = useState('')
+  const [dataDir, setDataDir] = useState(data.wechat_data_dir || '')
+
+  // Auto-detect on mount
+  useEffect(() => {
+    handleAutoDetect()
+  }, [])
+
+  async function handleAutoDetect() {
+    setDetecting(true)
+    setDetectError('')
+    setDetectResult(null)
+    try {
+      // Try default detection (no path = auto-detect from Documents)
+      const res = await fetch(`${API}/api/wechat-data-dir/detect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: '' }),
+      })
+      const d = await res.json()
+      if (d.ok && d.found) {
+        setDetectResult(d)
+        // Auto-fill the first account's data dir
+        if (d.accounts?.length > 0) {
+          // The detected dir is the parent containing wxid_* folders
+          // We need to figure out the base dir from the API response
+        }
+      } else if (d.ok && !d.found) {
+        setDetectResult(d)
+      } else {
+        setDetectError(d.error || '自动检测失败')
+      }
+    } catch {
+      setDetectError('无法连接到服务器')
+    }
+    setDetecting(false)
+  }
+
+  async function handleDetectWithPath(path) {
+    const trimmed = (path || '').trim()
+    if (!trimmed) {
+      setDetectError('请先输入或选择目录路径')
+      setTimeout(() => setDetectError(''), 4000)
+      return
+    }
+    setDetecting(true)
+    setDetectError('')
+    setDetectResult(null)
+    try {
+      const res = await fetch(`${API}/api/wechat-data-dir/detect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: trimmed }),
+      })
+      const d = await res.json()
+      if (d.ok) {
+        setDetectResult(d)
+        if (d.found) {
+          setDataDir(trimmed)
+          updateData({ wechat_data_dir: trimmed })
+        }
+      } else {
+        setDetectError(d.error || '检测失败')
+        setTimeout(() => setDetectError(''), 5000)
+      }
+    } catch {
+      setDetectError('无法连接到服务器')
+      setTimeout(() => setDetectError(''), 5000)
+    }
+    setDetecting(false)
+  }
+
+  // ── Browse API ────────────────────────────────────────────────
+
+  async function loadBrowseDir(path) {
+    setBrowseLoading(true)
+    setBrowseError('')
+    try {
+      const params = path ? `?path=${encodeURIComponent(path)}` : ''
+      const res = await fetch(`${API}/api/browse${params}`)
+      const d = await res.json()
+      if (d.ok) {
+        setBrowsePath(d.current_path || '')
+        setBrowseInput(d.current_path || '')
+        setBrowseEntries(d.entries || [])
+      } else {
+        setBrowseError(d.error || '无法读取目录')
+      }
+    } catch {
+      setBrowseError('无法连接到服务器')
+    }
+    setBrowseLoading(false)
+  }
+
+  function openBrowse() {
+    const initialPath = dataDir || ''
+    setBrowseInput(initialPath)
+    setBrowseOpen(true)
+    loadBrowseDir(initialPath || 'C:\\')
+  }
+
+  function handleBrowseGo() {
+    const trimmed = browseInput.trim()
+    if (trimmed) {
+      setBrowseError('')
+      loadBrowseDir(trimmed)
+    }
+  }
+
+  function handleBrowseInputKeyDown(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleBrowseGo()
+    }
+  }
+
+  function navigateUp() {
+    const parent = browsePath.split('\\').slice(0, -1).join('\\')
+    if (parent.length >= 1) {
+      loadBrowseDir(parent)
+    }
+  }
+
+  function navigateTo(entryPath) {
+    loadBrowseDir(entryPath)
+  }
+
+  function selectCurrentPath() {
+    setDataDir(browsePath)
+    updateData({ wechat_data_dir: browsePath })
+    setBrowseOpen(false)
+    // Auto-detect after selecting
+    handleDetectWithPath(browsePath)
+  }
+
+  // ── Save & Next ────────────────────────────────────────────────
 
   async function handleNext() {
+    if (!dataDir.trim()) {
+      setDetectError('请先选择数据目录')
+      setTimeout(() => setDetectError(''), 4000)
+      return
+    }
     setBusy(true)
     try {
-      await fetch(`${API}/api/onboarding/step2`, {
+      const res = await fetch(`${API}/api/onboarding/step2`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           wechat_backend: 'wcdb',
-          wxid: data.wxid || '',
-          db_path: data.db_path || '',
+          wechat_data_dir: dataDir.trim(),
         }),
       })
-      onDone()
-    } catch {}
+      const d = await res.json()
+      if (d.ok) {
+        // Update local data with derived wxid/db_path
+        updateData({
+          wechat_data_dir: dataDir.trim(),
+          wxid: d.wxid || data.wxid || '',
+          db_path: d.db_path || data.db_path || '',
+        })
+        onDone()
+      } else {
+        setDetectError(d.error || '保存失败')
+        setTimeout(() => setDetectError(''), 5000)
+      }
+    } catch {
+      setDetectError('无法连接到服务器')
+      setTimeout(() => setDetectError(''), 5000)
+    }
     setBusy(false)
   }
+
+  const canProceed = detectResult?.found && dataDir.trim()
 
   return (
     <div>
       <div className="flex items-center gap-2 mb-6">
         <div className="w-1.5 h-4.5 rounded-full bg-brand-green" />
-        <h3 className="text-base font-semibold tracking-tight text-text-main">微信配置</h3>
+        <h3 className="text-base font-semibold tracking-tight text-text-main">数据目录配置</h3>
       </div>
 
       <div className="space-y-6 mt-4">
-        {/* Read-only info from step 1 */}
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-bg-raised border border-border-main rounded-2xl p-4">
-            <p className="text-xs text-text-muted font-semibold mb-1">检测到的微信账号</p>
-            <p className="text-sm font-mono font-bold text-text-main truncate">{data.wxid || '未检测到'}</p>
+        <p className="text-[14px] text-text-muted leading-relaxed">
+          摘星需要定位微信数据目录以读取聊天记录。该目录包含以 <code className="bg-bg-raised px-1.5 py-0.5 rounded font-mono text-xs">wxid_</code> 开头的账号文件夹。
+        </p>
+
+        {/* Auto-detect result */}
+        {detecting && (
+          <div className="bg-bg-raised border border-border-main rounded-2xl p-5 flex items-center gap-3">
+            <Spinner size={20} weight="bold" className="animate-spin text-brand-green" />
+            <p className="text-sm text-text-muted">正在自动检测数据目录...</p>
           </div>
-          <div className="bg-bg-raised border border-border-main rounded-2xl p-4">
-            <p className="text-xs text-text-muted font-semibold mb-1">数据配置</p>
-            <p className="text-xs font-mono text-text-muted truncate" title={data.db_path}>{data.db_path || '—'}</p>
+        )}
+
+        {detectResult && !detecting && (
+          <div className={`p-4 rounded-2xl border ${
+            detectResult.found
+              ? 'bg-brand-green-light border-brand-green/20'
+              : 'bg-status-warn-soft border-status-warn/20'
+          }`}>
+            {detectResult.found ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <CheckCircle size={18} weight="fill" className="text-brand-green-hover dark:text-brand-green" />
+                  <span className="text-sm font-semibold text-brand-green-hover dark:text-brand-green">{detectResult.message}</span>
+                </div>
+                {detectResult.accounts?.map((acct, i) => (
+                  <div key={i} className="flex items-center gap-3 text-xs font-mono bg-bg-main/60 border border-border-main rounded-xl px-3 py-2">
+                    <span className="text-text-main font-semibold">{acct.wxid}</span>
+                    <span className="text-text-muted">·</span>
+                    <span className={acct.has_session_db ? 'text-brand-green-hover dark:text-brand-green' : 'text-status-error'}>
+                      {acct.has_session_db ? '✓ 数据库已就绪' : '✗ 未找到数据库'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex items-start gap-2">
+                <Warning size={18} weight="fill" className="text-status-warn shrink-0 mt-0.5" />
+                <div>
+                  <span className="text-sm text-status-warn font-semibold">未检测到数据目录</span>
+                  <p className="text-xs text-text-muted mt-1">请点击「浏览」手动选择微信数据目录（包含 wxid_* 文件夹的父目录）</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {detectError && (
+          <div className="flex items-center gap-2 px-4 py-2.5 bg-status-error-soft border border-status-error/20 rounded-full text-sm text-status-error">
+            <Warning size={16} weight="fill" className="text-status-error" />
+            <span>{detectError}</span>
+          </div>
+        )}
+
+        {/* Data dir input + browse + detect */}
+        <Field label="微信数据目录" hint="包含 wxid_* 文件夹的父目录路径">
+          <div className="flex items-start gap-2">
+            <div className="flex-1 relative">
+              <input
+                type="text"
+                value={dataDir}
+                onChange={e => { setDataDir(e.target.value); updateData({ wechat_data_dir: e.target.value }); setDetectResult(null) }}
+                placeholder="例如：D:\vxchat\xwechat_files"
+                className="w-full bg-bg-raised border border-border-main rounded-full pl-5 pr-5 py-2.5 text-[14px] text-text-main
+                           placeholder:text-text-muted font-mono tabular-nums
+                           focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/15
+                           transition-all duration-200
+                           hover:border-text-muted/30 dark:hover:border-text-muted/40"
+              />
+              {dataDir && (
+                <button
+                  type="button"
+                  onClick={() => { setDataDir(''); updateData({ wechat_data_dir: '' }); setDetectResult(null); setDetectError('') }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-status-error text-lg leading-none transition-colors cursor-pointer"
+                  title="清除"
+                >&times;</button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={openBrowse}
+              className="shrink-0 px-4 py-2.5 bg-bg-main border border-border-main rounded-full text-[13px] text-text-main font-medium hover:border-brand-green hover:text-brand-green-hover transition-colors cursor-pointer"
+            >
+              浏览...
+            </button>
+            {dataDir.trim() && (
+              <button
+                type="button"
+                onClick={() => handleDetectWithPath(dataDir)}
+                disabled={detecting}
+                className="shrink-0 px-4 py-2.5 bg-brand-green-light border border-brand-green/20 rounded-full text-[13px] text-brand-green-hover dark:text-brand-green font-semibold hover:bg-brand-green/10 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {detecting ? (
+                  <span className="flex items-center gap-1.5">
+                    <svg className="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    检测中
+                  </span>
+                ) : '检测'}
+              </button>
+            )}
+          </div>
+        </Field>
+
+        {/* Next button */}
+        <div className="pt-2">
+          <motion.button
+            whileTap={{ scale: 0.97 }} whileHover={{ scale: 1.02 }}
+            onClick={handleNext}
+            disabled={!canProceed || busy}
+            className={`w-48 py-2.5 rounded-full text-[14px] font-semibold tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 ${
+              canProceed
+                ? 'bg-brand-green-hover text-white hover:opacity-90'
+                : 'bg-bg-raised text-text-muted border border-border-main cursor-not-allowed'
+            }`}
+          >
+            {busy ? <Spinner size={18} weight="bold" className="animate-spin" /> : <><ArrowRight size={18} /> 下一步</>}
+          </motion.button>
+        </div>
+      </div>
+
+      {/* ── Directory Browser Modal ────────────────────────────────── */}
+      {browseOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-main/60 backdrop-blur-sm" onClick={() => setBrowseOpen(false)}>
+          <div
+            className="bg-bg-card border border-border-main rounded-2xl shadow-2xl w-[520px] max-h-[520px] flex flex-col overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-border-main/60">
+              <h4 className="text-sm font-semibold text-text-main">选择微信数据目录</h4>
+              <button
+                type="button"
+                onClick={() => setBrowseOpen(false)}
+                className="text-text-muted hover:text-text-main transition-colors cursor-pointer leading-none text-lg"
+              >&times;</button>
+            </div>
+
+            {/* Path input */}
+            <div className="px-5 py-3 border-b border-border-main/40">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={browseInput}
+                  onChange={e => setBrowseInput(e.target.value)}
+                  onKeyDown={handleBrowseInputKeyDown}
+                  placeholder="粘贴或输入路径，回车跳转..."
+                  className="flex-1 bg-bg-raised border border-border-main rounded-full px-4 py-2 text-[13px] text-text-main placeholder:text-text-muted font-mono
+                             focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/15
+                             transition-all duration-200 hover:border-text-muted/30"
+                />
+                <button
+                  type="button"
+                  onClick={handleBrowseGo}
+                  disabled={!browseInput.trim()}
+                  className="shrink-0 px-4 py-2 bg-brand-green-light border border-brand-green/20 rounded-full text-[13px] text-brand-green-hover dark:text-brand-green font-semibold hover:bg-brand-green/10 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                >
+                  跳转
+                </button>
+              </div>
+            </div>
+
+            {/* Path breadcrumb */}
+            <div className="px-5 py-2.5 bg-bg-raised/50 border-b border-border-main/40">
+              <div className="flex items-center gap-1.5 text-xs font-mono text-text-muted">
+                <button
+                  type="button"
+                  onClick={navigateUp}
+                  disabled={!browsePath || browsePath.length <= 3}
+                  className="text-text-muted hover:text-text-main disabled:opacity-30 disabled:cursor-default cursor-pointer transition-colors"
+                  title="上级目录"
+                >↑</button>
+                <span className="truncate">{browsePath || '此电脑'}</span>
+              </div>
+            </div>
+
+            {/* Entry list */}
+            <div className="flex-1 overflow-y-auto px-2 py-1.5">
+              {browseLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <svg className="animate-spin h-5 w-5 text-text-muted" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                </div>
+              ) : browseError ? (
+                <div className="p-4 text-xs text-status-error text-center">{browseError}</div>
+              ) : browseEntries.length === 0 ? (
+                <div className="p-4 text-xs text-text-muted text-center">此目录为空</div>
+              ) : (
+                browseEntries.filter(e => e.is_dir).map((entry, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => navigateTo(entry.path)}
+                    className="w-full text-left px-3 py-2 rounded-xl text-[13px] text-text-main hover:bg-bg-raised transition-colors cursor-pointer flex items-center gap-2.5 font-mono"
+                  >
+                    <span className="text-base shrink-0">📁</span>
+                    <span className="truncate">{entry.name}</span>
+                  </button>
+                ))
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-5 py-3.5 border-t border-border-main/60 flex items-center justify-between">
+              <p className="text-xs text-text-muted truncate max-w-[340px] font-mono">
+                当前: {browsePath || '—'}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setBrowseOpen(false)}
+                  className="px-4 py-2 rounded-full border border-border-main bg-bg-main text-xs text-text-muted hover:text-text-main transition-colors cursor-pointer font-medium"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={selectCurrentPath}
+                  className="px-4 py-2 rounded-full bg-brand-green-hover text-white text-xs font-semibold hover:bg-[#0d8c5c] transition-colors cursor-pointer"
+                >
+                  选择此目录
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-
-        <motion.button
-          whileTap={{ scale: 0.97 }} whileHover={{ scale: 1.02 }}
-          onClick={handleNext}
-          disabled={!valid || busy}
-          className={`w-48 py-2.5 rounded-full text-[14px] font-semibold tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 ${
-            valid
-              ? 'bg-brand-green-hover text-white hover:opacity-90'
-              : 'bg-bg-raised text-text-muted border border-border-main cursor-not-allowed'
-          }`}
-        >
-          {busy ? <Spinner size={18} weight="bold" className="animate-spin" /> : <><ArrowRight size={18} /> 下一步</>}
-        </motion.button>
-      </div>
+      )}
     </div>
   )
 }
