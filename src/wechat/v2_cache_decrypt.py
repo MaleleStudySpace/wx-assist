@@ -512,7 +512,8 @@ class V2CacheManager:
                 xml_size = self._get_fav_size_from_xml(local_id, size)
                 target_size = xml_size
             if target_size:
-                file_path = self._find_by_size(local_id, wxid, size, target_size)
+                file_path = self._find_by_size(local_id, wxid, size, target_size,
+                                               has_fullmd5=bool(fullmd5))
 
         if not file_path:
             return None
@@ -696,6 +697,8 @@ class V2CacheManager:
 
         For original images, uses <fullmd5>.
         For thumbnails, uses <thumbfullmd5>.
+
+        Fallback: try get_items(500) first, if JSON parse error, fall back to get_by_id.
         """
         try:
             import re as _re
@@ -717,6 +720,7 @@ class V2CacheManager:
                 try:
                     if not hasattr(reader, 'get_items'):
                         continue
+                    # Strategy 1: batch query (efficient but may trigger JSON truncation)
                     items = reader.get_items(limit=500)
                     for item in items:
                         if str(item.get('local_id')) == str(local_id):
@@ -728,7 +732,20 @@ class V2CacheManager:
                             if match:
                                 return match.group(1)
                 except Exception:
-                    continue
+                    # Strategy 2: fallback to single-item query if batch fails
+                    try:
+                        if hasattr(reader, 'get_by_id'):
+                            item = reader.get_by_id(local_id)
+                            if item:
+                                content = item.get('content_raw', '')
+                                if size_type in ('thumb', 'thumbnail'):
+                                    match = _re.search(r'<thumbfullmd5>([a-f0-9]{32})</thumbfullmd5>', content)
+                                else:
+                                    match = _re.search(r'<fullmd5>([a-f0-9]{32})</fullmd5>', content)
+                                if match:
+                                    return match.group(1)
+                    except Exception:
+                        continue
             return None
         except Exception:
             return None
@@ -784,8 +801,16 @@ class V2CacheManager:
 
     def _find_by_size(self, local_id: int, wxid: str,
                       size: str = 'original',
-                      target_size: int = None) -> Optional[str]:
-        """Fallback: find cache file by matching <fullsize>/<thumbfullsize> + V2 header."""
+                      target_size: int = None,
+                      has_fullmd5: bool = False) -> Optional[str]:
+        """Fallback: find cache file by matching <fullsize>/<thumbfullsize> + V2 header.
+
+        Args:
+            has_fullmd5: True when the caller provided an explicit fullmd5
+                (e.g. from chat_records). In this case, skip the last-resort
+                thumb/ fallback because returning a random thumbnail for a
+                multi-image item is worse than showing nothing.
+        """
         fav_dir = self._data_dir / wxid / 'business' / 'favorite'
         if not fav_dir.exists():
             return None
@@ -823,16 +848,23 @@ class V2CacheManager:
                 return str(f)
 
         # Last resort: return first file from thumb/
-        thumb_dir = fav_dir / 'thumb'
-        if thumb_dir.exists():
-            for f in sorted(thumb_dir.rglob('*'), key=lambda p: p.stat().st_size, reverse=True):
-                if f.is_file() and f.stat().st_size > 1000:
-                    return str(f)
+        # Only when no fullmd5 was provided (type=2 single image scenario).
+        # When fullmd5 is provided (type=14 chat records), skip last resort
+        # because returning a random thumbnail is worse than showing nothing.
+        if not has_fullmd5:
+            thumb_dir = fav_dir / 'thumb'
+            if thumb_dir.exists():
+                for f in sorted(thumb_dir.rglob('*'), key=lambda p: p.stat().st_size, reverse=True):
+                    if f.is_file() and f.stat().st_size > 1000:
+                        return str(f)
 
         return None
 
     def _get_fav_size_from_xml(self, local_id: int, size_type: str) -> Optional[int]:
-        """Extract image size from favorite XML content."""
+        """Extract image size from favorite XML content.
+
+        Fallback: try get_items(500) first, if JSON parse error, fall back to get_by_id.
+        """
         try:
             import sys
             import re as _re
@@ -857,6 +889,7 @@ class V2CacheManager:
                 try:
                     if not hasattr(reader, 'get_items'):
                         continue
+                    # Strategy 1: batch query (efficient but may trigger JSON truncation)
                     items = reader.get_items(limit=500)
                     for item in items:
                         # local_id is stored as string, convert for comparison
@@ -872,7 +905,22 @@ class V2CacheManager:
                                 if match:
                                     return int(match.group(1))
                 except Exception:
-                    continue
+                    # Strategy 2: fallback to single-item query if batch fails
+                    try:
+                        if hasattr(reader, 'get_by_id'):
+                            item = reader.get_by_id(local_id)
+                            if item:
+                                content = item.get('content_raw', '')
+                                if size_type in ('thumb', 'thumbnail'):
+                                    match = _re.search(r'<thumbfullsize>(\d+)</thumbfullsize>', content)
+                                    if match:
+                                        return int(match.group(1))
+                                else:  # original
+                                    match = _re.search(r'<fullsize>(\d+)</fullsize>', content)
+                                    if match:
+                                        return int(match.group(1))
+                    except Exception:
+                        continue
 
             return None
 
