@@ -77,10 +77,6 @@ function AiSection({ form, update, onOpenSandbox }) {
         if (data.available_models?.length > 0 && !form.ai_provider_model) {
           update('ai_provider_model', data.available_models[0])
         }
-        // Suggest extra_body for DeepSeek models
-        if (data.available_models?.some(m => m.startsWith('deepseek')) && !form.ai_provider_extra_body) {
-          update('ai_provider_extra_body', '{"thinking":{"type":"disabled"}}')
-        }
       }
     } catch {
       setDetectResult({ error: '网络请求失败，请检查站点 URL' })

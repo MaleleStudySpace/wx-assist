@@ -1224,9 +1224,6 @@ export function Step3AIConfig({ data, updateData, onDone }) {
         if (result.available_models?.length > 0 && !data.ai_provider_model) {
           updateData({ ai_provider_model: result.available_models[0] })
         }
-        if (result.available_models?.some(m => m.startsWith('deepseek')) && !data.ai_provider_extra_body) {
-          updateData({ ai_provider_extra_body: '{"thinking":{"type":"disabled"}}' })
-        }
       }
     } catch {
       setDetectResult({ error: '网络请求失败，请检查站点 URL' })
