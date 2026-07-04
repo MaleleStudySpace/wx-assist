@@ -4520,23 +4520,10 @@ def handle_oa_digest_run(params, config: AssistantConfig):
                 "digest_text": result.get("digest_text", ""),
             })
 
-            # Task: completed
+            # Task: push first, then complete (so progress is correct)
             _digest_text = result.get("digest_text", "")
             _articles_count = result.get("articles_count", 0)
             _is_empty = not _digest_text or _digest_text.startswith("没有") or _digest_text.startswith("所有")
-            try:
-                tc = get_task_center()
-                if tc and _tid:
-                    if _is_empty:
-                        tc.complete_task(_tid, result='无新内容', articles_count=_articles_count)
-                    else:
-                        tc.complete_task(_tid, result=_digest_text[:200], articles_count=_articles_count)
-                    broadcast_event("task_update", {"task_id": _tid, "task_type": "oa_digest",
-                                                     "status": "completed",
-                                                     "progress": "无新内容" if _is_empty else "完成",
-                                                     "group_name": _group_name})
-            except Exception:
-                pass
 
             # Push to WeChat via iLink (if configured for this OA group)
             if result.get("ok") and result.get("digest_text") and _group:
@@ -4551,6 +4538,21 @@ def handle_oa_digest_run(params, config: AssistantConfig):
                 except Exception:
                     pass
                 _push_oa_digest(result, _group, config)
+
+            # Now mark task as completed (after push)
+            try:
+                tc = get_task_center()
+                if tc and _tid:
+                    if _is_empty:
+                        tc.complete_task(_tid, result='无新内容', articles_count=_articles_count)
+                    else:
+                        tc.complete_task(_tid, result=_digest_text[:200], articles_count=_articles_count)
+                    broadcast_event("task_update", {"task_id": _tid, "task_type": "oa_digest",
+                                                     "status": "completed",
+                                                     "progress": "无新内容" if _is_empty else "完成",
+                                                     "group_name": _group_name})
+            except Exception:
+                pass
 
         except Exception as e:
             logger.exception("[OA-DIGEST] Background digest failed")
