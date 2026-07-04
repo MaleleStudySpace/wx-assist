@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from .config import AssistantConfig, DigestGroup, OAGroup, save_assistant_config
@@ -114,6 +115,8 @@ class DigestScheduler:
         # Track last trigger time per group to prevent double-fires
         self._last_triggered: dict[str, float] = {}
         self._tick_count = 0  # for periodic cleanup
+        # Thread pool for async digest execution (scheduler triggers + manual triggers)
+        self._pool = ThreadPoolExecutor(max_workers=3)
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -131,6 +134,11 @@ class DigestScheduler:
 
     def stop(self) -> None:
         self._running = False
+        # Shutdown pool gracefully — wait for in-flight tasks to finish
+        try:
+            self._pool.shutdown(wait=True, cancel_futures=False)
+        except Exception:
+            pass
         logger.info("DigestScheduler stopped")
 
     def update_config(self, new_config: AssistantConfig) -> None:
@@ -230,16 +238,9 @@ class DigestScheduler:
             except Exception:
                 logger.warning("[TASK] create failed for '%s'", dg.group_name)
 
-            try:
-                self._generate_digest(dg, task_id=_tid)
-            except Exception:
-                logger.exception("Digest generation failed for '%s'", dg.group_name)
-                if _tid:
-                    try:
-                        self._task_center.fail_task(_tid, error='unhandled exception')
-                        self._broadcast_task_update(_tid, 'group_digest', 'failed', '', dg.group_name, error='unhandled exception')
-                    except Exception:
-                        pass
+            # Submit to thread pool for async execution
+            _tid_ref = _tid  # capture for closure
+            self._pool.submit(self._run_digest_in_pool, dg, _tid_ref)
 
         # ── OA digests ──
         for oa in self._config.oa_groups:
@@ -274,16 +275,35 @@ class DigestScheduler:
             except Exception:
                 logger.warning("[TASK] create failed for '%s'", oa.name)
 
-            try:
-                self._generate_oa_digest(oa, task_id=_tid)
-            except Exception:
-                logger.exception("OA digest generation failed for '%s'", oa.name)
-                if _tid:
-                    try:
-                        self._task_center.fail_task(_tid, error='unhandled exception')
-                        self._broadcast_task_update(_tid, 'oa_digest', 'failed', '', oa.name, error='unhandled exception')
-                    except Exception:
-                        pass
+            # Submit to thread pool for async execution
+            _tid_ref = _tid  # capture for closure
+            self._pool.submit(self._run_oa_digest_in_pool, oa, _tid_ref)
+
+    def _run_digest_in_pool(self, dg: DigestGroup, task_id: int = None) -> None:
+        """Wrapper for running group digest in thread pool with error handling."""
+        try:
+            self._generate_digest(dg, task_id=task_id)
+        except Exception:
+            logger.exception("Digest generation failed for '%s'", dg.group_name)
+            if task_id:
+                try:
+                    self._task_center.fail_task(task_id, error='unhandled exception')
+                    self._broadcast_task_update(task_id, 'group_digest', 'failed', '', dg.group_name, error='unhandled exception')
+                except Exception:
+                    pass
+
+    def _run_oa_digest_in_pool(self, oa: OAGroup, task_id: int = None) -> None:
+        """Wrapper for running OA digest in thread pool with error handling."""
+        try:
+            self._generate_oa_digest(oa, task_id=task_id)
+        except Exception:
+            logger.exception("OA digest generation failed for '%s'", oa.name)
+            if task_id:
+                try:
+                    self._task_center.fail_task(task_id, error='unhandled exception')
+                    self._broadcast_task_update(task_id, 'oa_digest', 'failed', '', oa.name, error='unhandled exception')
+                except Exception:
+                    pass
 
     def _should_trigger(self, dg: DigestGroup, now: datetime, now_hm: str) -> bool:
         """Check if a digest group should trigger now.
