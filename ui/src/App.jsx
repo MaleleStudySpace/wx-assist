@@ -47,6 +47,27 @@ export default function App() {
   const [showTaskCenter, setShowTaskCenter] = useState(false)
   const [runningTaskCount, setRunningTaskCount] = useState(0)
 
+  // Listen for open-task-center custom events from other components
+  useEffect(() => {
+    const handler = () => setShowTaskCenter(true)
+    window.addEventListener('open-task-center', handler)
+    return () => window.removeEventListener('open-task-center', handler)
+  }, [])
+
+  // Poll running task count periodically
+  useEffect(() => {
+    if (!onboardingDone) return
+    function poll() {
+      fetch(`${API_BASE}/api/tasks?status=running&limit=50`)
+        .then(r => r.json())
+        .then(d => { if (d.ok) setRunningTaskCount(d.tasks?.length || 0) })
+        .catch(() => {})
+    }
+    poll()
+    const id = setInterval(poll, 10000)
+    return () => clearInterval(id)
+  }, [onboardingDone])
+
   // Theme state: default to 'dark' (Version 1: 夜航控制台) but can toggle to 'light' (正常模式)
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark')
 
@@ -99,24 +120,12 @@ export default function App() {
       socket = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
       socket.onopen = () => {
         setWsConnected(true)
-        // Fetch initial running task count from API
-        fetch(`${API_BASE}/api/tasks?status=running&limit=50`)
-          .then(r => r.json())
-          .then(d => { if (d.ok) setRunningTaskCount(d.tasks?.length || 0) })
-          .catch(() => {})
       }
       socket.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data)
-          // Handle task_update events
-          if (data.type === 'task_update') {
-            if (data.status === 'running') {
-              setRunningTaskCount(prev => prev + 1)
-            } else if (data.status === 'completed' || data.status === 'failed') {
-              setRunningTaskCount(prev => Math.max(0, prev - 1))
-            }
-            return
-          }
+          // task_update events are handled by TaskCenter component directly
+          if (data.type === 'task_update') return
           // Only update status if it's NOT a custom event (events have a 'type' field)
           // Status broadcasts don't have 'type', events like fav_export_progress do
           if (!data.type) {

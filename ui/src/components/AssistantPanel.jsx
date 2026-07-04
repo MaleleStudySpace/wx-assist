@@ -477,11 +477,15 @@ export default function AssistantPanel() {
         body: JSON.stringify({ chat_id: chatId, group_name: groupName }),
       })
       const data = await res.json()
-      if (!data.ok) {
-        setSaveError(data.error || '触发失败')
+      if (data.ok) {
+        setPushToast({ group_name: groupName, success: true, is_task: true })
+        setTimeout(() => setPushToast(null), 4000)
+      } else {
+        setPushToast({ group_name: groupName, success: false, error: data.error || '触发失败' })
+        setTimeout(() => setPushToast(null), 4000)
         setDigestRunning('')
       }
-      // Task progress will be tracked in TaskCenter; clear running state after a delay
+      // Clear running state after timeout
       setTimeout(() => setDigestRunning(''), 60000)
     } catch {
       setDigestRunning('')
@@ -514,14 +518,18 @@ export default function AssistantPanel() {
             ? 'bg-brand-green/90 text-white'
             : 'bg-status-error/90 text-white'
         }`}>
-          {pushToast.success
-            ? `✓ 推送成功: ${pushToast.group_name}`
-            : pushToast.session_expired
-              ? <div>
-                  <div>⚠ 推送失败: ${pushToast.group_name}</div>
-                  <div className="text-xs mt-1 opacity-90">微信链接可能已断开，请在微信中主动回复一条消息即可恢复，或扫码重新绑定</div>
-                </div>
-              : `⚠ 推送失败: ${pushToast.group_name}`}
+          {pushToast.is_task
+            ? pushToast.success
+              ? `✓ 任务已提交: ${pushToast.group_name}，右上角任务中心查看进度`
+              : `⚠ 提交失败: ${pushToast.group_name} — ${pushToast.error || '未知错误'}`
+            : pushToast.success
+              ? `✓ 推送成功: ${pushToast.group_name}`
+              : pushToast.session_expired
+                ? <div>
+                    <div>⚠ 推送失败: ${pushToast.group_name}</div>
+                    <div className="text-xs mt-1 opacity-90">微信链接可能已断开，请在微信中主动回复一条消息即可恢复，或扫码重新绑定</div>
+                  </div>
+                : `⚠ 推送失败: ${pushToast.group_name}`}
         </div>
       )}
 
