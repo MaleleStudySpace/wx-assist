@@ -90,3 +90,6 @@ build/
 
 # PyInstaller output
 dist/
+.env -马东东登录态
+.gitignore
+wx-assist.exe

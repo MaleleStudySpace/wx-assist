@@ -758,6 +758,13 @@ def register_oa_monitor(monitor):
     global _oa_monitor
     _oa_monitor = monitor
 
+_task_center = None
+
+def register_task_center(tc):
+    """Register the TaskCenter so the API can query task status."""
+    global _task_center
+    _task_center = tc
+
 
 def is_shutting_down():
     """Check if shutdown has been signaled."""
@@ -2325,15 +2332,99 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 _ilink_test_push_lock.release()
             return
 
-        # ── API: Assistant — trigger digest ─────────────────────────────
+        # ── API: Assistant — trigger digest (with TaskCenter) ─────────────
         if self.path == "/api/assistant/digest/run":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length)) if length > 0 else {}
             except Exception:
                 body = {}
+            chat_id = body.get("chat_id", "")
             group_name = body.get("group_name", "")
-            self.send_json({"ok": True, "message": f"已触发 {group_name} 摘要生成"})
+            if not chat_id and not group_name:
+                self.send_json({"ok": False, "error": "缺少 chat_id 或 group_name"})
+                return
+
+            # Validate AI is configured
+            try:
+                from src.summarize import create_summarizer
+                from src.config import load_config
+                bot_cfg = load_config()
+                summarizer = create_summarizer(bot_cfg)
+            except ValueError as e:
+                self.send_json({"ok": False, "error": f"AI未配置: {e}"})
+                return
+            except Exception as e:
+                self.send_json({"ok": False, "error": f"AI初始化失败: {e}"})
+                return
+
+            # Get scheduler and find matching DigestGroup
+            scheduler = _assistant_scheduler
+            if not scheduler:
+                self.send_json({"ok": False, "error": "调度器未就绪"})
+                return
+
+            # Find matching digest group by chat_id or group_name
+            dg = None
+            for _dg in scheduler._config.digest_groups:
+                if _dg.chat_id == chat_id or (_dg.group_name and _dg.group_name.lower() == group_name.lower()):
+                    dg = _dg
+                    break
+            if not dg:
+                # Create a temporary DigestGroup with defaults
+                from src.assistant.config import DigestGroup
+                dg = DigestGroup(
+                    chat_id=chat_id,
+                    group_name=group_name or chat_id,
+                    lookback_hours=6,
+                    enabled=True,
+                    schedule=[],
+                    push_target="",
+                )
+
+            # Create TaskCenter task
+            _tid = None
+            try:
+                tc = _task_center
+                if tc:
+                    _tid = tc.create_task('group_digest', 'manual',
+                                          chat_id or group_name, dg.group_name)
+            except Exception:
+                logger.warning("[TASK] create_task failed for group digest manual trigger")
+
+            def _run_group_digest():
+                """Background: generate group digest, update task."""
+                try:
+                    from src.web.api_handlers import broadcast_event
+                    # Task: running
+                    try:
+                        tc = _task_center
+                        if tc and _tid:
+                            tc.update_task(_tid, status='running', progress='正在获取消息')
+                            broadcast_event("task_update", {"task_id": _tid, "task_type": "group_digest",
+                                                             "status": "running", "progress": "正在获取消息",
+                                                             "group_name": dg.group_name})
+                    except Exception:
+                        pass
+                    scheduler._generate_digest(dg, task_id=_tid)
+                except Exception as e:
+                    logger.exception("[GROUP-DIGEST] Background digest failed for '%s'", dg.group_name)
+                    try:
+                        tc = _task_center
+                        if tc and _tid:
+                            tc.fail_task(_tid, error=str(e))
+                            from src.web.api_handlers import broadcast_event
+                            broadcast_event("task_update", {"task_id": _tid, "task_type": "group_digest",
+                                                             "status": "failed", "error": str(e),
+                                                             "group_name": dg.group_name})
+                    except Exception:
+                        pass
+
+            t = threading.Thread(target=_run_group_digest, daemon=True)
+            t.start()
+
+            self.send_json({"ok": True, "status": "started", "task_id": _tid,
+                            "group_name": dg.group_name})
             return
 
         # ── API: Image/Video proxy (download + decrypt from CDN) ─────────────────
@@ -3165,6 +3256,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             self.path.startswith("/api/oa/") or self.path.startswith("/api/chat/") or
             self.path.startswith("/api/scheduler/") or self.path.startswith("/api/export/") or
             self.path.startswith("/api/push/") or self.path.startswith("/api/groups/") or
+            self.path.startswith("/api/tasks/") or self.path == "/api/tasks" or
             self.path == "/api/scheduled-tasks"):
             try:
                     logger.info("[REQ-TRACE] entering api_handlers for %s thread=%s", self.path, threading.current_thread().name)

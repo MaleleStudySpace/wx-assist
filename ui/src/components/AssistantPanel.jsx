@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle, Warning, Spinner, MagnifyingGlass, Bell, Clock, ChatCircle, CaretDown, CaretRight, EnvelopeOpen, Archive, Lightning, Trash, X, Plus } from '@phosphor-icons/react'
+import { CheckCircle, Warning, Spinner, MagnifyingGlass, Bell, Clock, ChatCircle, CaretDown, CaretRight, EnvelopeOpen, Archive, Lightning, Trash, X, Plus, Play } from '@phosphor-icons/react'
 import { Toggle, SectionHeader, TagInput, API_BASE } from './SharedComponents'
 
 const pageTransition = {
@@ -177,6 +177,7 @@ export default function AssistantPanel() {
   const alertEditorRef = useRef(null)
   const digestEditorRef = useRef(null)
   const [saveFlash, setSaveFlash] = useState(null)  // 'saving' | 'saved' | 'error' | null
+  const [digestRunning, setDigestRunning] = useState('')  // chat_id of currently running digest
   const [notifications, setNotifications] = useState([])
   const [notificationLoading, setNotificationLoading] = useState(false)
   const [notificationError, setNotificationError] = useState('')
@@ -464,6 +465,27 @@ export default function AssistantPanel() {
   async function updateNotificationStatus(id, action) {
     await fetch(`${API_BASE}/api/assistant/notifications/${id}/${action}`, { method: 'POST' })
     loadNotifications()
+  }
+
+  async function handleRunDigest(chatId, groupName) {
+    if (!chatId) return
+    setDigestRunning(chatId)
+    try {
+      const res = await fetch(`${API_BASE}/api/assistant/digest/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, group_name: groupName }),
+      })
+      const data = await res.json()
+      if (!data.ok) {
+        setSaveError(data.error || '触发失败')
+        setDigestRunning('')
+      }
+      // Task progress will be tracked in TaskCenter; clear running state after a delay
+      setTimeout(() => setDigestRunning(''), 60000)
+    } catch {
+      setDigestRunning('')
+    }
   }
 
   if (loading) {
@@ -1431,8 +1453,22 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
             )}
           </div>
         </div>
-        <DeleteButton onDelete={onDelete} />
-        <div className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={e => { e.stopPropagation(); handleRunDigest(values.chat_id, values.group_name) }}
+            disabled={!values.chat_id || digestRunning === values.chat_id}
+            className={`flex items-center gap-1 text-xs font-medium transition-colors cursor-pointer px-2 py-1 rounded-lg
+              ${digestRunning === values.chat_id
+                ? 'text-brand-green/50 cursor-wait'
+                : 'text-brand-green hover:text-brand-green-hover hover:bg-brand-green/[0.06]'
+              }`}
+            title="手动生成摘要"
+          >
+            <Play size={13} weight="fill" />
+            {digestRunning === values.chat_id ? '生成中...' : '生成摘要'}
+          </button>
+          <DeleteButton onDelete={onDelete} />
+        </div>        <div className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
           <CaretDown size={16} className="text-text-muted" />
         </div>
       </div>
