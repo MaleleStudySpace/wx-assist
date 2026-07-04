@@ -139,6 +139,8 @@ class DigestScheduler:
             self._pool.shutdown(wait=True, cancel_futures=False)
         except Exception:
             pass
+        # Recreate pool so start() can submit new tasks after a stop→start cycle
+        self._pool = ThreadPoolExecutor(max_workers=3)
         logger.info("DigestScheduler stopped")
 
     def update_config(self, new_config: AssistantConfig) -> None:
