@@ -869,6 +869,8 @@ export default function AssistantPanel() {
                       setDigestDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
                       setExpandedDigests(prev => ({ ...prev, [i]: false }))
                     }}
+                    digestRunning={digestRunning}
+                    onRunDigest={handleRunDigest}
                   />
                 </motion.div>
               ))}
@@ -1405,7 +1407,7 @@ function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCron
   )
 }
 
-function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onSave, onCancel, defaultSystemPrompt, stylePresets }) {
+function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onSave, onCancel, defaultSystemPrompt, stylePresets, digestRunning, onRunDigest }) {
   const bodyRef = useRef(null)
   // Use draft if available (editing), otherwise use saved values
   const values = draft || dg
@@ -1455,7 +1457,7 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
         </div>
         <div className="flex items-center gap-1">
           <button
-            onClick={e => { e.stopPropagation(); handleRunDigest(values.chat_id, values.group_name) }}
+            onClick={e => { e.stopPropagation(); onRunDigest(values.chat_id, values.group_name) }}
             disabled={!values.chat_id || digestRunning === values.chat_id}
             className={`flex items-center gap-1 text-xs font-medium transition-colors cursor-pointer px-2 py-1 rounded-lg
               ${digestRunning === values.chat_id
