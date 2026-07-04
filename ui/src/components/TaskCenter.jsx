@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, ChatCircleDots, Newspaper, Clock, CheckCircle, Warning, Spinner, Lightning, Robot } from '@phosphor-icons/react'
+import { X, ChatCircleDots, Newspaper, Clock, Spinner } from '@phosphor-icons/react'
 import { API_BASE } from './SharedComponents'
 
 const TASK_TYPES = {
