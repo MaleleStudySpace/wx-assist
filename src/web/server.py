@@ -3256,7 +3256,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             self.path.startswith("/api/oa/") or self.path.startswith("/api/chat/") or
             self.path.startswith("/api/scheduler/") or self.path.startswith("/api/export/") or
             self.path.startswith("/api/push/") or self.path.startswith("/api/groups/") or
-            self.path.startswith("/api/tasks/") or self.path == "/api/tasks" or
+            self.path.startswith("/api/tasks/") or self.path.startswith("/api/tasks?") or self.path == "/api/tasks" or
             self.path == "/api/scheduled-tasks"):
             try:
                     logger.info("[REQ-TRACE] entering api_handlers for %s thread=%s", self.path, threading.current_thread().name)

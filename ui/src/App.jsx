@@ -99,6 +99,11 @@ export default function App() {
       socket = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
       socket.onopen = () => {
         setWsConnected(true)
+        // Fetch initial running task count from API
+        fetch(`${API_BASE}/api/tasks?status=running&limit=50`)
+          .then(r => r.json())
+          .then(d => { if (d.ok) setRunningTaskCount(d.tasks?.length || 0) })
+          .catch(() => {})
       }
       socket.onmessage = (e) => {
         try {

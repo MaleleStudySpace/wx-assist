@@ -5176,7 +5176,7 @@ def handle_tasks_list(params, config: AssistantConfig):
         return {"ok": True, "tasks": tasks, "total": len(tasks)}
     except Exception as e:
         logger.error(f"[TASK-CENTER] list tasks failed: {e}")
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Internal error"}
 
 
 def handle_tasks_detail(params, config: AssistantConfig):
@@ -5185,11 +5185,14 @@ def handle_tasks_detail(params, config: AssistantConfig):
         tc = get_task_center()
         if not tc:
             return {"ok": False, "error": "TaskCenter not available"}
-        task_id = int((params.get("id", ["0"]) or ["0"])[0])
+        try:
+            task_id = int((params.get("id", ["0"]) or ["0"])[0])
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "Invalid task ID"}
         task = tc.get_task(task_id)
         if task:
             return {"ok": True, "task": task}
         return {"ok": False, "error": "Task not found"}
     except Exception as e:
         logger.error(f"[TASK-CENTER] get task failed: {e}")
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Internal error"}
