@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Gear, ChartLine, Scroll, Spinner, Sun, Moon, ChatCircleDots, Star, Eye, Newspaper, Chats, PaperPlaneTilt } from '@phosphor-icons/react'
+import { Gear, ChartLine, Scroll, Spinner, Sun, Moon, ChatCircleDots, Star, Eye, Newspaper, Chats, PaperPlaneTilt, Bell } from '@phosphor-icons/react'
 import { API_BASE } from './components/SharedComponents'
 import Dashboard from './components/Dashboard'
 import ConfigPanel from './components/ConfigPanel'
@@ -12,6 +12,7 @@ import MomentsTab from './components/MomentsTab'
 import OATab from './components/OATab'
 import ChatTab from './components/ChatTab'
 import FeatureGuide from './components/FeatureGuide'
+import TaskCenter from './components/TaskCenter'
 import { AmbientWaveBackground } from './components/AmbientBackground'
 
 const iconVariants = {
@@ -43,6 +44,29 @@ export default function App() {
   const [onboardingDone, setOnboardingDone] = useState(null) // null = loading
   const [showGuide, setShowGuide] = useState(false) // FeatureGuide only shows right after onboarding
   const [wsConnected, setWsConnected] = useState(false)
+  const [showTaskCenter, setShowTaskCenter] = useState(false)
+  const [runningTaskCount, setRunningTaskCount] = useState(0)
+
+  // Listen for open-task-center custom events from other components
+  useEffect(() => {
+    const handler = () => setShowTaskCenter(true)
+    window.addEventListener('open-task-center', handler)
+    return () => window.removeEventListener('open-task-center', handler)
+  }, [])
+
+  // Poll running task count periodically
+  useEffect(() => {
+    if (!onboardingDone) return
+    function poll() {
+      fetch(`${API_BASE}/api/tasks?status=running&limit=50`)
+        .then(r => r.json())
+        .then(d => { if (d.ok) setRunningTaskCount(d.tasks?.length || 0) })
+        .catch(() => {})
+    }
+    poll()
+    const id = setInterval(poll, 10000)
+    return () => clearInterval(id)
+  }, [onboardingDone])
 
   // Theme state: default to 'dark' (Version 1: 夜航控制台) but can toggle to 'light' (正常模式)
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark')
@@ -100,6 +124,8 @@ export default function App() {
       socket.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data)
+          // task_update events are handled by TaskCenter component directly
+          if (data.type === 'task_update') return
           // Only update status if it's NOT a custom event (events have a 'type' field)
           // Status broadcasts don't have 'type', events like fav_export_progress do
           if (!data.type) {
@@ -278,6 +304,18 @@ export default function App() {
                 {TABS.find(t => t.id === activeTab)?.label}
               </h2>
               <div className="flex items-center gap-3">
+                {/* Task Center bell icon */}
+                <button
+                  onClick={() => setShowTaskCenter(true)}
+                  className="p-2 rounded-full bg-bg-main border border-border-main text-text-muted hover:text-text-main hover:border-text-muted/30 transition-colors cursor-pointer relative"
+                  title="任务中心"
+                >
+                  <Bell size={18} />
+                  {runningTaskCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-brand-green animate-pulse" />
+                  )}
+                </button>
+
                 {/* Theme switcher toggle button */}
                 <button
                   onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -330,6 +368,9 @@ export default function App() {
           </>
         )}
       </div>
+
+      {/* Task Center Drawer */}
+      <TaskCenter open={showTaskCenter} onClose={() => setShowTaskCenter(false)} />
     </div>
   )
 }

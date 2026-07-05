@@ -355,6 +355,15 @@ class Bot:
 
             outbox = Outbox()
 
+            # ── Task Center (task lifecycle tracking) ──
+            task_center = None
+            try:
+                from src.assistant.task_center import TaskCenter
+                task_center = TaskCenter()
+                task_center.cleanup_expired()
+            except Exception as e:
+                logger.warning("TaskCenter init failed (continuing without): %s", e)
+
             # Always create all engines unconditionally so they can be hot-enabled
             # via the API even if assistant_enabled was false at boot.
             # Each engine's check()/tick() no-ops when assistant_enabled=False
@@ -365,6 +374,7 @@ class Bot:
             assistant_scheduler = DigestScheduler(
                 asst_cfg, outbox, summarizer, store,
                 wcdb_client=getattr(self, '_wcdb_client', None),
+                task_center=task_center,
             )
             assistant_scheduler.start()
             try:
@@ -372,6 +382,14 @@ class Bot:
                 register_assistant_scheduler(assistant_scheduler)
             except Exception:
                 pass
+
+            # Register TaskCenter with server
+            if task_center:
+                try:
+                    from src.web.server import register_task_center
+                    register_task_center(task_center)
+                except Exception:
+                    pass
 
             # ── Alert engine (message-triggered, no thread needed) ──
             assistant_alert = AlertEngine(asst_cfg, outbox)

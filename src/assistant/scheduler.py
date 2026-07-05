@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from .config import AssistantConfig, DigestGroup, OAGroup, save_assistant_config
@@ -102,16 +103,20 @@ class DigestScheduler:
     """
 
     def __init__(self, config: AssistantConfig, outbox: Outbox,
-                 summarizer, store, wcdb_client=None):
+                 summarizer, store, wcdb_client=None, task_center=None):
         self._config = config
         self._outbox = outbox
         self._summarizer = summarizer
         self._store = store
         self._wcdb_client = wcdb_client
+        self._task_center = task_center
         self._running = False
         self._thread: threading.Thread | None = None
         # Track last trigger time per group to prevent double-fires
         self._last_triggered: dict[str, float] = {}
+        self._tick_count = 0  # for periodic cleanup
+        # Thread pool for async digest execution (scheduler triggers + manual triggers)
+        self._pool = ThreadPoolExecutor(max_workers=3)
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -129,6 +134,13 @@ class DigestScheduler:
 
     def stop(self) -> None:
         self._running = False
+        # Shutdown pool gracefully — wait for in-flight tasks to finish
+        try:
+            self._pool.shutdown(wait=True, cancel_futures=False)
+        except Exception:
+            pass
+        # Recreate pool so start() can submit new tasks after a stop→start cycle
+        self._pool = ThreadPoolExecutor(max_workers=3)
         logger.info("DigestScheduler stopped")
 
     def update_config(self, new_config: AssistantConfig) -> None:
@@ -170,6 +182,13 @@ class DigestScheduler:
                 self._tick()
             except Exception:
                 logger.exception("DigestScheduler tick failed")
+            # Periodic cleanup: every ~60 ticks (≈1 hour)
+            self._tick_count += 1
+            if self._tick_count % 60 == 0 and self._task_center:
+                try:
+                    self._task_center.cleanup_expired()
+                except Exception:
+                    logger.warning("[TASK-CENTER] periodic cleanup failed")
             # Sleep in small increments for responsive shutdown
             for _ in range(CHECK_INTERVAL_SEC):
                 if not self._running:
@@ -210,10 +229,20 @@ class DigestScheduler:
             self._last_triggered[last_key] = now_ts
             logger.info("DigestScheduler: triggering digest for '%s' at %s", dg.group_name, now_hm)
 
+            # Create TaskCenter task for tracking
+            _tid = None
             try:
-                self._generate_digest(dg)
+                if self._task_center:
+                    _tid = self._task_center.create_task(
+                        'group_digest', 'scheduler',
+                        dg.chat_id or dg.group_name, dg.group_name)
+                    self._broadcast_task_update(_tid, 'group_digest', 'pending', '准备中', dg.group_name)
             except Exception:
-                logger.exception("Digest generation failed for '%s'", dg.group_name)
+                logger.warning("[TASK] create failed for '%s'", dg.group_name)
+
+            # Submit to thread pool for async execution
+            _tid_ref = _tid  # capture for closure
+            self._pool.submit(self._run_digest_in_pool, dg, _tid_ref)
 
         # ── OA digests ──
         for oa in self._config.oa_groups:
@@ -238,10 +267,45 @@ class DigestScheduler:
             self._last_triggered[last_key] = now_ts
             logger.info("DigestScheduler: triggering OA digest for '%s' at %s", oa.name, now_hm)
 
+            # Create TaskCenter task for tracking
+            _tid = None
             try:
-                self._generate_oa_digest(oa)
+                if self._task_center:
+                    _tid = self._task_center.create_task(
+                        'oa_digest', 'scheduler', oa.id, oa.name)
+                    self._broadcast_task_update(_tid, 'oa_digest', 'pending', '准备中', oa.name)
             except Exception:
-                logger.exception("OA digest generation failed for '%s'", oa.name)
+                logger.warning("[TASK] create failed for '%s'", oa.name)
+
+            # Submit to thread pool for async execution
+            _tid_ref = _tid  # capture for closure
+            self._pool.submit(self._run_oa_digest_in_pool, oa, _tid_ref)
+
+    def _run_digest_in_pool(self, dg: DigestGroup, task_id: int = None) -> None:
+        """Wrapper for running group digest in thread pool with error handling."""
+        try:
+            self._generate_digest(dg, task_id=task_id)
+        except Exception:
+            logger.exception("Digest generation failed for '%s'", dg.group_name)
+            if task_id:
+                try:
+                    self._task_center.fail_task(task_id, error='unhandled exception')
+                    self._broadcast_task_update(task_id, 'group_digest', 'failed', '', dg.group_name, error='unhandled exception')
+                except Exception:
+                    pass
+
+    def _run_oa_digest_in_pool(self, oa: OAGroup, task_id: int = None) -> None:
+        """Wrapper for running OA digest in thread pool with error handling."""
+        try:
+            self._generate_oa_digest(oa, task_id=task_id)
+        except Exception:
+            logger.exception("OA digest generation failed for '%s'", oa.name)
+            if task_id:
+                try:
+                    self._task_center.fail_task(task_id, error='unhandled exception')
+                    self._broadcast_task_update(task_id, 'oa_digest', 'failed', '', oa.name, error='unhandled exception')
+                except Exception:
+                    pass
 
     def _should_trigger(self, dg: DigestGroup, now: datetime, now_hm: str) -> bool:
         """Check if a digest group should trigger now.
@@ -257,9 +321,12 @@ class DigestScheduler:
                                dg.cron_expr, dg.group_name)
         return now_hm in dg.schedule
 
-    def _generate_digest(self, dg: DigestGroup) -> None:
+    def _generate_digest(self, dg: DigestGroup, task_id: int = None) -> None:
         """Fetch messages, filter, summarize, update memory, push to outbox."""
         start_ts = time.monotonic()
+
+        # Task progress: running
+        self._tc_update(task_id, status='running', progress='正在获取消息')
 
         # 1. Fetch messages within lookback window
         since_ts = int(time.time()) - dg.lookback_hours * 3600
@@ -273,6 +340,8 @@ class DigestScheduler:
                      len(raw_messages), dg.group_name, dg.lookback_hours)
         if not raw_messages:
             logger.info("Digest: no messages for '%s' in last %dh", dg.group_name, dg.lookback_hours)
+            # Task: completed with no content
+            self._tc_complete(task_id, result='无新内容')
             # Still record in outbox so user sees the trigger happened
             mode_label = "未读" if dg.unread_only else f"{dg.lookback_hours}h"
             self._outbox.add(
@@ -297,6 +366,7 @@ class DigestScheduler:
             unread_count = self._get_unread_count(chat_id)
             if unread_count == 0:
                 logger.info("[DIGEST] Step 2/7: unread_only mode, no unread messages for '%s', skipping", dg.group_name)
+                self._tc_complete(task_id, result='无未读消息')
                 return
             raw_messages = raw_messages[-unread_count:]
             logger.info("[DIGEST] Step 2/7: unread_only filter for '%s' — %d unread messages",
@@ -308,9 +378,13 @@ class DigestScheduler:
         logger.info("[DIGEST] Step 3/7: Noise filter for '%s' — %d → %d messages (ignore_kw=%s)",
                      dg.group_name, len(raw_messages), len(filtered), ignore_kw)
         if not filtered:
+            self._tc_complete(task_id, result='无实质内容')
             return
 
         # 4. Build prompt and summarize
+        # Task progress: AI generating
+        self._tc_update(task_id, progress='AI 生成摘要中')
+        self._broadcast_task_update(task_id, 'group_digest', 'running', 'AI 生成摘要中', dg.group_name)
         # Unified architecture: system_prompt + user_prompt
         # - custom_prompt set → COMPLETELY REPLACES default system prompt
         # - style preset → appended to default system prompt
@@ -452,6 +526,9 @@ class DigestScheduler:
         )
         logger.info("[DIGEST] Step 6/7: Outbox entry #%d created for '%s'", nid, dg.group_name)
 
+        # Task progress: pushing
+        self._tc_update(task_id, progress='推送中')
+
         # 7. Push to WeChat via iLink (if configured)
         if dg.push_target == "ilink":
             try:
@@ -471,6 +548,8 @@ class DigestScheduler:
                         "success" if push_ok else "failed",
                         push_err,
                     )
+                    # Task: update push result
+                    self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
                     if push_ok:
                         logger.info("Digest pushed to WeChat for '%s'", dg.group_name)
                     else:
@@ -496,6 +575,14 @@ class DigestScheduler:
                     pass
 
         elapsed = (time.monotonic() - start_ts) * 1000
+        # Task: completed or failed (if LLM error)
+        if digest_text.startswith("摘要生成失败"):
+            self._tc_fail(task_id, error=digest_text)
+            self._broadcast_task_update(task_id, 'group_digest', 'failed', '', dg.group_name, error=digest_text[:100])
+        else:
+            self._tc_complete(task_id, result=digest_text[:200] if filtered else '',
+                              msg_count=len(filtered) if filtered else 0)
+            self._broadcast_task_update(task_id, 'group_digest', 'completed', '完成', dg.group_name)
         logger.info("[DIGEST] Pipeline completed for '%s' in %.0fms", dg.group_name, elapsed)
 
     def _get_unread_count(self, chat_id: str) -> int:
@@ -529,13 +616,17 @@ class DigestScheduler:
             pass
         return None
 
-    def _generate_oa_digest(self, oa: OAGroup) -> None:
+    def _generate_oa_digest(self, oa: OAGroup, task_id: int = None) -> None:
         """Generate OA digest for a scheduled OA group.
 
         Uses OADigestService to generate the digest, then pushes to
         outbox and optionally to WeChat via iLink.
         """
         from .oa_digest import OADigestService
+
+        # Task progress: running
+        self._tc_update(task_id, status='running', progress='正在获取文章')
+        self._broadcast_task_update(task_id, 'oa_digest', 'running', '正在获取文章', oa.name)
 
         # Get WCDB client — either from constructor or from api_handlers
         client = self._wcdb_client
@@ -547,7 +638,12 @@ class DigestScheduler:
                 pass
         if not client:
             logger.warning("[OA-DIGEST] No WCDB client available for '%s', skipping", oa.name)
+            self._tc_fail(task_id, error='WCDB 不可用')
             return
+
+        # Task progress: AI generating
+        self._tc_update(task_id, progress='AI 生成摘要中')
+        self._broadcast_task_update(task_id, 'oa_digest', 'running', 'AI 生成摘要中', oa.name)
 
         service = OADigestService(self._config, client, summarizer=self._summarizer)
         result = service.generate_digest(oa.id)
@@ -555,6 +651,8 @@ class DigestScheduler:
         if not result.get("success", False):
             logger.error("[OA-DIGEST] Digest generation failed for '%s': %s",
                          oa.name, result.get("error", "unknown"))
+            self._tc_fail(task_id, error=result.get("error", "摘要生成失败"))
+            self._broadcast_task_update(task_id, 'oa_digest', 'failed', '', oa.name, error=result.get("error", ""))
             return
 
         digest_text = result.get("digest_text", "")
@@ -565,6 +663,9 @@ class DigestScheduler:
 
         if not digest_text or digest_text.startswith("没有") or digest_text.startswith("所有"):
             # No new content — still record in outbox
+            # Task: completed with no content
+            self._tc_complete(task_id, result='无新内容', articles_count=articles_count)
+            self._broadcast_task_update(task_id, 'oa_digest', 'completed', '无新内容', oa.name)
             self._outbox.add(
                 notif_type="oa_digest",
                 chat_id=oa.id,
@@ -582,6 +683,9 @@ class DigestScheduler:
 
         # Push to outbox
         title = f"📰 公众号摘要 · {oa.name}"
+        # Task progress: pushing
+        self._tc_update(task_id, progress='推送中')
+        self._broadcast_task_update(task_id, 'oa_digest', 'running', '推送中', oa.name)
         content = json.dumps({
             "group": oa.name,
             "articles_count": articles_count,
@@ -615,6 +719,8 @@ class DigestScheduler:
                         "success" if push_ok else "failed",
                         push_err,
                     )
+                    # Task: update push result
+                    self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
                     if push_ok:
                         logger.info("[OA-DIGEST] Pushed to WeChat for '%s'", oa.name)
                     else:
@@ -648,5 +754,66 @@ class DigestScheduler:
                 "articles_count": articles_count,
                 "digest_text": digest_text,
             })
+        except Exception:
+            pass
+
+        # Task: completed
+        self._tc_complete(task_id, result=digest_text[:200], articles_count=articles_count)
+        self._broadcast_task_update(task_id, 'oa_digest', 'completed', '完成', oa.name)
+
+    # ── TaskCenter helpers ────────────────────────────────────────────
+
+    def _tc_update(self, task_id, **kwargs):
+        """Safe wrapper: update task, never raises."""
+        if not task_id or not self._task_center:
+            return
+        try:
+            self._task_center.update_task(task_id, **kwargs)
+        except Exception:
+            logger.warning("[TASK] update_task #%d failed", task_id, exc_info=True)
+
+    def _tc_complete(self, task_id, result='', **kwargs):
+        """Safe wrapper: complete task, never raises."""
+        if not task_id or not self._task_center:
+            return
+        try:
+            self._task_center.complete_task(task_id, result=result, **kwargs)
+        except Exception:
+            logger.warning("[TASK] complete_task #%d failed", task_id, exc_info=True)
+
+    def _tc_fail(self, task_id, error=''):
+        """Safe wrapper: fail task, never raises."""
+        if not task_id or not self._task_center:
+            return
+        try:
+            self._task_center.fail_task(task_id, error=error)
+        except Exception:
+            logger.warning("[TASK] fail_task #%d failed", task_id, exc_info=True)
+
+    def _tc_push_result(self, task_id, push_status, push_error=''):
+        """Safe wrapper: update push result, never raises."""
+        if not task_id or not self._task_center:
+            return
+        try:
+            self._task_center.update_push_result(task_id, push_status, push_error)
+        except Exception:
+            logger.warning("[TASK] update_push_result #%d failed", task_id, exc_info=True)
+
+    def _broadcast_task_update(self, task_id, task_type, status, progress, group_name, error=''):
+        """Broadcast task_update WebSocket event. Never raises."""
+        if not task_id:
+            return
+        try:
+            from src.web.api_handlers import broadcast_event
+            payload = {
+                "task_id": task_id,
+                "task_type": task_type,
+                "status": status,
+                "progress": progress,
+                "group_name": group_name,
+            }
+            if error:
+                payload["error"] = error
+            broadcast_event("task_update", payload)
         except Exception:
             pass

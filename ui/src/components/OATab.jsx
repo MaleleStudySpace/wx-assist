@@ -1096,7 +1096,7 @@ export default function OATab() {
       const res = await fetch(`${API_BASE}/api/oa/digest/run/${groupId}`, { method: 'POST' })
       const data = await res.json()
       if (data.ok) {
-        setDigestProgress('⏳ 摘要生成中（约 10-30 秒）...')
+        setDigestProgress('⏳ 摘要生成中，右上角任务中心查看进度')
       } else {
         setDigestProgress(`⚠ ${data.error || '提交失败'}`)
         setTimeout(() => setDigestProgress(''), 4000)
@@ -1531,10 +1531,12 @@ export default function OATab() {
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          className="fixed bottom-6 right-6 px-4 py-3 rounded-xl bg-brand-green-light border border-brand-green/30 text-brand-green text-sm font-medium flex items-center gap-2 shadow-lg"
+          className="fixed bottom-6 right-6 px-4 py-3 rounded-xl bg-brand-green-light border border-brand-green/30 text-brand-green text-sm font-medium flex items-center gap-2 shadow-lg cursor-pointer"
+          onClick={() => window.dispatchEvent(new CustomEvent('open-task-center'))}
         >
           <div className="w-4 h-4 border-2 border-brand-green/30 border-t-brand-green rounded-full animate-spin" />
           {digestProgress || '生成摘要中...'}
+          <span className="text-xs opacity-70 ml-1">点击查看任务中心</span>
         </motion.div>
       )}
 

@@ -137,6 +137,14 @@ def reset_wcdb_client():
     logger.info("WCDB client cache cleared (bot stopped)")
 
 
+def get_task_center():
+    """Get the TaskCenter singleton from server module."""
+    try:
+        from src.web.server import _task_center
+        return _task_center
+    except Exception:
+        return None
+
 def get_wcdb_client():
     """Get or create WCDB client singleton.
 
@@ -4417,7 +4425,7 @@ def handle_oa_digest_run(params, config: AssistantConfig):
     """POST /api/oa/digest/run/:groupId — Generate digest manually (async).
 
     Creates a background thread so the HTTP request returns immediately.
-    Progress and results are broadcast via WebSocket (oa_digest_progress).
+    Progress and results are broadcast via WebSocket (oa_digest_progress + task_update).
     """
     group_id = params.get("groupId", [""])[0]
     if not group_id:
@@ -4440,14 +4448,60 @@ def handle_oa_digest_run(params, config: AssistantConfig):
         logger.warning("[OA-DIGEST] Summarizer creation failed: %s", e)
         summarizer = None
 
+    # Resolve group name for TaskCenter
+    _group_name = group_id
+    try:
+        _mgr = OAGroupManager(config)
+        _grp = _mgr.get_group(group_id)
+        if _grp:
+            _group_name = _grp.name
+    except Exception:
+        pass
+
+    # Create TaskCenter task
+    _tid = None
+    try:
+        tc = get_task_center()
+        if tc:
+            _tid = tc.create_task('oa_digest', 'manual', group_id, _group_name)
+    except Exception:
+        logger.warning("[TASK] create_task failed for OA manual trigger")
+
     broadcast_event("oa_digest_progress", {"status": "started", "group_id": group_id})
+    if _tid:
+        broadcast_event("task_update", {"task_id": _tid, "task_type": "oa_digest",
+                                         "status": "pending", "progress": "准备中",
+                                         "group_name": _group_name})
 
     def _run():
         """Background: generate digest, broadcast result, handle push."""
         _group = None
         try:
+            # Task: running
+            try:
+                tc = get_task_center()
+                if tc and _tid:
+                    tc.update_task(_tid, status='running', progress='正在获取文章')
+                    broadcast_event("task_update", {"task_id": _tid, "task_type": "oa_digest",
+                                                     "status": "running", "progress": "正在获取文章",
+                                                     "group_name": _group_name})
+            except Exception:
+                pass
+
             _service = OADigestService(config, client)
             _service._summarizer = summarizer
+
+            # Task: AI generating
+            try:
+                tc = get_task_center()
+                if tc and _tid:
+                    tc.update_task(_tid, progress='AI 生成摘要中')
+                    broadcast_event("task_update", {"task_id": _tid, "task_type": "oa_digest",
+                                                     "status": "running", "progress": "AI 生成摘要中",
+                                                     "group_name": _group_name})
+            except Exception:
+                pass
+
             result = _service.generate_digest(group_id, force=True)
             result["ok"] = result.pop("success", True)
 
@@ -4466,9 +4520,39 @@ def handle_oa_digest_run(params, config: AssistantConfig):
                 "digest_text": result.get("digest_text", ""),
             })
 
+            # Task: push first, then complete (so progress is correct)
+            _digest_text = result.get("digest_text", "")
+            _articles_count = result.get("articles_count", 0)
+            _is_empty = not _digest_text or _digest_text.startswith("没有") or _digest_text.startswith("所有")
+
             # Push to WeChat via iLink (if configured for this OA group)
             if result.get("ok") and result.get("digest_text") and _group:
+                # Task: pushing
+                try:
+                    tc = get_task_center()
+                    if tc and _tid:
+                        tc.update_task(_tid, progress='推送中')
+                        broadcast_event("task_update", {"task_id": _tid, "task_type": "oa_digest",
+                                                         "status": "running", "progress": "推送中",
+                                                         "group_name": _group_name})
+                except Exception:
+                    pass
                 _push_oa_digest(result, _group, config)
+
+            # Now mark task as completed (after push)
+            try:
+                tc = get_task_center()
+                if tc and _tid:
+                    if _is_empty:
+                        tc.complete_task(_tid, result='无新内容', articles_count=_articles_count)
+                    else:
+                        tc.complete_task(_tid, result=_digest_text[:200], articles_count=_articles_count)
+                    broadcast_event("task_update", {"task_id": _tid, "task_type": "oa_digest",
+                                                     "status": "completed",
+                                                     "progress": "无新内容" if _is_empty else "完成",
+                                                     "group_name": _group_name})
+            except Exception:
+                pass
 
         except Exception as e:
             logger.exception("[OA-DIGEST] Background digest failed")
@@ -4476,11 +4560,21 @@ def handle_oa_digest_run(params, config: AssistantConfig):
                 "status": "error", "group_id": group_id,
                 "error": str(e),
             })
+            # Task: failed
+            try:
+                tc = get_task_center()
+                if tc and _tid:
+                    tc.fail_task(_tid, error=str(e))
+                    broadcast_event("task_update", {"task_id": _tid, "task_type": "oa_digest",
+                                                     "status": "failed", "error": str(e),
+                                                     "group_name": _group_name})
+            except Exception:
+                pass
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
 
-    return {"ok": True, "status": "started", "group_id": group_id}
+    return {"ok": True, "status": "started", "group_id": group_id, "task_id": _tid}
 
 
 def _push_oa_digest(result, group, config):
@@ -4927,6 +5021,13 @@ def handle_api_request(path: str, params: dict, config: AssistantConfig, body: d
     if path == "/api/export/open-folder":
         return handle_export_open_folder(params, config)
 
+    # ── 任务中心 ─────────────────────────────────────────────────────────
+    if path == "/api/tasks":
+        return handle_tasks_list(params, config)
+    if path.startswith("/api/tasks/") and len(path.split("/")) == 4:
+        params["id"] = [path.split("/")[3]]
+        return handle_tasks_detail(params, config)
+
     return None  # Not handled by this module
 
 
@@ -5060,3 +5161,40 @@ def handle_export_open_folder(params, config: AssistantConfig):
         return {"ok": False, "error": f"Failed to open folder: {e}"}
 
     return {"ok": True, "path": export_dir}
+
+
+# ── 任务中心 API ─────────────────────────────────────────────────────────
+
+def handle_tasks_list(params, config: AssistantConfig):
+    """GET /api/tasks — List all tasks with optional filters."""
+    try:
+        tc = get_task_center()
+        if not tc:
+            return {"ok": False, "error": "TaskCenter not available"}
+        status = (params.get("status", [""]) or [""])[0]
+        task_type = (params.get("type", [""]) or [""])[0]
+        limit = int((params.get("limit", ["50"]) or ["50"])[0])
+        tasks = tc.list_tasks(status=status, task_type=task_type, limit=limit)
+        return {"ok": True, "tasks": tasks, "total": len(tasks)}
+    except Exception as e:
+        logger.error(f"[TASK-CENTER] list tasks failed: {e}")
+        return {"ok": False, "error": "Internal error"}
+
+
+def handle_tasks_detail(params, config: AssistantConfig):
+    """GET /api/tasks/:id — Single task detail."""
+    try:
+        tc = get_task_center()
+        if not tc:
+            return {"ok": False, "error": "TaskCenter not available"}
+        try:
+            task_id = int((params.get("id", ["0"]) or ["0"])[0])
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "Invalid task ID"}
+        task = tc.get_task(task_id)
+        if task:
+            return {"ok": True, "task": task}
+        return {"ok": False, "error": "Task not found"}
+    except Exception as e:
+        logger.error(f"[TASK-CENTER] get task failed: {e}")
+        return {"ok": False, "error": "Internal error"}

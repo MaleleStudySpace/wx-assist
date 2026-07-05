@@ -419,9 +419,9 @@ class WcdbBackend(AbstractWeChatBackend):
                     group_name, talker, standardized, callback,
                 )
 
-        # Log new messages count for this group
+        # Log new messages count for this group (debug level to avoid flooding)
         if new_count > 0:
-            op_log("MSG-POLL", "收到消息 group='%s' count=%d", group_name, new_count)
+            op_log_debug("MSG-POLL", "收到消息 group='%s' count=%d", group_name, new_count)
 
     def _handle_message(self, group_name: str, talker: str,
                         standardized: dict, callback: MessageCallback) -> None:
