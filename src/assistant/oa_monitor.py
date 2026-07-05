@@ -165,7 +165,6 @@ class OAMonitorEngine:
                     message="请用1-2句话总结以下文章的核心内容:\n" + ai_content[:500],
                     context_messages=[],
                     requester_name="system",
-                    bot_name="摘要助手",
                     group_name=source,
                 )
                 if ai_digest and ai_digest.strip():

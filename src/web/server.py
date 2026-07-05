@@ -1714,7 +1714,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     message=message,
                     context_messages=context_messages,
                     requester_name=sender_name,
-                    bot_name= "群聊小助手",
                     group_name=group_name,
                     group_memory=group_memory,
                 )
