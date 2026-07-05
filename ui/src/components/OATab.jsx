@@ -70,18 +70,18 @@ const DEFAULT_CUSTOM_PROMPT = `你是一个专业的公众号信息摘要助手�
 2. 摘要提炼核心要点，不重复标题
 3. 总结要有洞察，不要简单罗列`
 
-function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accounts, lastDigest }) {
+function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accounts, lastDigest, onViewAccount }) {
   const [expanded, setExpanded] = useState(false)
   const [showDigest, setShowDigest] = useState(false)
   const isRunning = digestRunning === group.id
   const digest = lastDigest?.groupId === group.id ? lastDigest : null
 
-  // Resolve account nicknames, filter out accounts not in current list (e.g. removed service accounts)
-  const accountNames = (group.accounts || [])
+  // Resolve account info, filter out accounts not in current list
+  const accountEntries = (group.accounts || [])
     .filter(gh => accounts?.some(a => a.username === gh))
     .map(gh => {
       const acc = accounts?.find(a => a.username === gh)
-      return acc ? acc.nickname : gh
+      return { username: gh, nickname: acc ? acc.nickname : gh }
     })
 
   const scheduleLabel = (() => {
@@ -106,13 +106,21 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-text-main">{group.name}</p>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-xs text-text-muted">{accountNames.length} 个公众号</span>
+            <span className="text-xs text-text-muted">{accountEntries.length} 个公众号</span>
             <span className="text-xs text-text-muted">·</span>
             <span className="text-xs text-text-muted">{scheduleLabel}</span>
             {templateInfo && (
               <>
                 <span className="text-xs text-text-muted">·</span>
                 <span className="text-xs text-brand-green/70">{templateInfo.label}</span>
+              </>
+            )}
+            {group.push_target === 'ilink' && (
+              <>
+                <span className="text-xs text-text-muted">·</span>
+                <span className="text-xs text-status-success flex items-center gap-0.5">
+                  <Bell size={10} weight="fill" />推送
+                </span>
               </>
             )}
           </div>
@@ -190,17 +198,19 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
               </div>
             )}
 
-            {accountNames.length > 0 && (
+            {accountEntries.length > 0 && (
               <div className="mt-3 pt-3 border-t border-border-main">
                 <p className="text-xs text-text-muted mb-2">包含公众号</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {accountNames.map((name, i) => (
-                    <span
+                  {accountEntries.map((entry, i) => (
+                    <button
                       key={i}
-                      className="text-xs px-2.5 py-1 rounded-full bg-brand-green-light/20 text-brand-green/80 border border-brand-green/10"
+                      onClick={() => onViewAccount?.(entry.username, entry.nickname)}
+                      className="text-xs px-2.5 py-1 rounded-full bg-brand-green-light/20 text-brand-green/80 border border-brand-green/10 hover:bg-brand-green-light/40 hover:text-brand-green transition-colors cursor-pointer"
+                      title="点击查看历史文章"
                     >
-                      {name}
-                    </span>
+                      {entry.nickname}
+                    </button>
                   ))}
                 </div>
               </div>
@@ -242,7 +252,7 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
   )
 }
 
-function GroupEditor({ group, accounts, onSave, onCancel }) {
+function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
   const [name, setName] = useState(group?.name || '')
   const [cronExpr, setCronExpr] = useState(group?.cron_expr || '')
   const [template, setTemplate] = useState(group?.digest_template || 'default')
@@ -267,13 +277,12 @@ function GroupEditor({ group, accounts, onSave, onCancel }) {
     return (acc.nickname || '').toLowerCase().includes(q) || (acc.username || '').toLowerCase().includes(q)
   })
 
-  // Sort: selected first, then alphabetically
-  const sortedAccounts = [...filteredAccounts].sort((a, b) => {
-    const aSel = selectedAccounts.includes(a.username) ? 0 : 1
-    const bSel = selectedAccounts.includes(b.username) ? 0 : 1
-    if (aSel !== bSel) return aSel - bSel
-    return (a.nickname || a.username).localeCompare(b.nickname || b.username)
-  })
+  // Sort: alphabetically by nickname — no "selected first" sort, which causes
+  // the list to reflow when selecting multiple accounts, making it hard to
+  // pick more than one in a session.
+  const sortedAccounts = [...filteredAccounts].sort((a, b) =>
+    (a.nickname || a.username).localeCompare(b.nickname || b.username),
+  )
 
   function toggleAccount(username) {
     setSelectedAccounts(prev =>
@@ -360,7 +369,13 @@ function GroupEditor({ group, accounts, onSave, onCancel }) {
                   key={gh}
                   className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-brand-green-light/30 border border-brand-green/20 text-brand-green"
                 >
-                  {acc?.nickname || gh}
+                  <button
+                    onClick={() => onViewAccount?.(gh, acc?.nickname)}
+                    className="hover:text-brand-green-hover transition-colors cursor-pointer"
+                    title="点击查看该公众号的历史文章"
+                  >
+                    {acc?.nickname || gh}
+                  </button>
                   <button
                     onClick={() => removeAccount(gh)}
                     className="hover:text-brand-green-hover cursor-pointer"
@@ -972,6 +987,10 @@ export default function OATab() {
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const [editingMonitor, setEditingMonitor] = useState(null)
 
+  // "已关注公众号" collapse
+  const [showAllAccounts, setShowAllAccounts] = useState(false)
+  const ACCOUNTS_COLLAPSE_LIMIT = 5
+
   const editorRef = useRef(null)
 
   useEffect(() => {
@@ -986,6 +1005,16 @@ export default function OATab() {
       }, 350)
     }
   }, [showEditor])
+
+  // Auto-scroll to monitor editor when it opens
+  const monitorEditorRef = useRef(null)
+  useEffect(() => {
+    if (showMonitorEditor && monitorEditorRef.current) {
+      setTimeout(() => {
+        monitorEditorRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 350)
+    }
+  }, [showMonitorEditor])
 
   // WebSocket for digest + monitor push results
   const [monitorToast, setMonitorToast] = useState(null)
@@ -1255,6 +1284,7 @@ export default function OATab() {
           <div className="flex flex-wrap gap-1.5">
             {accounts
               .filter(acc => !accountFilter || (acc.nickname || acc.username).toLowerCase().includes(accountFilter.toLowerCase()))
+              .slice(0, showAllAccounts || accountFilter ? undefined : ACCOUNTS_COLLAPSE_LIMIT)
               .map(acc => (
                 <button
                   key={acc.username}
@@ -1268,6 +1298,14 @@ export default function OATab() {
                   {acc.nickname || acc.username}
                 </button>
               ))}
+            {!accountFilter && accounts.length > ACCOUNTS_COLLAPSE_LIMIT && (
+              <button
+                onClick={() => setShowAllAccounts(!showAllAccounts)}
+                className="text-xs px-2.5 py-1 rounded-full border border-border-main text-text-muted hover:text-text-main hover:border-text-muted/30 transition-colors cursor-pointer"
+              >
+                {showAllAccounts ? `收起` : `+ ${accounts.length - ACCOUNTS_COLLAPSE_LIMIT} 个`}
+              </button>
+            )}
             {accountFilter && accounts.filter(acc => (acc.nickname || acc.username).toLowerCase().includes(accountFilter.toLowerCase())).length === 0 && (
               <p className="text-xs text-text-muted py-1">没有匹配的公众号</p>
             )}
@@ -1404,6 +1442,8 @@ export default function OATab() {
         <AnimatePresence>
           {showMonitorEditor && (
             <motion.div
+              key={editingMonitor?.id || 'new'}
+              ref={monitorEditorRef}
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
@@ -1454,6 +1494,7 @@ export default function OATab() {
       <AnimatePresence>
         {showEditor && (
           <motion.div
+            key={editingGroup?.id || 'new'}
             ref={editorRef}
             initial={{ opacity: 0, y: -12 }}
             animate={{ opacity: 1, y: 0 }}
@@ -1465,6 +1506,7 @@ export default function OATab() {
               accounts={accounts}
               onSave={handleSaveGroup}
               onCancel={() => { setShowEditor(false); setEditingGroup(null) }}
+              onViewAccount={handleViewAccount}
             />
           </motion.div>
         )}
@@ -1521,6 +1563,7 @@ export default function OATab() {
               onRunDigest={handleRunDigest}
               digestRunning={digestRunning}
               lastDigest={lastDigest}
+              onViewAccount={handleViewAccount}
             />
           ))}
         </div>

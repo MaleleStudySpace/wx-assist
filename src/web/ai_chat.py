@@ -242,7 +242,12 @@ def _flatten_chat_records_text(records: list, depth: int = 0, max_depth: int = 5
         elif r_type == 3:
             texts.append(f"{name}: [语音]")
         elif r_type == 8:
-            texts.append(f"{name}: [文件]")
+            fname = r.get("file_name", "") or r.get("desc", "") or ""
+            fext = r.get("file_type", "")
+            label = fname
+            if fext and not fname.endswith(f".{fext}"):
+                label = f"{fname}.{fext}" if fname else fext
+            texts.append(f"{name}: [文件] {label}" if label else f"{name}: [文件]")
         elif r_type == 17:
             if depth < max_depth:
                 sub = r.get("sub_records", [])
@@ -318,7 +323,8 @@ def _build_favorites_context(tag_id: str | None = None,
         fav_type = int(item.get("type", 0) or 0)
         line = None
         if fav_type == 1:  # 文字
-            content = item.get("content", "") or ""
+            # _parse_fav_xml stores text content under "description" (XML <desc>)
+            content = item.get("description") or item.get("content", "") or ""
             if len(content) > MAX_SINGLE_MSG_CHARS:
                 content = content[:MAX_SINGLE_MSG_CHARS] + "..."
             if content:

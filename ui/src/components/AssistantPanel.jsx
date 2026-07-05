@@ -667,7 +667,11 @@ export default function AssistantPanel() {
                           return
                         }
                       }
-                      next[i] = { ...next[i], ...draft }
+                      // Strip enabled from draft — toggle is handled independently
+                      // by onToggleEnabled which saves immediately.
+                      // Merging draft's stale enabled would undo the user's toggle.
+                      const { enabled: _enabled, ...safeDraft } = draft || {}
+                      next[i] = { ...next[i], ...safeDraft }
                       setConfig(prev => ({ ...prev, alert_groups: next }))
                       scheduleAutoSave({ ...config, alert_groups: next }, true)
                       setAlertDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
@@ -865,7 +869,9 @@ export default function AssistantPanel() {
                         }
                       }
                       const next = [...config.digest_groups]
-                      next[i] = { ...next[i], ...draft }
+                      // Same as alert groups: enabled is handled independently
+                      const { enabled: _enabled, ...safeDraft } = draft || {}
+                      next[i] = { ...next[i], ...safeDraft }
                       setConfig(prev => ({ ...prev, digest_groups: next }))
                       scheduleAutoSave({ ...config, digest_groups: next }, true)
                       setDigestDrafts(prev => { const n = { ...prev }; delete n[i]; return n })

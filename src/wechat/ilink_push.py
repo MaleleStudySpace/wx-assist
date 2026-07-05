@@ -596,7 +596,14 @@ def _wrap_urls_for_wechat(text: str) -> str:
 
 
 def format_for_wechat(title: str, content: str) -> str:
-    """Format digest content for WeChat push (wrap URLs + truncate to 4000 chars)."""
+    """Format digest content for WeChat push (wrap URLs for clickability).
+
+    Unlike _truncate or split_message, this does NOT truncate — the caller
+    (send_message) handles chunking via split_message() at paragraph
+    boundaries, with [1/N] prefixes for multi-chunk sends.  Modern WeChat
+    / iLink can handle up to 4000 chars per chunk, and split_message
+    ensures each chunk stays within that limit naturally.
+    """
     msg = f"{title}\n\n{content}"
     msg = _wrap_urls_for_wechat(msg)
-    return _truncate(msg)
+    return msg

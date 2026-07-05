@@ -1,7 +1,15 @@
-"""Keyword alert engine — matches incoming messages against configured keywords."""
+"""Keyword alert engine — matches incoming messages against configured keywords.
 
+Persistent dedup: triggered message_ids are saved to data/alert_triggered.json
+so the same message never fires an alert twice, even after restart or
+_poll_group error recovery that clears the in-memory _known_ids set.
+"""
+
+import json
 import logging
+import os
 import time
+from pathlib import Path
 from typing import Optional
 
 from .config import AssistantConfig
@@ -16,15 +24,57 @@ ALERT_MAX_AGE_SEC = 300  # 5 minutes
 
 # Cooldown per (group, keyword) pair — prevents alert storms when the same
 # keyword is mentioned repeatedly in quick succession (e.g. a lively debate).
-ALERT_COOLDOWN_SEC = 5  # 5 seconds — short cooldown to allow rapid testing
+ALERT_COOLDOWN_SEC = 5  # 5 seconds
+
+# ── Persistent dedup ───────────────────────────────────────────────────
+_TRIGGERED_PATH = Path("data/alert_triggered.json")
+_MAX_TRIGGERED_RECORDS = 5000
+_TRIGGERED_CLEANUP_AGE = 86400 * 7  # 7 days — keep at most a week of history
+
+
+def _load_triggered() -> dict[str, float]:
+    """Load message_id → timestamp map from disk."""
+    try:
+        data = json.loads(_TRIGGERED_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return {}
+
+
+def _save_triggered(data: dict[str, float]) -> None:
+    """Atomically save message_id → timestamp map to disk."""
+    try:
+        _TRIGGERED_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _TRIGGERED_PATH.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(data, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        os.replace(tmp, _TRIGGERED_PATH)
+    except OSError as e:
+        logger.warning("Failed to save alert_triggered.json: %s", e)
+
+
+def _cleanup_triggered(data: dict[str, float]) -> dict[str, float]:
+    """Remove entries older than _TRIGGERED_CLEANUP_AGE and trim to max size."""
+    now = time.time()
+    cutoff = now - _TRIGGERED_CLEANUP_AGE
+    kept = {k: v for k, v in data.items() if v >= cutoff}
+    if len(kept) > _MAX_TRIGGERED_RECORDS:
+        # Keep the most recent N
+        sorted_items = sorted(kept.items(), key=lambda x: x[1], reverse=True)
+        kept = dict(sorted_items[:_MAX_TRIGGERED_RECORDS])
+    return kept
 
 
 class AlertEngine:
     """Check incoming messages for keyword matches and push alerts to Outbox.
 
-    Usage:
-        engine = AlertEngine(config, outbox)
-        engine.check(msg_dict)
+    Uses both in-memory cooldown (per-group per-keyword, ALERT_COOLDOWN_SEC)
+    and persistent message_id dedup (via alert_triggered.json) so the same
+    message never fires twice even after restart or poll-cycle error recovery.
     """
 
     def __init__(self, config: AssistantConfig, outbox: Outbox):
@@ -32,12 +82,31 @@ class AlertEngine:
         self._outbox = outbox
         # Cooldown tracker: (chat_id_or_group_name, keyword_lower) → last_trigger_ts
         self._last_triggered: dict[tuple[str, str], float] = {}
+        # Persistent dedup: message_id → timestamp  (survives restarts)
+        self._triggered: dict[str, float] = _load_triggered()
+        self._triggered_dirty = False
 
     def update_config(self, config: AssistantConfig) -> None:
         """Hot-reload config after PUT /api/assistant/config saves new config."""
         self._config = config
         # Clear cooldown tracker so new keywords take effect immediately
         self._last_triggered.clear()
+        # Persist triggered set if it was dirtied
+        self._flush_triggered()
+
+    def _flush_triggered(self) -> None:
+        """Write triggered set to disk if dirty."""
+        if self._triggered_dirty:
+            _save_triggered(self._triggered)
+            self._triggered_dirty = False
+
+    def _record_triggered(self, message_id: str) -> None:
+        """Record a message_id as already triggered and persist."""
+        self._triggered[message_id] = time.time()
+        self._triggered_dirty = True
+        # Periodically trim
+        if len(self._triggered) > _MAX_TRIGGERED_RECORDS:
+            self._triggered = _cleanup_triggered(self._triggered)
 
     def check(self, msg: dict) -> Optional[int]:
         """Check one message against all enabled alert groups.
@@ -55,6 +124,7 @@ class AlertEngine:
         content = _strip_ids(content)
         sender_name = msg.get("sender_name", "")
         timestamp = msg.get("timestamp", 0)
+        message_id = msg.get("message_id", "")
 
         logger.debug("Alert check: group_name=%r chat_id=%r content=%r", group_name, chat_id, content[:30] if content else "")
 
@@ -66,6 +136,11 @@ class AlertEngine:
         msg_age = int(time.time()) - timestamp
         if msg_age > ALERT_MAX_AGE_SEC:
             logger.debug("Alert: msg too old (age=%ds, max=%ds) from '%s'", msg_age, ALERT_MAX_AGE_SEC, group_name)
+            return None
+
+        # ── Persistent dedup: skip already-triggered messages ─────────
+        if message_id and message_id in self._triggered:
+            logger.debug("Alert: msg %s already triggered, skipping", message_id[:12])
             return None
 
         # ── Keyword matching ─────────────────────────────────────────
@@ -126,6 +201,12 @@ class AlertEngine:
                     content=notif_content,
                     priority="high",
                 )
+                # Persistent dedup: record this message_id so it never
+                # triggers again, even after restart or _reinitialize()
+                if nid and message_id:
+                    self._record_triggered(message_id)
+                    self._flush_triggered()
+
                 logger.info(
                     "Alert: '%s' matched keywords %s in %s",
                     sender_name, matched, group_name,

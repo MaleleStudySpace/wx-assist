@@ -384,8 +384,17 @@ class WcdbBackend(AbstractWeChatBackend):
 
         AI-triggering callbacks are submitted to the thread pool so slow
         summarization in one group never blocks polling of other groups.
+
+        Exceptions from DLL or pool submission are caught and logged here
+        rather than propagated — otherwise the main loop's consecutive_error
+        counter triggers _reinitialize() and clears _known_ids, causing
+        already-processed messages to fire keyword alerts again.
         """
-        messages = self._client.get_messages(talker=talker, limit=50)
+        try:
+            messages = self._client.get_messages(talker=talker, limit=50)
+        except Exception as e:
+            logger.error("DLL get_messages failed for '%s': %s", group_name, e)
+            return
         if not messages:
             return
 
@@ -394,7 +403,12 @@ class WcdbBackend(AbstractWeChatBackend):
             if not self._running:
                 break
 
-            standardized = self._standardize(msg, group_name, talker)
+            try:
+                standardized = self._standardize(msg, group_name, talker)
+            except Exception as e:
+                logger.error("Standardize failed for msg in '%s': %s",
+                             group_name, e)
+                continue
             if standardized is None:
                 continue
 
@@ -408,16 +422,21 @@ class WcdbBackend(AbstractWeChatBackend):
 
             # Fire-and-forget: callback (potentially AI call) + send run in
             # a thread pool worker so the poll loop continues immediately.
-            if self._pool:
-                self._pool.submit(
-                    self._handle_message,
-                    group_name, talker, standardized, callback,
-                )
-            else:
-                # Fallback (pool already shut down): run inline
-                self._handle_message(
-                    group_name, talker, standardized, callback,
-                )
+            try:
+                if self._pool:
+                    self._pool.submit(
+                        self._handle_message,
+                        group_name, talker, standardized, callback,
+                    )
+                else:
+                    # Fallback (pool already shut down): run inline
+                    self._handle_message(
+                        group_name, talker, standardized, callback,
+                    )
+            except RuntimeError as e:
+                logger.error("Pool submit failed for '%s': %s — "
+                             "likely backend.stop() raced poll cycle",
+                             group_name, e)
 
         # Log new messages count for this group (debug level to avoid flooding)
         if new_count > 0:
