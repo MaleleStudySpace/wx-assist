@@ -75,6 +75,16 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
   const [showDigest, setShowDigest] = useState(false)
   const isRunning = digestRunning === group.id
   const digest = lastDigest?.groupId === group.id ? lastDigest : null
+  const cardRef = useRef(null)
+
+  // Auto-scroll when expanded so the card body is fully visible
+  useEffect(() => {
+    if (expanded && cardRef.current) {
+      setTimeout(() => {
+        cardRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 150)
+    }
+  }, [expanded])
 
   // Resolve account info, filter out accounts not in current list
   const accountEntries = (group.accounts || [])
@@ -94,7 +104,7 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
   const templateInfo = TEMPLATES.find(t => t.value === (group.digest_template || 'default'))
 
   return (
-    <div className={`border rounded-xl overflow-hidden bg-bg-card transition-colors
+    <div ref={cardRef} className={`border rounded-xl overflow-hidden bg-bg-card transition-colors
       ${isRunning ? 'border-brand-green/40 shadow-[0_0_12px_rgba(24,226,153,0.08)]' : 'border-border-main hover:border-text-muted/20'}`}>
       <div
         className="flex items-center gap-3 p-4 cursor-pointer hover:bg-bg-raised/50 transition-colors"
@@ -992,6 +1002,7 @@ export default function OATab() {
   const ACCOUNTS_COLLAPSE_LIMIT = 5
 
   const editorRef = useRef(null)
+  const articlesRef = useRef(null)
 
   useEffect(() => {
     loadData()
@@ -1158,6 +1169,10 @@ export default function OATab() {
     setSelectedAccount({ username: ghId, nickname })
     setLoadingArticles(true)
     setAccountArticles([])
+    // Scroll to the articles panel so the user sees results directly
+    setTimeout(() => {
+      articlesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 100)
     try {
       const res = await fetch(`${API_BASE}/api/oa/articles?gh_id=${encodeURIComponent(ghId)}&limit=50`)
       const data = await res.json()
@@ -1322,7 +1337,7 @@ export default function OATab() {
             exit={{ opacity: 0, height: 0 }}
             className="mb-5 overflow-hidden"
           >
-            <div className="p-4 rounded-xl border border-brand-green/20 bg-bg-card">
+            <div ref={articlesRef} className="p-4 rounded-xl border border-brand-green/20 bg-bg-card">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Globe size={14} className="text-brand-green" />
