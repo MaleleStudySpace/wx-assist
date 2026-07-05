@@ -413,28 +413,34 @@ class Bot:
         except Exception as e:
             logger.warning("Assistant init failed (continuing without): %s", e)
 
-        # ── 7b. AI Agent (when AI_AGENT_ENABLED) ────────────────────
+        # ── 7b. AI Agent ─────────────────────────────────────────────
         agent_engine = None
-        if config.ai_agent_enabled:
-            try:
-                from .agent import ToolExecutor, AgentEngine
-                from .web.server import register_agent_engine, get_status_snapshot
+        try:
+            from .agent import ToolExecutor, AgentEngine
+            from .web.server import register_agent_engine, get_status_snapshot
 
-                tool_executor = ToolExecutor(
-                    store=store,
-                    summarizer=summarizer,
-                    status_fn=get_status_snapshot,
-                    task_center=task_center,
-                    scheduler=assistant_scheduler,
-                )
-                agent_engine = AgentEngine(
-                    summarizer=summarizer,
-                    tool_executor=tool_executor,
-                )
-                register_agent_engine(agent_engine)
-                logger.info("Agent engine created (ai_agent_enabled=True)")
-            except Exception as e:
-                logger.warning("Failed to create agent engine: %s", e)
+            tool_executor = ToolExecutor(
+                store=store,
+                summarizer=summarizer,
+                status_fn=get_status_snapshot,
+                task_center=task_center,
+                scheduler=assistant_scheduler,
+            )
+            agent_engine = AgentEngine(
+                summarizer=summarizer,
+                tool_executor=tool_executor,
+            )
+            register_agent_engine(agent_engine)
+            logger.info("Agent engine created")
+
+            # ── Start MCP Server (daemon thread) ───────────────────
+            try:
+                from .agent.mcp_server import start_mcp_server
+                start_mcp_server(tool_executor.registry)
+            except Exception as mcp_e:
+                logger.warning("MCP server not started: %s", mcp_e)
+        except Exception as e:
+            logger.warning("Failed to create agent engine: %s", e)
 
         # ── 7c. Inject agent_engine into router ─────────────────────
         try:

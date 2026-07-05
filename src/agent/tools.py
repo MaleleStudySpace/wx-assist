@@ -61,65 +61,6 @@ class ToolExecutor:
             handler=self._handle_get_status,
         )
 
-        # ── search_messages ─────────────────────────────────────────
-        r.register(
-            name="search_messages",
-            description="在聊天记录中搜索消息。用户问'关于xxx说过什么'、"
-                       "'找一下xxx的内容'时调用。支持按关键词和发送者搜索。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "keyword": {
-                        "type": "string",
-                        "description": "要搜索的关键词",
-                    },
-                    "sender": {
-                        "type": "string",
-                        "description": "发送者名称（可选），只搜索某个人的消息",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "返回结果数量上限，默认 10",
-                        "default": 10,
-                    },
-                },
-                "required": ["keyword"],
-            },
-            handler=self._handle_search_messages,
-        )
-
-        # ── get_messages ────────────────────────────────────────────
-        r.register(
-            name="get_messages",
-            description="获取指定群聊或好友的近期聊天消息。"
-                       "用户问'项目群最近说了什么'、'看看群聊记录'时调用。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "group_name": {
-                        "type": "string",
-                        "description": "群聊或好友名称",
-                    },
-                    "sender": {
-                        "type": "string",
-                        "description": "发送者名称（可选），只看某个人的消息",
-                    },
-                    "hours": {
-                        "type": "integer",
-                        "description": "回看最近多少小时，默认 24",
-                        "default": 24,
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "返回消息数量上限，默认 20",
-                        "default": 20,
-                    },
-                },
-                "required": ["group_name"],
-            },
-            handler=self._handle_get_messages,
-        )
-
         # ── list_digests ────────────────────────────────────────────
         r.register(
             name="list_digests",
@@ -136,6 +77,15 @@ class ToolExecutor:
                        "用户问'有在盯着哪些群'、'哪些群有预警'时调用。",
             parameters={"type": "object", "properties": {}},
             handler=self._handle_list_alerts,
+        )
+
+        # ── list_oa_groups ─────────────────────────────────────────
+        r.register(
+            name="list_oa_groups",
+            description="查看已配置的公众号监控分组列表。"
+                       "用户问'我在盯着哪些公众号'、'有哪些公众号分组'时调用。",
+            parameters={"type": "object", "properties": {}},
+            handler=self._handle_list_oa_groups,
         )
 
         # ── list_tasks ──────────────────────────────────────────────
@@ -311,85 +261,6 @@ class ToolExecutor:
             f"模型: {s.get('model_name', '未配置') or '未配置'}"
         )
 
-    # ── search_messages ────────────────────────────────────────────
-
-    def _handle_search_messages(self, keyword: str,
-                                sender: str = "",
-                                limit: int = 10) -> str:
-        limit = min(limit, 30)  # 硬上限
-        if not keyword.strip():
-            return "请输入要搜索的关键词"
-        if not self._store:
-            return "无法搜索：数据库未就绪"
-
-        try:
-            results = self._store.search_messages(
-                keyword=keyword, sender=sender or None, limit=limit,
-            )
-        except Exception as e:
-            logger.warning("search_messages failed: %s", e)
-            return f"搜索失败: {e}"
-
-        if not results:
-            suffix = f"（发送者: {sender}）" if sender else ""
-            return f"未找到包含「{keyword}」的消息{suffix}"
-
-        lines = [f"找到 {len(results)} 条包含「{keyword}」的消息："]
-        for i, m in enumerate(results, 1):
-            ts = m.get("timestamp", 0)
-            time_str = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else "?"
-            sname = m.get("sender_name", "?")
-            content = m.get("content", "")[:200]
-            lines.append(f"{i}. [{time_str}] {sname}: {content}")
-
-        return "\n".join(lines)
-
-    # ── get_messages ───────────────────────────────────────────────
-
-    def _handle_get_messages(self, group_name: str,
-                             sender: str = "",
-                             hours: int = 24,
-                             limit: int = 20) -> str:
-        limit = min(limit, 50)  # 硬上限
-        if not self._store:
-            return "无法获取消息：数据库未就绪"
-
-        try:
-            rows = self._store.search_messages(group_name, limit=1)
-        except Exception as e:
-            logger.warning("get_messages search failed: %s", e)
-            return f"搜索群聊失败: {e}"
-
-        if not rows:
-            return f"未找到「{group_name}」的消息记录"
-
-        chat_id = rows[0]["chat_id"]
-        since_ts = int(time.time()) - hours * 3600
-        try:
-            messages = self._store.get_messages_since(chat_id, since_ts, limit=limit)
-        except Exception as e:
-            logger.warning("get_messages failed: %s", e)
-            return f"获取消息失败: {e}"
-
-        if not messages:
-            return f"「{group_name}」最近 {hours} 小时内没有消息"
-
-        if sender:
-            messages = [m for m in messages
-                       if m.get("sender_name", "").lower() == sender.lower()]
-            if not messages:
-                return f"「{group_name}」最近 {hours} 小时内没有 {sender} 的消息"
-
-        lines = [f"「{group_name}」最近 {len(messages)} 条消息："]
-        for i, m in enumerate(messages, 1):
-            ts = m.get("timestamp", 0)
-            time_str = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else "?"
-            sname = m.get("sender_name", "?")
-            content = m.get("content", "")[:200]
-            lines.append(f"{i}. [{time_str}] {sname}: {content}")
-
-        return "\n".join(lines)
-
     # ── list_digests ───────────────────────────────────────────────
 
     def _handle_list_digests(self) -> str:
@@ -431,6 +302,30 @@ class ToolExecutor:
             if len(g.keywords) > 5:
                 kws += f" 等 {len(g.keywords)} 个关键词"
             lines.append(f"{i}. {g.group_name} — 关键词: {kws}")
+        return "\n".join(lines)
+
+    # ── list_oa_groups ───────────────────────────────────────────────
+
+    def _handle_list_oa_groups(self) -> str:
+        """查看已配置的公众号监控分组。"""
+        try:
+            cfg = load_assistant_config()
+        except Exception as e:
+            logger.warning("list_oa_groups failed: %s", e)
+            return f"读取配置失败: {e}"
+
+        groups = [g for g in cfg.oa_groups if g.enabled]
+        if not groups:
+            return "当前没有已配置的公众号分组。"
+
+        lines = [f"共 {len(groups)} 个公众号分组："]
+        for i, g in enumerate(groups, 1):
+            accts = ', '.join(g.accounts[:3])
+            if len(g.accounts) > 3:
+                accts += f" 等 {len(g.accounts)} 个公众号"
+            elif not g.accounts:
+                accts = "未配置公众号"
+            lines.append(f"{i}. {g.name} — {accts}")
         return "\n".join(lines)
 
     # ── list_tasks ─────────────────────────────────────────────────
@@ -476,14 +371,10 @@ class ToolExecutor:
         if not self._store:
             return "无法生成摘要：数据库未就绪"
 
-        # 查找 chat_id
-        try:
-            rows = self._store.search_messages(group_name, limit=1)
-        except Exception as e:
-            return f"搜索群聊失败: {e}"
-        if not rows:
+        # 查找 chat_id（直接查 messages 表）
+        chat_id = self._resolve_chat_id(group_name)
+        if not chat_id:
             return f"未找到「{group_name}」的消息记录"
-        chat_id = rows[0]["chat_id"]
 
         # 创建 TaskCenter 任务
         tid = None
@@ -655,6 +546,20 @@ class ToolExecutor:
             f"时间: 每天 {schedule}\n"
             f"回看: 最近 {lookback_hours} 小时的消息"
         )
+
+    # ── Internal helpers ──────────────────────────────────────────────
+
+    def _resolve_chat_id(self, group_name: str) -> str | None:
+        """Resolve group display name to chat_id via local messages table."""
+        try:
+            row = self._store.conn.execute(
+                "SELECT chat_id FROM messages WHERE sender_name = ? LIMIT 1",
+                (group_name,),
+            ).fetchone()
+            return row["chat_id"] if row else None
+        except Exception as e:
+            logger.warning("resolve_chat_id failed for '%s': %s", group_name, e)
+            return None
 
     # ── confirm_action（引擎拦截，此 handler 是安全兜底）─────────────
 

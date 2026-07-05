@@ -4,12 +4,66 @@ iLink DM messages are routed to Agent for processing.
 WCDB group messages only trigger memory consolidation (no auto-reply).
 """
 
+import json
 import logging
+from pathlib import Path
 from typing import Optional
 
 from .memory.consolidator import MemoryConsolidator
 
 logger = logging.getLogger(__name__)
+
+# ── Welcome system ──────────────────────────────────────────────────
+WELCOME_FILE = Path("data/welcomed_users.json")
+
+WELCOME_TEMPLATE = """\
+您好呀，我是摘星，您的微信小助手 ☺️
+
+微信连接成功啦！从现在起，这些事都可以交给我：
+
+{tool_examples}
+
+不确定从哪儿开始？随便跟我说一句试试，我立刻就办 ✨"""
+
+
+def _build_welcome_text(tool_descriptions: str) -> str:
+    """Build welcome message from tool descriptions.
+
+    Extracts tool names from the description text and generates
+    example prompts.
+    """
+    # Tool-specific examples
+    EXAMPLE_MAP = {
+        "get_status": "帮我看看系统状态",
+        "list_digests": "现在有哪些定时摘要",
+        "list_alerts": "我盯着哪些群了",
+        "list_oa_groups": "有哪些公众号分组",
+        "list_tasks": "任务中心有什么",
+        "run_digest": "总结一下项目群",
+        "run_oa_digest": "看看这个公众号说了什么",
+        "add_alert": "帮我盯着技术群的关键词",
+        "add_digest": "每天早上9点总结项目群",
+    }
+
+    # Extract tool names from descriptions
+    examples = []
+    for line in tool_descriptions.split("\n"):
+        line = line.strip()
+        if line.startswith("- ") and ":" in line:
+            tool_name = line[2:].split(":")[0].strip()
+            if tool_name in EXAMPLE_MAP:
+                examples.append(EXAMPLE_MAP[tool_name])
+
+    # Build "工具列表" section
+    tool_lines = []
+    for line in tool_descriptions.split("\n"):
+        line = line.strip()
+        if line.startswith("- ") and ":" in line:
+            tool_lines.append(line)
+
+    tool_section = "\n".join(f"- {e}" for e in examples)
+
+    return WELCOME_TEMPLATE.format(tool_examples=tool_section)
 
 
 class MessageRouter:
@@ -81,15 +135,58 @@ class MessageRouter:
 
     def _handle_dm(self, msg: dict) -> Optional[str]:
         """Handle an iLink DM message via Agent."""
-        if not self._config.ai_agent_enabled or not self._agent_engine:
-            return "Agent 功能未启用，请在系统配置中开启。"
+        if not self._agent_engine:
+            logger.warning("DM received but Agent engine not initialized")
+            return "处理失败：Agent 引擎未就绪，请稍后再试。"
 
         clean = msg["content"].strip()
         if not clean:
             return None
 
+        # ── Welcome on first DM ──
+        welcome_text = self._check_welcome(msg["chat_id"])
+
         try:
-            return self._agent_engine.run(user_message=clean)
+            reply = self._agent_engine.run(user_message=clean)
         except Exception as e:
             logger.exception("Agent run failed")
             return f"处理失败：{e}"
+
+        if welcome_text:
+            reply = f"{welcome_text}\n\n---\n\n{reply}"
+
+        return reply
+
+    # ── Welcome system ──────────────────────────────────────────────
+
+    def _check_welcome(self, chat_id: str) -> str:
+        """Return welcome text if this is the user's first DM."""
+        welcomed = set()
+        try:
+            if WELCOME_FILE.exists():
+                data = json.loads(WELCOME_FILE.read_text(encoding="utf-8"))
+                welcomed = set(data.get("welcomed", []))
+        except Exception:
+            pass
+
+        if chat_id in welcomed:
+            return ""
+
+        # Mark as welcomed
+        welcomed.add(chat_id)
+        try:
+            WELCOME_FILE.parent.mkdir(parents=True, exist_ok=True)
+            WELCOME_FILE.write_text(
+                json.dumps({"welcomed": list(welcomed)}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning("Failed to save welcomed user: %s", e)
+
+        # Build welcome text
+        try:
+            desc = self._agent_engine.get_tool_descriptions()
+            return _build_welcome_text(desc)
+        except Exception as e:
+            logger.warning("Failed to build welcome: %s", e)
+            return ""

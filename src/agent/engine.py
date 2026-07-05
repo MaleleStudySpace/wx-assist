@@ -7,9 +7,17 @@ Usage:
 
 import json
 import logging
+import sqlite3
+import time
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Memory ──────────────────────────────────────────────────────────
+AGENT_MEMORY_DB = Path("data/agent_memory.db")
+MEMORY_HISTORY_LIMIT = 10   # 短期记忆达到此阈值后触发总结
+MEMORY_LOAD_COUNT = 3       # 每次注入 system prompt 的长期记忆条数
 
 # ── System prompt for the Agent ────────────────────────────────────
 
@@ -67,6 +75,9 @@ class AgentEngine:
         self._pending_confirm: Optional[dict] = None
         # Bypass flag: allow one step to execute requires_confirm tools
         self._bypass_confirm = False
+        # Short-term conversation memory: [(user_msg, agent_reply), ...]
+        self._history: list[tuple[str, str]] = []
+        self._init_memory_db()
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -82,22 +93,43 @@ class AgentEngine:
         Returns:
             Final reply text to send back to the user.
         """
-        messages = [{"role": "user", "content": user_message}]
 
         # ── Phase 1: Handle pending confirmation ─────────────────────
         if self._pending_confirm is not None:
             logger.info("[Agent] Pending confirm exists, routing to _handle_confirm_response")
+            messages = [{"role": "user", "content": user_message}]
             return self._handle_confirm_response(user_message, messages)
 
-        # ── Phase 2: ReAct loop ──────────────────────────────────────
-        logger.info("[Agent] run() — user_message='%s'", user_message[:80])
+        # ── Phase 2: Build messages with memory context ──────────────
+        messages: list[dict] = []
+
+        # Inject short-term history (last N exchanges)
+        for user_msg, agent_reply in self._history[-MEMORY_HISTORY_LIMIT:]:
+            messages.append({"role": "user", "content": user_msg})
+            messages.append({"role": "assistant", "content": agent_reply})
+
+        messages.append({"role": "user", "content": user_message})
+
+        # ── Phase 3: ReAct loop ──────────────────────────────────────
+        logger.info("[Agent] run() — user_message='%s', history=%d entries",
+                    user_message[:80], len(self._history))
 
         system = self._build_system_prompt()
 
         logger.info("[Agent] Entering _react_loop — tools=%s",
                     [t["function"]["name"] for t in self._tools.registry.get_all_schemas()])
 
-        return self._react_loop(system, messages)
+        reply = self._react_loop(system, messages)
+
+        # ── Save to short-term history ───────────────────────────────
+        self._history.append((user_message, reply))
+        logger.info("[Agent] History now %d entries", len(self._history))
+
+        # Trigger memory consolidation when threshold reached
+        if len(self._history) >= MEMORY_HISTORY_LIMIT:
+            self._consolidate_memory()
+
+        return reply
 
     # ── ReAct loop core ────────────────────────────────────────────
 
@@ -343,11 +375,102 @@ class AgentEngine:
             return {}
 
     def _build_system_prompt(self) -> str:
-        """Build the system prompt with tool descriptions."""
+        """Build the system prompt with tool descriptions and memories."""
         desc = self._tools.registry.get_descriptions()
-        return AGENT_SYSTEM_PROMPT.replace("{tool_descriptions}", desc)
+        prompt = AGENT_SYSTEM_PROMPT.replace("{tool_descriptions}", desc)
+
+        # Append long-term memories
+        memories = self._load_memories(MEMORY_LOAD_COUNT)
+        if memories:
+            memory_lines = "\n".join(f"- {m}" for m in memories)
+            prompt += f"\n\n## 对话记忆\n{memory_lines}"
+
+        return prompt
+
+    # ── Public accessors ─────────────────────────────────────────────
+
+    def get_tool_descriptions(self) -> str:
+        """Get the current tool descriptions text (for welcome message)."""
+        return self._tools.registry.get_descriptions()
 
     def clear_pending_confirm(self) -> None:
         """Clear any pending confirmation state (on shutdown)."""
         self._pending_confirm = None
         self._bypass_confirm = False
+
+    # ── Memory system ────────────────────────────────────────────────
+
+    def _init_memory_db(self) -> None:
+        """Create agent_memory table if not exists."""
+        try:
+            AGENT_MEMORY_DB.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(str(AGENT_MEMORY_DB))
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("""CREATE TABLE IF NOT EXISTS agent_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                summary TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )""")
+            conn.commit()
+            conn.close()
+            logger.info("[Agent] Memory DB initialized")
+        except Exception as e:
+            logger.warning("[Agent] Failed to init memory DB: %s", e)
+
+    def _load_memories(self, limit: int = 3) -> list[str]:
+        """Load recent long-term memories (oldest first)."""
+        try:
+            conn = sqlite3.connect(str(AGENT_MEMORY_DB))
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT summary FROM agent_memory ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            conn.close()
+            return [r["summary"] for r in reversed(rows)]  # oldest first
+        except Exception as e:
+            logger.warning("[Agent] Failed to load memories: %s", e)
+            return []
+
+    def _save_memory(self, summary: str) -> None:
+        """Save a long-term memory entry."""
+        try:
+            conn = sqlite3.connect(str(AGENT_MEMORY_DB))
+            conn.execute("INSERT INTO agent_memory (summary) VALUES (?)", (summary,))
+            conn.commit()
+            conn.close()
+            logger.info("[Agent] Saved memory: %s", summary[:60])
+        except Exception as e:
+            logger.warning("[Agent] Failed to save memory: %s", e)
+
+    def _consolidate_memory(self) -> None:
+        """Summarize short-term history into a long-term memory entry."""
+        if not self._history:
+            return
+
+        # Build history text for summarization
+        history_lines = []
+        for user_msg, agent_reply in self._history:
+            history_lines.append(f"用户: {user_msg[:100]}")
+            history_lines.append(f"助手: {agent_reply[:100]}")
+        history_text = "\n".join(history_lines)
+
+        try:
+            prompt = (
+                "请用一句话总结以下对话中提到的用户需求、偏好或重要信息，"
+                "以便后续对话中回顾。如果没有值得记住的内容，回复「无」。\n\n"
+                f"{history_text}"
+            )
+            summary = self._llm.chat(
+                message=prompt,
+                requester_name="system",
+                group_name="记忆总结",
+            )
+            summary = summary.strip()
+            if summary and summary != "无":
+                self._save_memory(summary)
+            # Clear short-term history regardless
+            self._history = []
+            logger.info("[Agent] Memory consolidated, history cleared")
+        except Exception as e:
+            logger.warning("[Agent] Memory consolidation failed: %s", e)

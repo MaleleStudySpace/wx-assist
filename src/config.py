@@ -235,11 +235,6 @@ class BotConfig:
     # injected into @mention chat and proactive chat prompts as context.
     memory_consolidation_enabled: bool = False
 
-    # === AI Agent ===
-    # When enabled, iLink DM messages route through ReAct Agent
-    # that can autonomously use tools (search, digest, alerts, etc.).
-    ai_agent_enabled: bool = False
-
     # === Tuning ===
     poll_interval_sec: float = 1.0
     chunk_size: int = 400
@@ -311,7 +306,6 @@ def load_config() -> BotConfig:
         "chunk_size": int(os.getenv("CHUNK_SIZE", "400")),
         "enable_restricted_features": os.getenv("ENABLE_RESTRICTED_FEATURES", "false").strip().lower() == "true",
         "memory_consolidation_enabled": os.getenv("MEMORY_CONSOLIDATION_ENABLED", "false").strip().lower() == "true",
-        "ai_agent_enabled": os.getenv("AI_AGENT_ENABLED", "false").strip().lower() == "true",
         "log_level": os.getenv("LOG_LEVEL", "INFO").strip(),
         "log_file": os.getenv("LOG_FILE", "data/bot.log").strip(),
         # AI Provider unified config
