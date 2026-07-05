@@ -253,6 +253,34 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             if delta.content:
                 yield delta.content
 
+    # ── Agent chat (tool calling) ──────────────────────────────────
+
+    def agent_chat(self, system_prompt: str,
+                   messages: list[dict],
+                   tools: list[dict]) -> tuple[str, list[dict] | None]:
+        """Agent chat with tool calling via OpenAI-compatible API."""
+        api_messages = [{"role": "system", "content": system_prompt}] + messages
+        params = self._merge_params(
+            {"model": self.model, "max_tokens": 2000,
+             "messages": api_messages,
+             "tools": tools, "tool_choice": "auto"},
+            self.extra_body,
+        )
+        response = self.client.chat.completions.create(**params)
+        msg = response.choices[0].message
+        tool_calls = (
+            [{
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments or "{}",
+                },
+            } for tc in msg.tool_calls]
+            if msg.tool_calls else None
+        )
+        return msg.content or "", tool_calls
+
     # ── Direct summarization ──────────────────────────────────────
 
     def _summarize_direct(self, messages: list[dict],

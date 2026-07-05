@@ -413,6 +413,54 @@ class Bot:
         except Exception as e:
             logger.warning("Assistant init failed (continuing without): %s", e)
 
+        # ── 7b. AI Agent (when AI_AGENT_ENABLED) ────────────────────
+        agent_engine = None
+        if config.ai_agent_enabled:
+            try:
+                from .agent import ToolExecutor, AgentEngine
+                from .web.server import register_agent_engine, get_status_snapshot
+
+                tool_executor = ToolExecutor(
+                    store=store,
+                    summarizer=summarizer,
+                    status_fn=get_status_snapshot,
+                    task_center=task_center,
+                    scheduler=assistant_scheduler,
+                )
+                agent_engine = AgentEngine(
+                    summarizer=summarizer,
+                    tool_executor=tool_executor,
+                )
+                register_agent_engine(agent_engine)
+                logger.info("Agent engine created (ai_agent_enabled=True)")
+            except Exception as e:
+                logger.warning("Failed to create agent engine: %s", e)
+
+        # ── 7c. Inject agent_engine into router ─────────────────────
+        try:
+            router.set_agent_engine(agent_engine)
+        except Exception:
+            pass
+
+        # ── 7d. Register router.handle as iLink callback ────────────
+        try:
+            from .web.server import register_ilink_callback
+            register_ilink_callback(router.handle)
+            logger.info("iLink callback registered (router.handle)")
+        except Exception as e:
+            logger.debug("iLink callback not registered: %s", e)
+
+        # ── 7e. Auto-start iLink receiver if account was bound ──────
+        try:
+            from src.wechat.ilink_push import get_ilink_push
+            ilink = get_ilink_push()
+            if ilink.is_available():
+                from .web.server import _start_ilink_receiver
+                _start_ilink_receiver()
+                logger.info("iLink receiver auto-started (bound account found)")
+        except Exception as e:
+            logger.debug("iLink auto-start skipped: %s", e)
+
         # Wrap callback to include assistant alert checking.
         # IMPORTANT: alert.check() must always run even if router.handle()
         # throws an exception — otherwise keyword alerts silently fail when
@@ -460,6 +508,11 @@ class Bot:
                     pass
             if self._health:
                 self._health.stop()
+            try:
+                from .web.server import _stop_ilink_receiver
+                _stop_ilink_receiver()
+            except Exception:
+                pass
             if self._conn is not None:
                 self._conn.close()
             try:

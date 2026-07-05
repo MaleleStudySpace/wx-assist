@@ -801,6 +801,67 @@ def update_status(**kwargs):
     _status.update(**kwargs)
 
 
+# ── iLink callback registration ─────────────────────────────────────
+
+_ilink_message_callback = None
+
+
+def register_ilink_callback(callback):
+    """Register the message handler for iLink incoming messages.
+
+    Called by bot.py after creating the router.
+    The callback receives a standardized message dict and returns
+    an optional reply string.
+    """
+    global _ilink_message_callback
+    _ilink_message_callback = callback
+
+
+def _start_ilink_receiver():
+    """Start the iLink message polling receiver (after bind)."""
+    from src.wechat.ilink_receiver import start_receiver, stop_receiver
+    stop_receiver()  # Ensure old receiver is stopped first
+
+    from src.wechat.ilink_push import _load_account
+    account = _load_account()
+    if not account:
+        return
+
+    def _on_message(msg):
+        global _ilink_message_callback
+        if not _ilink_message_callback:
+            return None
+        try:
+            return _ilink_message_callback(msg)
+        except Exception as e:
+            logger.exception("[iLink] callback error")
+            return None
+
+    start_receiver(account, _on_message)
+
+
+def _stop_ilink_receiver():
+    """Stop the iLink message polling receiver (after unbind)."""
+    from src.wechat.ilink_receiver import stop_receiver
+    stop_receiver()
+
+
+# ── Agent engine ─────────────────────────────────────────────────────
+
+_agent_engine = None
+
+
+def register_agent_engine(engine):
+    """Register the AgentEngine instance for web API access."""
+    global _agent_engine
+    _agent_engine = engine
+
+
+def get_status_snapshot() -> dict:
+    """Return a snapshot of the current bot status (thread-safe read)."""
+    return _status.snapshot()
+
+
 def _friendly_ilink_error(raw_error: str) -> str:
     """Convert raw iLink push error to user-friendly Chinese message."""
     if not raw_error:
@@ -2247,6 +2308,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 ilink.bind(bot_token, account_id, base_url, user_id)
                 # 重置单例，下次调用 get_ilink_push() 会重新从磁盘加载新账号
                 reset_ilink_push()
+                # 启动 iLink 接收器
+                _start_ilink_receiver()
                 self.send_json({"ok": True, "message": "iLink bound successfully"})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)})
@@ -2257,6 +2320,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
             try:
                 from src.wechat.ilink_push import get_ilink_push, reset_ilink_push
                 ilink = get_ilink_push()
+                # 停止接收器，再解绑
+                _stop_ilink_receiver()
                 ilink.unbind()
                 reset_ilink_push()  # Reset singleton so next call gets fresh state
                 self.send_json({"ok": True, "message": "iLink unbound"})

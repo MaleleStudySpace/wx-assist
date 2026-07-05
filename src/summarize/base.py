@@ -257,6 +257,27 @@ class AbstractSummarizer(ABC):
         Claude backend: uses client.messages.stream() with .text_stream.
         DeepSeek backend: uses client.chat.completions.create(stream=True).
         """
+    # ── Agent chat with tool calling ─────────────────────────────────
+
+    @abstractmethod
+    def agent_chat(self, system_prompt: str,
+                   messages: list[dict],
+                   tools: list[dict]) -> tuple[str, list[dict] | None]:
+        """ReAct Agent chat with tool calling support.
+
+        LLM may reply directly (content, None) or request tool calls (None, tool_calls).
+
+        Args:
+            system_prompt: Agent system prompt.
+            messages: OpenAI-format conversation (may contain tool_calls/tool_call_id).
+            tools: OpenAI-format tool definitions.
+
+        Returns:
+            (content, tool_calls):
+            - content: str | None — text reply
+            - tool_calls: list[dict] | None — OpenAI-format tool calls
+              each: {"id", "type", "function": {"name", "arguments"}}
+        """
         ...
 
     # ── Public API ─────────────────────────────────────────────────

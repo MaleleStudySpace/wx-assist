@@ -58,5 +58,8 @@ class StubSummarizer(AbstractSummarizer):
     def chat(self, message="", **kwargs):
         return "AI 未配置，请先在系统配置中设置 AI 提供商。"
 
+    def agent_chat(self, system_prompt, messages, tools):
+        raise NotImplementedError("AI 未配置，无法使用 Agent 功能。")
+
     def custom_prompt(self, messages, prompt, **kwargs):
         return "AI 未配置，请先在系统配置中设置 AI 提供商。"
