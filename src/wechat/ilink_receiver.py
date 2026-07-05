@@ -287,6 +287,7 @@ class ILinkReceiver:
         self._sync_buf: str = _load_sync_buf()
         self._account: Optional[dict] = None
         self._callback: Optional[Callable] = None
+        self._recent_msg_ids: set[str] = set()
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -375,6 +376,23 @@ class ILinkReceiver:
 
     def _handle_message(self, raw_msg: dict) -> None:
         """Process a single parsed iLink message."""
+        # Dedup
+        msg_id = (raw_msg.get("msg_id")
+                  or raw_msg.get("message_id")
+                  or raw_msg.get("newMsgId")
+                  or "")
+        if msg_id:
+            if msg_id in self._recent_msg_ids:
+                logger.debug("[iLink] Duplicate msg_id=%s, skipping", msg_id)
+                return
+            self._recent_msg_ids.add(msg_id)
+
+            # Evict old ids if set is too large
+            if len(self._recent_msg_ids) > MAX_RECENT_MSG_IDS:
+                evict = list(self._recent_msg_ids)[:MAX_RECENT_MSG_IDS // 2]
+                for eid in evict:
+                    self._recent_msg_ids.discard(eid)
+
         std_msg = standardize_for_router(raw_msg)
 
         logger.info("[iLink] Message from %s: %s",
