@@ -450,10 +450,13 @@ class Bot:
 
                 logger.info("[RAG] RAGEngine initialized and injected")
 
-                # ── Cold start (background thread, uses MessageStore) ──
+                # ── Cold start (background thread) ──
                 def _cold_start_task():
-                    tracked = getattr(assistant_scheduler, '_tracked_group_ids', None) if assistant_scheduler else None
-                    rag_engine.cold_start(store, tracked_groups=tracked)
+                    try:
+                        db_conn = self._conn
+                        rag_engine.cold_start(db_conn, tracked_groups=None)
+                    except Exception:
+                        pass
 
                 threading.Thread(target=_cold_start_task, daemon=True,
                                  name="rag-cold-start").start()

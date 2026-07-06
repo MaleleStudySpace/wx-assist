@@ -202,54 +202,66 @@ class RAGEngine:
 
     # ── 冷启动 ────────────────────────────────────────────────────
 
-    def cold_start(self, store, tracked_groups: Optional[list[str]] = None):
+    def cold_start(self, db_conn, tracked_groups: Optional[list[str]] = None):
         """后台线程：批量索引已有历史消息。
 
+        直接使用 SQLite 连接查询，不依赖 MessageStore 的 API。
+        tracked_groups 为 None 时索引所有群。
+
         Args:
-            store: MessageStore 实例（用于 SQL 查询）
-            tracked_groups: 关注的群 ID 列表（配置了摘要/提醒的群）
+            db_conn: SQLite 连接对象（MessageStore 的 conn 属性）
+            tracked_groups: 关注的群 ID 列表
         """
         logger.info("[RAG] 冷启动开始")
         try:
-            conditions = self._build_query_conditions(tracked_groups)
+            groups = tracked_groups
+            if not groups:
+                # 查询所有群
+                try:
+                    rows = db_conn.execute(
+                        "SELECT DISTINCT chat_id FROM messages WHERE chat_id NOT LIKE 'ilink_%'"
+                    ).fetchall()
+                    groups = [r["chat_id"] for r in rows] if rows else []
+                except Exception:
+                    groups = []
+
+            if not groups:
+                logger.info("[RAG] 冷启动跳过：没有需要索引的群")
+                return
+
+            # created_at 是 UNIX 时间戳（秒）
+            cutoff_ts = int((datetime.now() - timedelta(days=COLD_START_DAYS)).timestamp())
             batch_size = COLD_START_BATCH
+            total = 0
+            cursor = db_conn.cursor()
 
-            while True:
-                messages = store.get_messages(
-                    limit=batch_size,
-                    order="asc",
-                    **conditions,
-                )
-                if not messages:
-                    break
+            for chat_id in groups:
+                last_id = self._last_indexed_id
+                while True:
+                    rows = cursor.execute(
+                        """SELECT id, chat_id, sender_name, content, created_at
+                           FROM messages
+                           WHERE chat_id = ? AND id > ? AND created_at >= ?
+                           ORDER BY id ASC LIMIT ?""",
+                        (chat_id, last_id, cutoff_ts, batch_size),
+                    ).fetchall()
 
-                self.ingest(messages, source="msg")
+                    if not rows:
+                        break
 
-                # 更新进度
-                self._last_indexed_id = messages[-1]["id"]
-                self._save_state()
-                conditions["id_gt"] = self._last_indexed_id
+                    messages = [dict(r) for r in rows]
+                    self.ingest(messages, source="msg")
+                    total += len(messages)
+                    last_id = messages[-1]["id"]
+                    self._last_indexed_id = max(self._last_indexed_id, last_id)
+                    self._save_state()
 
-            logger.info("[RAG] 冷启动完成: last_id=%d", self._last_indexed_id)
+            logger.info("[RAG] 冷启动完成: 共索引 %d 条消息", total)
 
         except Exception as e:
             logger.warning("[RAG] 冷启动失败: %s", e)
 
-    def _build_query_conditions(self, tracked_groups) -> dict:
-        """构造首次冷启动的查询条件。"""
-        if self._last_indexed_id > 0:
-            # 不是首次：从上一次进度继续
-            return {"id_gt": self._last_indexed_id}
-
-        conditions = {}
-        if tracked_groups:
-            conditions["chat_id_in"] = tracked_groups
-        # 只索引最近 COLD_START_DAYS 天的
-        cutoff = (datetime.now() - timedelta(days=COLD_START_DAYS)).isoformat()
-        conditions["created_after"] = cutoff
-        return conditions
-
-    # ── 状态持久化 ─────────────────────────────────────────────────
+    # 状态持久化 — 前面已有
 
     def _load_state(self):
         try:
