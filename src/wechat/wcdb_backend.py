@@ -26,7 +26,7 @@ from ..utils.op_logger import op_log, op_log_debug, op_log_error
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_SEC = 1.0
-MAX_DEDUP_SIZE = 5000
+MAX_DEDUP_SIZE = 100000  # 容纳所有已有 message_id，防止轮询中因 evict 丢 ID
 MAX_CONSECUTIVE_ERRORS = 5   # trigger reinit after this many consecutive failures
 
 
@@ -83,6 +83,10 @@ class WcdbBackend(AbstractWeChatBackend):
             self._client.open()
             logger.info("WCDB database opened successfully")
             op_log("DB", "WCDB 数据库打开成功")
+
+            # 从 messages.db 加载已有 message_id 到 _known_ids
+            # 防止重启后旧消息被重复处理（走 router.handle / ingest_one / insert_message）
+            self._seed_known_ids()
 
             # Fetch self-avatar and nickname from contact table (non-critical, best-effort)
             try:
@@ -245,6 +249,7 @@ class WcdbBackend(AbstractWeChatBackend):
                 raise
         # Clear dedup set — WCDB may return messages with new IDs
         self._known_ids = DedupSet(max_size=MAX_DEDUP_SIZE)
+        self._seed_known_ids()
         # Re-resolve groups (talker IDs may have changed)
         self._resolve_groups()
         # Re-find WeChat window
@@ -549,6 +554,31 @@ class WcdbBackend(AbstractWeChatBackend):
             "timestamp": ts,
             "is_group": True,
         }
+
+    def _seed_known_ids(self) -> None:
+        """从 messages.db 加载所有已有 message_id 到 _known_ids。
+
+        Bot 重启后 _known_ids 是空的，如果没有种子，轮询第一轮会把 164 群 × 最新 50 条
+        = 8200 条旧消息全部当作"新消息"处理，走 router.handle → insert_message → ingest_one。
+        insert_message 靠 INSERT OR IGNORE 跳过重复，但 ingest_one 给 ChromaDB 加了重复 chunk。
+        日积月累 ChromaDB 膨胀到 3.4GB，Bot 加载它时挤爆 OS 文件缓存导致 WCDB 慢 20 倍。
+
+        有种子后这些旧消息的 ID 在 set 里 → 全部跳过 → 零浪费。
+        """
+        if not self._store:
+            return
+        try:
+            rows = self._store.conn.execute(
+                "SELECT message_id FROM messages"
+            ).fetchall()
+            count = 0
+            for row in rows:
+                self._known_ids.add(row["message_id"])
+                count += 1
+            if count:
+                logger.info("[DEDUP] 从 messages.db 加载 %d 条已有 message_id 到 _known_ids", count)
+        except Exception as e:
+            logger.warning("[DEDUP] 加载已有 message_id 失败: %s", e)
 
     def _trim_dedup(self) -> None:
         """DedupSet handles this internally."""
