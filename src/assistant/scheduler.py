@@ -205,8 +205,17 @@ class DigestScheduler:
                 self._last_triggered[last_key] = now_ts
                 logger.info("DigestScheduler: catch-up triggering digest for '%s' (missed cron %s)",
                             dg.group_name, dg.cron_expr)
-                from concurrent.futures import wait
-                self._pool.submit(self._run_digest_in_pool, dg, None)
+                # Create TaskCenter task (same as normal _tick flow)
+                _tid = None
+                try:
+                    if self._task_center:
+                        _tid = self._task_center.create_task(
+                            'group_digest', 'catchup',
+                            dg.chat_id or dg.group_name, dg.group_name)
+                        self._broadcast_task_update(_tid, 'group_digest', 'pending', '准备中', dg.group_name)
+                except Exception:
+                    logger.warning("[TASK] create failed for '%s'", dg.group_name)
+                self._pool.submit(self._run_digest_in_pool, dg, _tid)
                 any_caught_up = True
 
         # ── OA digests ──
@@ -223,7 +232,16 @@ class DigestScheduler:
                 self._last_triggered[last_key] = now_ts
                 logger.info("DigestScheduler: catch-up triggering OA digest for '%s' (missed cron %s)",
                             oa.name, oa.cron_expr)
-                self._pool.submit(self._run_oa_digest_in_pool, oa, None)
+                # Create TaskCenter task (same as normal _tick flow)
+                _tid = None
+                try:
+                    if self._task_center:
+                        _tid = self._task_center.create_task(
+                            'oa_digest', 'catchup', oa.id, oa.name)
+                        self._broadcast_task_update(_tid, 'oa_digest', 'pending', '准备中', oa.name)
+                except Exception:
+                    logger.warning("[TASK] create failed for '%s'", oa.name)
+                self._pool.submit(self._run_oa_digest_in_pool, oa, _tid)
                 any_caught_up = True
 
         if any_caught_up:
