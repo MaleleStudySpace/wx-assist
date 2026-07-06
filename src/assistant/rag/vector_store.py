@@ -54,6 +54,11 @@ class VectorStore(ABC):
         """关闭连接，释放资源。"""
         ...
 
+    @abstractmethod
+    def delete_older_than(self, cutoff_ts: int) -> int:
+        """删除早于 cutoff_ts 的 chunk。返回删除条数。"""
+        ...
+
 
 class ChromaStore(VectorStore):
     """ChromaDB 实现。数据在磁盘，不占内存。"""
@@ -92,8 +97,10 @@ class ChromaStore(VectorStore):
                     "chat_id": c.chat_id,
                     "sender_name": c.sender_name,
                     "created_at": c.created_at,
+                    "created_at_ts": int(c.created_at) if c.created_at and c.created_at.isdigit() else 0,
+                    "content": c.content,
                 } for c in chunks],
-                documents=[c.content for c in chunks],
+                # 不传 documents — 我们只做向量搜索，不需要 FTS5 索引
             )
         except Exception as e:
             logger.warning("[RAG] ChromaDB add 失败: %s", e)
@@ -125,13 +132,17 @@ class ChromaStore(VectorStore):
         search_results = []
         for i in range(len(ids)):
             meta = metadatas[i] if i < len(metadatas) else {}
+            # content 优先从 metadata 取（新格式），兼容旧格式（documents）
+            content = meta.get("content")
+            if not content and i < len(documents):
+                content = documents[i]
             chunk = Chunk(
                 id=ids[i],
                 source=meta.get("source", ""),
                 source_id=meta.get("source_id", ""),
                 chat_id=meta.get("chat_id", ""),
                 sender_name=meta.get("sender_name", ""),
-                content=documents[i] if i < len(documents) else "",
+                content=content or "",
                 created_at=meta.get("created_at", ""),
             )
             score = float(distances[i]) if i < len(distances) else 0.0
@@ -152,6 +163,31 @@ class ChromaStore(VectorStore):
             self._collection.delete(where=where)
         except Exception as e:
             logger.warning("[RAG] ChromaDB delete 失败: %s", e)
+
+    def delete_older_than(self, cutoff_ts: int) -> int:
+        """删除 created_at < cutoff_ts 的所有 chunk。返回删除条数。
+
+        Args:
+            cutoff_ts: UNIX 时间戳（秒），早于此时间的 chunk 被删除
+        """
+        if self._collection is None:
+            return 0
+        try:
+            # 先查符合条件的数量
+            results = self._collection.get(
+                where={"created_at_ts": {"$lt": cutoff_ts}},
+                limit=999999,
+            )
+            ids = results.get("ids", [])
+            if not ids:
+                return 0
+            self._collection.delete(ids=ids)
+            logger.info("[RAG] ChromaDB delete_older_than: 删除了 %d 个 chunk (cutoff=%d)",
+                        len(ids), cutoff_ts)
+            return len(ids)
+        except Exception as e:
+            logger.warning("[RAG] ChromaDB delete_older_than 失败: %s", e)
+            return 0
 
     def _normalize_where(self, where: Optional[dict]) -> Optional[dict]:
         """将扁平 dict 转为 ChromaDB 的 where 语法。

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -31,6 +32,7 @@ DEFAULT_FINAL_K = 5      # 最终返回条数
 DEFAULT_SCORE_THRESHOLD = 0.4  # 相似度阈值
 COLD_START_BATCH = 1000  # 冷启动每批处理条数
 COLD_START_DAYS = 30     # 冷启动回溯天数
+MAX_CHUNK_AGE_DAYS = 60  # chunk 最大存活天数，超过的被 compress 清理
 STATE_FILE = "data/rag_state.json"  # 索引进度持久化
 
 
@@ -69,12 +71,40 @@ class RAGEngine:
         self._store.warmup()  # ChromaStore 的 warmup
         self._reranker.warmup()
         self._load_state()
+        # 启动时清理过期 chunk，控制 ChromaDB 大小
+        self.compress()
+        # 后台线程：每小时清理一次过期 chunk
+        self._start_compress_loop()
         logger.info("[RAG] RAGEngine 就绪: dim=%d", self._embedder.dim)
+
+    def _start_compress_loop(self):
+        """启动后台清理线程，每小时压缩一次 ChromaDB。"""
+        def _loop():
+            while True:
+                time.sleep(3600)  # 每小时
+                self.compress()
+        t = threading.Thread(target=_loop, daemon=True, name="rag-compress")
+        t.start()
 
     def close(self):
         """关闭时调用。释放资源。"""
         self._store.close()
         logger.info("[RAG] RAGEngine 已关闭")
+
+    def compress(self, max_age_days: int = MAX_CHUNK_AGE_DAYS):
+        """删除超过 max_age_days 的旧 chunk，控制 ChromaDB 大小。
+
+        由 DigestScheduler 定期调用，或启动时调一次。
+        ChromaDB 只存最近 N 天的向量，防止无限膨胀到 GB 级。
+        """
+        try:
+            cutoff = int((datetime.now() - timedelta(days=max_age_days)).timestamp())
+            deleted = self._store.delete_older_than(cutoff)
+            if deleted:
+                logger.info("[RAG] compress: 清理了 %d 个超过 %d 天的过期 chunk",
+                            deleted, max_age_days)
+        except Exception as e:
+            logger.warning("[RAG] compress 失败: %s", e)
 
     # ── 索引 ──────────────────────────────────────────────────────
 
