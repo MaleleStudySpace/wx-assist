@@ -26,6 +26,109 @@ from src.wechat.wcdb_client import WcdbNativeClient
 
 logger = logging.getLogger(__name__)
 
+# ── 会话缓存：显示名 + 头像 URL ──────────────────────────────────
+# 缓存到本地 JSON 文件，避免每次会话列表都查 WCDB
+# 点击对话详情时实时查单条刷新缓存
+
+SESSION_CACHE_PATH = Path("data/session_cache.json")
+_session_cache: dict = {}
+_session_cache_loaded = False
+
+
+def _load_session_cache():
+    """加载缓存文件到内存。"""
+    global _session_cache, _session_cache_loaded
+    if _session_cache_loaded:
+        return
+    try:
+        if SESSION_CACHE_PATH.exists():
+            data = SESSION_CACHE_PATH.read_text(encoding="utf-8")
+            _session_cache = json.loads(data) if data else {}
+        else:
+            _session_cache = {}
+    except Exception:
+        _session_cache = {}
+    _session_cache_loaded = True
+
+
+def _save_session_cache():
+    """将内存缓存写入文件。"""
+    try:
+        SESSION_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SESSION_CACHE_PATH.write_text(
+            json.dumps(_session_cache, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _resolve_session_cache(sessions, client):
+    """从缓存读取显示名/头像，缓存未命中的批量查 WCDB。
+
+    副作用：
+      - 填充 sessions 中每条会话的 displayName / avatarUrl
+      - 将新查到的结果写回缓存文件
+    """
+    _load_session_cache()
+
+    # 收集缓存未命中的用户名
+    missing = []
+    for s in sessions:
+        username = s.get("username", "")
+        if not username:
+            continue
+        cached = _session_cache.get(username)
+        if cached:
+            if cached.get("displayName"):
+                s["displayName"] = cached["displayName"]
+            if cached.get("avatarUrl"):
+                s["avatarUrl"] = cached["avatarUrl"]
+        else:
+            missing.append(username)
+
+    if not missing:
+        return
+
+    # 批量查 WCDB——只查缺失的
+    try:
+        new_entries = {}
+        t0 = time.monotonic()
+        names = client.get_display_names(missing)
+        dt = time.monotonic() - t0
+        logger.info("[CACHE] get_display_names(%d) took %.0fms", len(missing), dt * 1000)
+        if names:
+            for username, name in names.items():
+                new_entries.setdefault(username, {})
+                new_entries[username]["displayName"] = name
+                for s in sessions:
+                    if s.get("username") == username:
+                        s["displayName"] = name
+                        break
+    except Exception as e:
+        logger.warning("[CACHE] get_display_names 失败: %s", e)
+
+    try:
+        t0 = time.monotonic()
+        avatars = client.get_avatar_urls(missing)
+        dt = time.monotonic() - t0
+        logger.info("[CACHE] get_avatar_urls(%d) took %.0fms", len(missing), dt * 1000)
+        if avatars:
+            for username, url in avatars.items():
+                new_entries.setdefault(username, {})
+                new_entries[username]["avatarUrl"] = url
+                for s in sessions:
+                    if s.get("username") == username:
+                        s["avatarUrl"] = url
+                        break
+    except Exception as e:
+        logger.warning("[CACHE] get_avatar_urls 失败: %s", e)
+
+    # 写入缓存（即使查不到的也写空值，避免反复查）
+    for username in missing:
+        if username not in _session_cache:
+            _session_cache[username] = new_entries.get(username, {"displayName": None, "avatarUrl": None})
+    _save_session_cache()
 
 # ── WebSocket event broadcast helper ───────────────────────────────────
 
@@ -1593,9 +1696,9 @@ def handle_chat_sessions(params, config: AssistantConfig):
         t0 = time.monotonic()
         keyword = params.get("keyword", [""])[0] if params.get("keyword") else ""
 
-        # Get recent sessions
+        # Get recent sessions (limit=200 避免 WCDB 查 500 条太慢)
         logger.debug("[API-TRACE] /api/chat/sessions: calling get_sessions thread=%s", threading.current_thread().name)
-        sessions = client.get_sessions(limit=500)
+        sessions = client.get_sessions(limit=200)
         logger.info("[API-TRACE] /api/chat/sessions: get_sessions took %.0fms, got %d sessions",
                     (time.monotonic() - t0) * 1000, len(sessions) if sessions else 0)
 
@@ -1615,33 +1718,8 @@ def handle_chat_sessions(params, config: AssistantConfig):
                         "nTime": 0,
                     })
 
-        # Resolve display names for sessions that don't have them
-        unnamed = [s.get("username", "") for s in sessions
-                   if s.get("username") and not s.get("displayName")]
-        if unnamed:
-            t2 = time.monotonic()
-            names = client.get_display_names(unnamed)
-            logger.info("[API-TRACE] /api/chat/sessions: get_display_names took %.0fms (%d names)",
-                        (time.monotonic() - t2) * 1000, len(unnamed))
-            for s in sessions:
-                uname = s.get("username", "")
-                if not s.get("displayName") and uname in names:
-                    s["displayName"] = names[uname]
-
-        # Resolve avatar URLs for all sessions
-        all_usernames = [s.get("username", "") for s in sessions if s.get("username")]
-        if all_usernames:
-            try:
-                t3 = time.monotonic()
-                avatar_map = client.get_avatar_urls(all_usernames)
-                logger.info("[API-TRACE] /api/chat/sessions: get_avatar_urls took %.0fms",
-                            (time.monotonic() - t3) * 1000)
-                for s in sessions:
-                    uname = s.get("username", "")
-                    if uname in avatar_map:
-                        s["avatarUrl"] = avatar_map[uname]
-            except Exception:
-                pass
+        # Resolve display names + avatar URLs from cache (batch WCDB if needed)
+        _resolve_session_cache(sessions, client)
 
         # Also include unread_count from session data
         for s in sessions:

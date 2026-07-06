@@ -12,9 +12,10 @@ import os
 import struct
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha1
 from base64 import b64encode
-from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -3413,9 +3414,22 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
 def _run_server(host, port):
     """Run the HTTP server (blocking, called in daemon thread)."""
-    ThreadingHTTPServer.allow_reuse_address = True
-    server = ThreadingHTTPServer((host, port), _UIHandler)
-    server.daemon_threads = True  # WebSocket handlers won't block exit
+    HTTPServer.allow_reuse_address = True
+    server = HTTPServer((host, port), _UIHandler)
+    server.daemon_threads = True
+
+    # 固定线程池，避免 ThreadingHTTPServer 无限创建线程
+    _executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="http")
+    orig_process = server.process_request
+    def _pooled_process(request, client_address):
+        _executor.submit(orig_process, request, client_address)
+    server.process_request = _pooled_process
+    orig_close = server.server_close
+    def _close_with_pool():
+        _executor.shutdown(wait=False)
+        orig_close()
+    server.server_close = _close_with_pool
+
     logger.info("Web UI: http://%s:%s", host, port)
     server.serve_forever()
 
