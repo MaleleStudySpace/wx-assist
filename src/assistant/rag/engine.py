@@ -282,7 +282,7 @@ class RAGEngine:
                     messages = [dict(r) for r in rows]
                     self.ingest(messages, source="msg")
                     total += len(messages)
-                    last_id = messages[-1]["rowid"]
+                    last_id = messages[-1]["id"]
                     self._last_indexed_id = max(self._last_indexed_id, last_id)
                     self._save_state()
 
