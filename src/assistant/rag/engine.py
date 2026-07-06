@@ -59,8 +59,8 @@ class RAGEngine:
         self._msg_buffer: dict[str, list[dict]] = {}
         self._buffer_lock = threading.Lock()
 
-        # 索引进度
-        self._last_indexed_id = 0
+        # 索引进度（按群追踪）
+        self._last_indexed_ids: dict[str, int] = {}
         self._state_path = Path(STATE_FILE)
 
     # ── 生命周期 ──────────────────────────────────────────────────
@@ -266,7 +266,7 @@ class RAGEngine:
             cursor = db_conn.cursor()
 
             for chat_id in groups:
-                last_id = self._last_indexed_id
+                last_id = self._last_indexed_ids.get(chat_id, 0)
                 while True:
                     rows = cursor.execute(
                         """SELECT rowid AS id, chat_id, sender_name, content, created_at
@@ -283,7 +283,7 @@ class RAGEngine:
                     self.ingest(messages, source="msg")
                     total += len(messages)
                     last_id = messages[-1]["id"]
-                    self._last_indexed_id = max(self._last_indexed_id, last_id)
+                    self._last_indexed_ids[chat_id] = last_id
                     self._save_state()
 
             logger.info("[RAG] 冷启动完成: 共索引 %d 条消息", total)
@@ -297,19 +297,19 @@ class RAGEngine:
         try:
             if self._state_path.exists():
                 data = json.loads(self._state_path.read_text(encoding="utf-8"))
-                self._last_indexed_id = data.get("last_indexed_msg_id", 0)
-                logger.info("[RAG] 恢复索引进度: last_id=%d",
-                           self._last_indexed_id)
+                self._last_indexed_ids = data.get("last_indexed_ids", {})
+                logger.info("[RAG] 恢复索引进度: %d 个群",
+                           len(self._last_indexed_ids))
         except Exception as e:
             logger.warning("[RAG] 状态文件读取失败: %s", e)
-            self._last_indexed_id = 0
+            self._last_indexed_ids = {}
 
     def _save_state(self):
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             self._state_path.write_text(
                 json.dumps({
-                    "last_indexed_msg_id": self._last_indexed_id,
+                    "last_indexed_ids": self._last_indexed_ids,
                     "updated_at": datetime.now().isoformat(),
                 }, ensure_ascii=False, indent=2),
                 encoding="utf-8",
