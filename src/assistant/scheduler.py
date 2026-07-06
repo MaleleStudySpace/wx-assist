@@ -17,6 +17,45 @@ logger = logging.getLogger(__name__)
 CHECK_INTERVAL_SEC = 60     # Check schedule every 60 seconds
 MIN_TRIGGER_GAP_SEC = 120   # Prevent re-trigger within 2 minutes
 
+# ── Startup catch-up ──────────────────────────────────────────────────
+# When the scheduler starts (after bot restart), check if any cron was
+# missed within this window.  Without this, a restart at 09:01 would
+# miss the 09:00 trigger entirely and wait until the next cron.
+_CATCHUP_MAX_AGE_HOURS = 3  # only catch up crons within this window
+
+_STATE_PATH = "data/scheduler_state.json"
+
+
+def _load_state() -> dict[str, float]:
+    """Load persisted last_triggered timestamps."""
+    try:
+        import json as _j
+        from pathlib import Path as _P
+        data = _j.loads(_P(_STATE_PATH).read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _save_state(state: dict[str, float]) -> None:
+    """Persist last_triggered timestamps atomically."""
+    try:
+        import json as _j
+        import os as _os
+        from pathlib import Path as _P
+        p = _P(_STATE_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(
+            _j.dumps(state, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        _os.replace(tmp, p)
+    except Exception:
+        pass
+
 
 def _cron_matches(cron_expr: str, now: datetime) -> bool:
     """Check if a 5-field cron expression matches the current time.
@@ -113,7 +152,9 @@ class DigestScheduler:
         self._running = False
         self._thread: threading.Thread | None = None
         # Track last trigger time per group to prevent double-fires
-        self._last_triggered: dict[str, float] = {}
+        # Persisted to scheduler_state.json so the startup catch-up
+        # mechanism can detect crons missed during downtime.
+        self._last_triggered: dict[str, float] = _load_state()
         self._tick_count = 0  # for periodic cleanup
         # Thread pool for async digest execution (scheduler triggers + manual triggers)
         self._pool = ThreadPoolExecutor(max_workers=3)
@@ -131,6 +172,84 @@ class DigestScheduler:
         self._thread.start()
         logger.info("DigestScheduler started (%d digest groups, %d OA groups, interval=%ds)",
                      dg_count, oa_count, CHECK_INTERVAL_SEC)
+        # Catch up crons missed during downtime (bot restart / long pause).
+        # Runs AFTER the thread starts so the first _tick doesn't race.
+        self._catch_up_missed_crons()
+
+    def _catch_up_missed_crons(self) -> None:
+        """Check if any cron was missed in the last N hours and trigger once.
+
+        Scans each enabled group with a cron expression.  If the cron
+        would have matched at any point within [_CATCHUP_MAX_AGE_HOURS, now],
+        submits one digest generation (per group, at most one catch-up).
+        This prevents permanent loss of a scheduled digest after a bot restart.
+        """
+        import calendar
+        now = datetime.now()
+        now_ts = time.time()
+        cutoff_ts = now_ts - _CATCHUP_MAX_AGE_HOURS * 3600
+        any_caught_up = False
+
+        # ── Group chat digests ──
+        for dg in self._config.digest_groups:
+            if not dg.enabled:
+                continue
+            if not dg.cron_expr:
+                continue
+            last_key = dg.chat_id or dg.group_name
+            last_ts = self._last_triggered.get(last_key, 0)
+            if last_ts >= cutoff_ts:
+                continue  # already triggered recently, no catch-up needed
+            # Check if cron matched at any minute in the catch-up window
+            if self._cron_missed_in_window(dg.cron_expr, last_ts, now_ts):
+                self._last_triggered[last_key] = now_ts
+                logger.info("DigestScheduler: catch-up triggering digest for '%s' (missed cron %s)",
+                            dg.group_name, dg.cron_expr)
+                from concurrent.futures import wait
+                self._pool.submit(self._run_digest_in_pool, dg, None)
+                any_caught_up = True
+
+        # ── OA digests ──
+        for oa in self._config.oa_groups:
+            if not oa.enabled:
+                continue
+            if not oa.cron_expr:
+                continue
+            last_key = f"oa:{oa.id}"
+            last_ts = self._last_triggered.get(last_key, 0)
+            if last_ts >= cutoff_ts:
+                continue
+            if self._cron_missed_in_window(oa.cron_expr, last_ts, now_ts):
+                self._last_triggered[last_key] = now_ts
+                logger.info("DigestScheduler: catch-up triggering OA digest for '%s' (missed cron %s)",
+                            oa.name, oa.cron_expr)
+                self._pool.submit(self._run_oa_digest_in_pool, oa, None)
+                any_caught_up = True
+
+        if any_caught_up:
+            _save_state(self._last_triggered)
+
+    @staticmethod
+    def _cron_missed_in_window(cron_expr: str, last_ts: float, now_ts: float) -> bool:
+        """Check if a cron expression matched at any point in [last_ts, now_ts].
+
+        Uses a sampling approach: checks the cron at 1-minute granularity
+        from max(last_ts + 60, now - CATCHUP_MAX_AGE_HOURS) to now.
+        Returns True the first time a match is found.
+        """
+        import calendar
+        start = max(last_ts + 60, now_ts - _CATCHUP_MAX_AGE_HOURS * 3600)
+        # Round up to next full minute for the start
+        start_min = int(start // 60) * 60 + 60
+        now_min = int(now_ts // 60) * 60
+        step = 60  # check every minute
+        for ts in range(start_min, now_min + step, step):
+            if ts > now_ts:
+                break
+            dt = datetime.fromtimestamp(ts)
+            if _cron_matches(cron_expr, dt):
+                return True
+        return False
 
     def stop(self) -> None:
         self._running = False
@@ -242,7 +361,11 @@ class DigestScheduler:
 
             # Submit to thread pool for async execution
             _tid_ref = _tid  # capture for closure
-            self._pool.submit(self._run_digest_in_pool, dg, _tid_ref)
+            try:
+                self._pool.submit(self._run_digest_in_pool, dg, _tid_ref)
+            except RuntimeError as e:
+                logger.error("DigestScheduler: pool submit failed for '%s': %s — "
+                             "OA digest loop WILL still run", dg.group_name, e)
 
         # ── OA digests ──
         for oa in self._config.oa_groups:
@@ -279,7 +402,14 @@ class DigestScheduler:
 
             # Submit to thread pool for async execution
             _tid_ref = _tid  # capture for closure
-            self._pool.submit(self._run_oa_digest_in_pool, oa, _tid_ref)
+            try:
+                self._pool.submit(self._run_oa_digest_in_pool, oa, _tid_ref)
+            except RuntimeError as e:
+                logger.error("DigestScheduler: pool submit failed for OA '%s': %s",
+                             oa.name, e)
+
+        # Persist last_triggered timestamps for startup catch-up
+        _save_state(self._last_triggered)
 
     def _run_digest_in_pool(self, dg: DigestGroup, task_id: int = None) -> None:
         """Wrapper for running group digest in thread pool with error handling."""
