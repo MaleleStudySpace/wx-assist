@@ -269,10 +269,10 @@ class RAGEngine:
                 last_id = self._last_indexed_id
                 while True:
                     rows = cursor.execute(
-                        """SELECT id, chat_id, sender_name, content, created_at
+                        """SELECT rowid AS id, chat_id, sender_name, content, created_at
                            FROM messages
-                           WHERE chat_id = ? AND id > ? AND created_at >= ?
-                           ORDER BY id ASC LIMIT ?""",
+                           WHERE chat_id = ? AND rowid > ? AND created_at >= ?
+                           ORDER BY rowid ASC LIMIT ?""",
                         (chat_id, last_id, cutoff_ts, batch_size),
                     ).fetchall()
 
@@ -282,7 +282,7 @@ class RAGEngine:
                     messages = [dict(r) for r in rows]
                     self.ingest(messages, source="msg")
                     total += len(messages)
-                    last_id = messages[-1]["id"]
+                    last_id = messages[-1]["rowid"]
                     self._last_indexed_id = max(self._last_indexed_id, last_id)
                     self._save_state()
 
