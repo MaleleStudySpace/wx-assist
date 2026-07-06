@@ -92,6 +92,7 @@ class MessageRouter:
         self._store = store
         self._config = config
         self._agent_engine = agent_engine
+        self._rag = None
         self._memory = MemoryConsolidator(store, summarizer)
         # Health monitoring: count unique messages processed (post-dedup)
         self.messages_processed: int = 0
@@ -102,6 +103,10 @@ class MessageRouter:
         Used when AgentEngine is created after Router (dependency order).
         """
         self._agent_engine = engine
+
+    def set_rag(self, rag):
+        """Set RAGEngine for incremental indexing. Called after Router init."""
+        self._rag = rag
 
     def handle(self, msg: dict) -> Optional[str]:
         """Process an incoming message.
@@ -122,6 +127,10 @@ class MessageRouter:
         if not stored:
             return None  # Duplicate — nothing more to do
         self.messages_processed += 1
+
+        # ── RAG incremental indexing (optional, zero impact) ──
+        if self._rag:
+            self._rag.ingest_one(msg, source="msg")
 
         # ── iLink DM → Agent path ──
         if msg["chat_id"].startswith("ilink_"):

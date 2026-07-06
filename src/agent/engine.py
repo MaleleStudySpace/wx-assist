@@ -78,6 +78,12 @@ class AgentEngine:
         # Short-term conversation memory: [(user_msg, agent_reply), ...]
         self._history: list[tuple[str, str]] = []
         self._init_memory_db()
+        # RAG engine (optional, set by Bot after initialization)
+        self._rag = None
+
+    def set_rag(self, rag):
+        """Set RAGEngine for context-enhanced replies. Called after init."""
+        self._rag = rag
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -384,6 +390,17 @@ class AgentEngine:
         if memories:
             memory_lines = "\n".join(f"- {m}" for m in memories)
             prompt += f"\n\n## 对话记忆\n{memory_lines}"
+
+        # Append RAG context (optional, silent on failure)
+        try:
+            last_user_msg = self._history[-1][0] if self._history else ""
+            if self._rag and last_user_msg:
+                results = self._rag.search(query=last_user_msg, top_k=20, final_k=5)
+                if results:
+                    context = self._rag.build_context(results)
+                    prompt += f"\n\n## 相关聊天记录\n{context}"
+        except Exception as e:
+            logger.debug("[RAG] context injection skipped: %s", e)
 
         return prompt
 

@@ -433,6 +433,34 @@ class Bot:
             register_agent_engine(agent_engine)
             logger.info("Agent engine created")
 
+            # ── RAG Engine (optional, zero impact on failure) ──
+            rag_engine = None
+            try:
+                from .assistant.rag import RAGEngine, FastEmbedder, ChromaStore, SlidingWindowChunker
+
+                embedder = FastEmbedder()
+                store = ChromaStore(path="data/chroma")
+                chunker = SlidingWindowChunker()
+                rag_engine = RAGEngine(store=store, embedder=embedder, chunker=chunker)
+                rag_engine.warmup()
+
+                # Inject into Router and Agent
+                router.set_rag(rag_engine)
+                agent_engine.set_rag(rag_engine)
+
+                logger.info("[RAG] RAGEngine initialized and injected")
+
+                # ── Cold start (background thread) ──
+                def _cold_start_task():
+                    tracked_groups = getattr(assistant_scheduler, '_tracked_group_ids', None) if assistant_scheduler else None
+                    rag_engine.cold_start(store, tracked_groups=tracked_groups)
+
+                threading.Thread(target=_cold_start_task, daemon=True,
+                                 name="rag-cold-start").start()
+            except Exception as rag_e:
+                logger.warning("[RAG] RAGEngine init failed (continuing without): %s", rag_e)
+                rag_engine = None
+
             # ── Start MCP Server (daemon thread) ───────────────────
             try:
                 from .agent.mcp_server import start_mcp_server
