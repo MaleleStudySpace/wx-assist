@@ -439,9 +439,9 @@ class Bot:
                 from .assistant.rag import RAGEngine, FastEmbedder, ChromaStore, SlidingWindowChunker
 
                 embedder = FastEmbedder()
-                store = ChromaStore(path="data/chroma")
+                vec_store = ChromaStore(path="data/chroma")
                 chunker = SlidingWindowChunker()
-                rag_engine = RAGEngine(store=store, embedder=embedder, chunker=chunker)
+                rag_engine = RAGEngine(store=vec_store, embedder=embedder, chunker=chunker)
                 rag_engine.warmup()
 
                 # Inject into Router and Agent
@@ -450,10 +450,10 @@ class Bot:
 
                 logger.info("[RAG] RAGEngine initialized and injected")
 
-                # ── Cold start (background thread) ──
+                # ── Cold start (background thread, uses MessageStore) ──
                 def _cold_start_task():
-                    tracked_groups = getattr(assistant_scheduler, '_tracked_group_ids', None) if assistant_scheduler else None
-                    rag_engine.cold_start(store, tracked_groups=tracked_groups)
+                    tracked = getattr(assistant_scheduler, '_tracked_group_ids', None) if assistant_scheduler else None
+                    rag_engine.cold_start(store, tracked_groups=tracked)
 
                 threading.Thread(target=_cold_start_task, daemon=True,
                                  name="rag-cold-start").start()
