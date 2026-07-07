@@ -622,7 +622,7 @@ class ContentCache:
             from src.wechat.wcdb_fav_reader import WcdbFavReader
             reader = WcdbFavReader(client)
             total = 0
-            max_pages = 5  # 5 页 × 200 条 = 1000
+            max_pages = 5
             existing = self._get_existing_fav_ids()
             for page in range(max_pages):
                 items = self._get_fav_items_safe(reader, 200, page * 200)
