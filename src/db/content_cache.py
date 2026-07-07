@@ -618,14 +618,47 @@ class ContentCache:
         if not self._try_start_full_sync("fav"):
             return
         tid = _create_task(task_center, "cache_fav", "", "收藏全量同步")
+        total = 0
+        max_pages = 5
         try:
             from src.wechat.wcdb_fav_reader import WcdbFavReader
             reader = WcdbFavReader(client)
-            total = 0
-            max_pages = 5
             existing = self._get_existing_fav_ids()
             for page in range(max_pages):
-                items = self._get_fav_items_safe(reader, 200, page * 200)
+                offset = page * 200
+                # ── 批量读 + 降级（完全内联，不依赖 _get_fav_items_safe）───
+                items = None
+                try:
+                    items = reader.get_items(limit=200, offset=offset) or []
+                except Exception:
+                    logger.warning("[CACHE] fav batch 失败，降级逐条加载")
+                    # 降级：元数据 + 逐条 content
+                    try:
+                        meta_sql = (
+                            f"SELECT local_id, type, update_time, fromusr "
+                            f"FROM fav_db_item ORDER BY update_time DESC "
+                            f"LIMIT 200 OFFSET {offset}"
+                        )
+                        rows = reader._exec(meta_sql) or []
+                    except Exception:
+                        break
+                    items = []
+                    for r in rows:
+                        try:
+                            item = reader._parse_fav_row(r)
+                            lid = r["local_id"]
+                            try:
+                                c_sql = f"SELECT content FROM fav_db_item WHERE local_id={lid}"
+                                c_rows = reader._exec(c_sql) or []
+                                if c_rows and c_rows[0].get("content"):
+                                    item["content_raw"] = c_rows[0]["content"]
+                                    if c_rows[0]["content"].strip().startswith("<favitem"):
+                                        item.update(reader._parse_fav_xml(c_rows[0]["content"]))
+                            except Exception:
+                                logger.warning("[CACHE] fav content 加载失败: local_id=%s", lid)
+                            items.append(item)
+                        except Exception:
+                            logger.warning("[CACHE] fav 行跳过")
                 if not items:
                     break
                 new = []
@@ -640,9 +673,6 @@ class ContentCache:
                 if new:
                     self.batch_upsert("fav_cache", new)
                     total += len(new)
-                if tid and (page + 1) % 2 == 0:
-                    _update_task(task_center, tid,
-                                 f"第 {page+1}/{max_pages} 页，已同步 {total} 条")
             logger.info("[CACHE] 收藏全量同步完成: %d 条", total)
             _complete_task(task_center, tid, f"收藏全量: {total} 条")
         except Exception as e:
@@ -659,7 +689,35 @@ class ContentCache:
         try:
             from src.wechat.wcdb_fav_reader import WcdbFavReader
             reader = WcdbFavReader(client)
-            items = self._get_fav_items_safe(reader, 200, 0)
+            # 批量读 + 降级（内联）
+            items = None
+            try:
+                items = reader.get_items(limit=200, offset=0) or []
+            except Exception:
+                logger.warning("[CACHE] fav 增量 batch 失败，降级")
+                try:
+                    meta_sql = "SELECT local_id, type, update_time, fromusr FROM fav_db_item ORDER BY update_time DESC LIMIT 200"
+                    rows = reader._exec(meta_sql) or []
+                except Exception:
+                    _complete_task(task_center, tid, "收藏增量: 0 条")
+                    return
+                items = []
+                for r in rows:
+                    try:
+                        item = reader._parse_fav_row(r)
+                        lid = r["local_id"]
+                        try:
+                            c_sql = f"SELECT content FROM fav_db_item WHERE local_id={lid}"
+                            c_rows = reader._exec(c_sql) or []
+                            if c_rows and c_rows[0].get("content"):
+                                item["content_raw"] = c_rows[0]["content"]
+                                if c_rows[0]["content"].strip().startswith("<favitem"):
+                                    item.update(reader._parse_fav_xml(c_rows[0]["content"]))
+                        except Exception:
+                            pass
+                        items.append(item)
+                    except Exception:
+                        pass
             if not items:
                 _complete_task(task_center, tid, "收藏增量: 0 条")
                 return
