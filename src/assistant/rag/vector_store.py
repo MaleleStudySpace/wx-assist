@@ -7,6 +7,7 @@
 """
 
 import logging
+import threading
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -67,6 +68,7 @@ class ChromaStore(VectorStore):
         self._path = path
         self._client = None
         self._collection = None
+        self._write_lock = threading.Lock()
 
     def warmup(self):
         """初始化 ChromaDB 客户端和 collection。"""
@@ -95,20 +97,21 @@ class ChromaStore(VectorStore):
             raise RuntimeError("ChromaStore 未初始化")
 
         try:
-            self._collection.add(
-                ids=[c.id for c in chunks],
-                embeddings=embeddings.tolist(),
-                metadatas=[{
-                    "source": c.source,
-                    "source_id": c.source_id,
-                    "chat_id": c.chat_id,
-                    "sender_name": c.sender_name,
-                    "created_at": c.created_at,
-                    "created_at_ts": int(c.created_at) if c.created_at and c.created_at.isdigit() else 0,
-                    "content": c.content,
-                } for c in chunks],
-                # 不传 documents — 我们只做向量搜索，不需要 FTS5 索引
-            )
+            with self._write_lock:
+                self._collection.add(
+                    ids=[c.id for c in chunks],
+                    embeddings=embeddings.tolist(),
+                    metadatas=[{
+                        "source": c.source,
+                        "source_id": c.source_id,
+                        "chat_id": c.chat_id,
+                        "sender_name": c.sender_name,
+                        "created_at": c.created_at,
+                        "created_at_ts": int(c.created_at) if c.created_at and c.created_at.isdigit() else 0,
+                        "content": c.content,
+                    } for c in chunks],
+                    # 不传 documents — 我们只做向量搜索，不需要 FTS5 索引
+                )
         except Exception as e:
             logger.warning("[RAG] ChromaDB add 失败: %s", e)
 
@@ -121,11 +124,12 @@ class ChromaStore(VectorStore):
             q = query_emb.reshape(1, -1).tolist()
             # ChromaDB 的 where 要求多条件使用 $and/$or 语法
             chroma_where = self._normalize_where(where)
-            results = self._collection.query(
-                query_embeddings=q,
-                n_results=top_k,
-                where=chroma_where,
-            )
+            with self._write_lock:
+                results = self._collection.query(
+                    query_embeddings=q,
+                    n_results=top_k,
+                    where=chroma_where,
+                )
         except Exception as e:
             logger.warning("[RAG] ChromaDB search 失败: %s", e)
             return []
@@ -167,7 +171,8 @@ class ChromaStore(VectorStore):
                 {"source": source},
                 {"source_id": {"$in": source_ids}},
             ]}
-            self._collection.delete(where=where)
+            with self._write_lock:
+                self._collection.delete(where=where)
         except Exception as e:
             logger.warning("[RAG] ChromaDB delete 失败: %s", e)
 
@@ -180,15 +185,16 @@ class ChromaStore(VectorStore):
         if self._collection is None:
             return 0
         try:
-            # 先查符合条件的数量
-            results = self._collection.get(
-                where={"created_at_ts": {"$lt": cutoff_ts}},
-                limit=999999,
-            )
-            ids = results.get("ids", [])
-            if not ids:
-                return 0
-            self._collection.delete(ids=ids)
+            with self._write_lock:
+                # 先查符合条件的数量
+                results = self._collection.get(
+                    where={"created_at_ts": {"$lt": cutoff_ts}},
+                    limit=999999,
+                )
+                ids = results.get("ids", [])
+                if not ids:
+                    return 0
+                self._collection.delete(ids=ids)
             logger.info("[RAG] ChromaDB delete_older_than: 删除了 %d 个 chunk (cutoff=%d)",
                         len(ids), cutoff_ts)
             return len(ids)
