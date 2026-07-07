@@ -244,36 +244,16 @@ class OAMonitorEngine:
                 self._push_to_wechat(nid, mg.name or source, notif_title, notif_content)
 
     def _cache_article(self, art) -> None:
-        """Write a single OA article to oa_cache. Idempotent (INSERT OR REPLACE)."""
+        """Write a single OA article to oa_cache. Idempotent (INSERT OR REPLACE).
+
+        Delegates to ContentCache._clean_oa() to avoid code duplication.
+        """
         if not self._content_cache:
             return
         try:
-            cache = self._content_cache
-            url = (art.url or "").strip()
-            title = art.title or ""
-            if not url or not title:
-                return
-            import html, re
-            title = html.unescape(title).strip()
-            title = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', title)
-            if not title:
-                return
-            digest = html.unescape(art.digest or "").strip()
-            digest = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', digest)[:500]
-            cache.upsert("oa_cache", {
-                "url": url,
-                "gh_id": art.gh_id,
-                "title": title,
-                "digest": digest,
-                "cover_url": (art.cover or "").strip(),
-                "source_name": html.unescape(art.source_name or "").strip() or art.gh_id,
-                "pub_time": art.pub_time or art.timestamp or 0,
-                "full_content": "",
-                "content_status": 0,
-                "llm_summary": "",
-                "llm_summary_ok": 0,
-                "cached_at": int(time.time()),
-            })
+            cleaned = self._content_cache._clean_oa(art)
+            if cleaned:
+                self._content_cache.upsert("oa_cache", cleaned)
         except Exception as e:
             logger.warning("[CACHE] _cache_article 失败: %s", e)
 
