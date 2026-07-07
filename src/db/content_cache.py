@@ -770,10 +770,15 @@ class ContentCache:
             try:
                 item = reader._parse_fav_row(r)
                 lid = r["local_id"]
+                # 逐条加载 content（与 api_handlers 降级方案完全一致）
                 try:
-                    full = reader.get_by_id(lid)
-                    if full:
-                        item.update(full)
+                    c_sql = f"SELECT content FROM fav_db_item WHERE local_id={lid}"
+                    c_rows = reader._exec(c_sql) or []
+                    if c_rows and c_rows[0].get("content"):
+                        content_str = c_rows[0]["content"]
+                        item["content_raw"] = content_str
+                        if content_str.strip().startswith("<favitem"):
+                            item.update(reader._parse_fav_xml(content_str))
                 except Exception:
                     logger.warning("[CACHE] fav 逐条加载失败: local_id=%s", lid)
                 items.append(item)
