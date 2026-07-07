@@ -71,13 +71,16 @@ class ChromaStore(VectorStore):
     def warmup(self):
         """初始化 ChromaDB 客户端和 collection。"""
         try:
-            # 禁用 ChromaDB 遥测，避免因 posthog 等 telemetry 依赖缺失而报错
-            import os as _os
-            _os.environ["CHROMA_TELEMETRY_DISABLED"] = "TRUE"
-
             import chromadb
+            from chromadb.config import Settings as _Settings
 
-            self._client = chromadb.PersistentClient(path=self._path)
+            self._client = chromadb.PersistentClient(
+                path=self._path,
+                settings=_Settings(
+                    chroma_telemetry_disabled=True,
+                    anonymized_telemetry=False,
+                ),
+            )
             self._collection = self._client.get_or_create_collection(
                 name="rag",
                 metadata={"hnsw:space": "cosine"},
