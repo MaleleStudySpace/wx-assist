@@ -625,7 +625,7 @@ class ContentCache:
             max_pages = 5  # 5 页 × 200 条 = 1000
             existing = self._get_existing_fav_ids()
             for page in range(max_pages):
-                items = reader.get_items(limit=200, offset=page * 200)
+                items = self._get_fav_items_safe(reader, 200, page * 200)
                 if not items:
                     break
                 new = []
@@ -659,7 +659,7 @@ class ContentCache:
         try:
             from src.wechat.wcdb_fav_reader import WcdbFavReader
             reader = WcdbFavReader(client)
-            items = reader.get_items(limit=200, offset=0)
+            items = self._get_fav_items_safe(reader, 200, 0)
             if not items:
                 _complete_task(task_center, tid, "收藏增量: 0 条")
                 return
@@ -733,9 +733,53 @@ class ContentCache:
             "cached_at": int(time.time()),
         }
 
-    # ══════════════════════════════════════════════════════════════
-    # RAG 索引
-    # ══════════════════════════════════════════════════════════════
+    @staticmethod
+    def _get_fav_items_safe(reader, limit: int, offset: int) -> list[dict]:
+        """安全获取收藏列表，batch 失败时降级为逐条加载。
+
+        收藏数据中部分条目的 content 字段包含超大 XML（如嵌套聊天记录），
+        直接批量查询 `SELECT *` 会触发 "result too large" 错误。
+        此方法在首次失败后降级为：
+        1. 只查元数据列（local_id, type, update_time, fromusr）
+        2. 逐条调用 get_by_id(local_id) 加载内容
+
+        Args:
+            reader: WcdbFavReader 实例
+            limit: 每页条数
+            offset: 偏移量
+
+        Returns:
+            list[dict]: 收藏项列表
+        """
+        try:
+            return reader.get_items(limit=limit, offset=offset) or []
+        except Exception as e:
+            logger.warning("[CACHE] fav batch 读失败 (%s)，降级为逐条加载", e)
+        # Fallback: 元数据列 + 逐条内容
+        try:
+            safe_sql = (
+                f"SELECT local_id, type, update_time, fromusr "
+                f"FROM fav_db_item ORDER BY update_time DESC LIMIT {limit} OFFSET {offset}"
+            )
+            safe_rows = reader._exec(safe_sql) or []
+        except Exception as e2:
+            logger.warning("[CACHE] fav 元数据查询也失败: %s", e2)
+            return []
+        items = []
+        for r in safe_rows:
+            try:
+                item = reader._parse_fav_row(r)
+                lid = r["local_id"]
+                try:
+                    full = reader.get_by_id(lid)
+                    if full:
+                        item.update(full)
+                except Exception:
+                    logger.warning("[CACHE] fav 逐条加载失败: local_id=%s", lid)
+                items.append(item)
+            except Exception as e3:
+                logger.warning("[CACHE] fav 行解析失败: %s", e3)
+        return items
 
     def index_to_rag(self, rag_engine, source: str):
         """将缓存数据索引到 ChromaDB。"""
