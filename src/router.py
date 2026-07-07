@@ -29,37 +29,24 @@ WELCOME_TEMPLATE = """\
 def _build_welcome_text(tool_descriptions: str) -> str:
     """Build welcome message from tool descriptions.
 
-    Extracts tool names from the description text and generates
-    example prompts.
+    Extracts tool descriptions from the registry and generates
+    example prompts dynamically — no hardcoded map needed.
+    When a new tool is registered, it automatically appears here.
     """
-    # Tool-specific examples
-    EXAMPLE_MAP = {
-        "get_status": "帮我看看系统状态",
-        "list_digests": "现在有哪些定时摘要",
-        "list_alerts": "我盯着哪些群了",
-        "list_oa_groups": "有哪些公众号分组",
-        "list_tasks": "任务中心有什么",
-        "run_digest": "总结一下项目群",
-        "run_oa_digest": "看看这个公众号说了什么",
-        "add_alert": "帮我盯着技术群的关键词",
-        "add_digest": "每天早上9点总结项目群",
-    }
+    # Internal tools that shouldn't appear in welcome
+    SKIP_TOOLS = {"confirm_action"}
 
-    # Extract tool names from descriptions
     examples = []
     for line in tool_descriptions.split("\n"):
         line = line.strip()
         if line.startswith("- ") and ":" in line:
             tool_name = line[2:].split(":")[0].strip()
-            if tool_name in EXAMPLE_MAP:
-                examples.append(EXAMPLE_MAP[tool_name])
-
-    # Build "工具列表" section
-    tool_lines = []
-    for line in tool_descriptions.split("\n"):
-        line = line.strip()
-        if line.startswith("- ") and ":" in line:
-            tool_lines.append(line)
+            if tool_name in SKIP_TOOLS:
+                continue
+            # Extract the short description (up to first period)
+            desc_part = line.split(":", 1)[1].strip()
+            short = desc_part.split("。")[0].strip() if "。" in desc_part else desc_part[:80]
+            examples.append(short)
 
     tool_section = "\n".join(f"- {e}" for e in examples)
 
