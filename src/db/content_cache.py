@@ -184,6 +184,34 @@ class ContentCache:
             finally:
                 conn.close()
 
+    def update(self, table: str, data: dict, where: dict):
+        """按条件更新指定列，有锁。
+
+        用于只更新部分字段的场景（如保存 LLM 摘要），
+        避免 INSERT OR REPLACE 的 NOT NULL 约束问题。
+
+        Args:
+            table: 表名
+            data: 要更新的列 {col: value}
+            where: 筛选条件 {col: value}
+        """
+        if not data or not where:
+            return
+        with self._write_lock:
+            conn = self._get_conn()
+            try:
+                set_clause = ", ".join(f"{k}=?" for k in data)
+                where_clause = " AND ".join(f"{k}=?" for k in where)
+                conn.execute(
+                    f"UPDATE {table} SET {set_clause} WHERE {where_clause}",
+                    list(data.values()) + list(where.values()),
+                )
+                conn.commit()
+            except Exception as e:
+                logger.warning("[CACHE] update %s 失败: %s", table, e)
+            finally:
+                conn.close()
+
     # ══════════════════════════════════════════════════════════════
     # 全量同步控制（_syncing flag）
     # ══════════════════════════════════════════════════════════════
@@ -452,25 +480,24 @@ class ContentCache:
                 import html, re
                 content = html.unescape(content)
                 content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', content)
-                self.upsert("oa_cache", {
-                    "url": url,
+                self.update("oa_cache", {
                     "full_content": content[:50000],  # 最长 5 万字
                     "content_status": 1,
-                })
+                }, {"url": url})
                 self._fetcher_count += 1
                 # 每 5 篇更新一次任务进度
                 if self._fetcher_count % 5 == 0 and self._fetcher_task_id:
                     _update_task(self._fetcher_tc, self._fetcher_task_id,
                                  f"已抓取 {self._fetcher_count} 篇")
             else:
-                self.upsert("oa_cache", {"url": url, "content_status": -1})
+                self.update("oa_cache", {"content_status": -1}, {"url": url})
         except Exception as e:
             # 403/429 标记失败，其他保持 0 下次重试
             resp_err = getattr(e, "response", None)
             status = getattr(resp_err, "status_code", 0) if resp_err else 0
             if status in (403, 429):
                 logger.warning("[CACHE] OA 全文抓取失败 %s (HTTP %d)", url, status)
-                self.upsert("oa_cache", {"url": url, "content_status": -1})
+                self.update("oa_cache", {"content_status": -1}, {"url": url})
             else:
                 logger.debug("[CACHE] OA 全文抓取重试 %s: %s", url, e)
 

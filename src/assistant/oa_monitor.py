@@ -198,11 +198,10 @@ class OAMonitorEngine:
                     # ── Save LLM summary to oa_cache ──
                     if self._content_cache:
                         try:
-                            self._content_cache.upsert("oa_cache", {
-                                "url": art.url,
+                            self._content_cache.update("oa_cache", {
                                 "llm_summary": ai_digest.strip()[:500],
                                 "llm_summary_ok": 1,
-                            })
+                            }, {"url": art.url})
                         except Exception:
                             pass
             except Exception as e:
