@@ -34,12 +34,18 @@ class ToolExecutor:
     """
 
     def __init__(self, store, summarizer,
-                 status_fn=None, task_center=None, scheduler=None):
+                 status_fn=None, task_center=None, scheduler=None,
+                 rag=None):
         self._store = store
         self._summarizer = summarizer
         self._status_fn = status_fn
         self._task_center = task_center
         self._scheduler = scheduler
+        self._rag = rag
+
+    def set_rag(self, rag):
+        """Set RAGEngine for search tools. Called after init if RAG available."""
+        self._rag = rag
 
         from .registry import ToolRegistry
         self.registry = ToolRegistry()
@@ -232,6 +238,30 @@ class ToolExecutor:
                 "required": ["action", "details"],
             },
             handler=self._handle_confirm_action,
+        )
+
+        # ── search_chat_history（语义搜索聊天记录）────────────────
+        r.register(
+            name="search_chat_history",
+            description="语义搜索群聊/私聊历史消息。当用户提到之前讨论过的话题、"
+                       "忘记某个结论、或需要查找群聊中说过的话时调用。"
+                       "输入自然语言查询，返回相关的聊天片段。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索内容，用自然语言描述你想找的信息，如'上次说的价格是多少'、'关于AI产品经理的讨论'",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "返回结果数量，默认 5",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+            handler=self._handle_search_chat_history,
         )
 
     # ══════════════════════════════════════════════════════════════
@@ -572,3 +602,51 @@ class ToolExecutor:
             q += f"\n{details}"
         q += "\n\n回复「确定」执行，回复「取消」放弃。"
         return q
+
+    # ── search_chat_history ─────────────────────────────────────────
+
+    def _handle_search_chat_history(self, query: str,
+                                     top_k: int = 5) -> str:
+        """语义搜索聊天记录，返回带群名的结果。"""
+        if not self._rag:
+            return "搜索服务未就绪（RAG 引擎未初始化）。"
+
+        try:
+            results = self._rag.search(query=query, top_k=20, final_k=top_k)
+        except Exception as e:
+            logger.warning("search_chat_history failed: %s", e)
+            return f"搜索失败: {e}"
+
+        if not results:
+            return f"没有找到与「{query}」相关的聊天记录。"
+
+        # 解析群名：收集所有 chat_id 后批量查询 display_name
+        chat_ids = list(set(
+            r.chunk.chat_id for r in results if r.chunk.chat_id
+        ))
+        group_names: dict[str, str] = {}
+        if chat_ids:
+            try:
+                from src.web.api_handlers import get_wcdb_client
+                client = get_wcdb_client()
+                if client:
+                    names = client.get_display_names(chat_ids)
+                    if names:
+                        group_names = names
+            except Exception as e:
+                logger.debug("search_chat_history: get_display_names failed: %s", e)
+
+        lines = [f"找到 {len(results)} 条相关聊天记录："]
+        for i, r in enumerate(results, 1):
+            chunk = r.chunk
+            ts = chunk.created_at
+            if len(ts) > 10:
+                ts = ts[5:16]  # "MM-DD HH:MM"
+            sender = chunk.sender_name or "未知"
+            # 群名：优先用 display_name，兜底用 chat_id 后 8 位
+            group = group_names.get(chunk.chat_id) or chunk.chat_id[-8:]
+            lines.append(
+                f"{i}. [{group} {ts} {sender}] {chunk.content[:200]}"
+            )
+
+        return "\n".join(lines)

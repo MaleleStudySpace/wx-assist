@@ -78,12 +78,6 @@ class AgentEngine:
         # Short-term conversation memory: [(user_msg, agent_reply), ...]
         self._history: list[tuple[str, str]] = []
         self._init_memory_db()
-        # RAG engine (optional, set by Bot after initialization)
-        self._rag = None
-
-    def set_rag(self, rag):
-        """Set RAGEngine for context-enhanced replies. Called after init."""
-        self._rag = rag
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -120,7 +114,7 @@ class AgentEngine:
         logger.info("[Agent] run() — user_message='%s', history=%d entries",
                     user_message[:80], len(self._history))
 
-        system = self._build_system_prompt(current_message=user_message)
+        system = self._build_system_prompt()
 
         logger.info("[Agent] Entering _react_loop — tools=%s",
                     [t["function"]["name"] for t in self._tools.registry.get_all_schemas()])
@@ -380,12 +374,8 @@ class AgentEngine:
         except json.JSONDecodeError:
             return {}
 
-    def _build_system_prompt(self, current_message: str = "") -> str:
-        """Build the system prompt with tool descriptions and memories.
-
-        Args:
-            current_message: The user's current message, used as RAG search query.
-        """
+    def _build_system_prompt(self) -> str:
+        """Build the system prompt with tool descriptions and memories."""
         desc = self._tools.registry.get_descriptions()
         prompt = AGENT_SYSTEM_PROMPT.replace("{tool_descriptions}", desc)
 
@@ -394,17 +384,6 @@ class AgentEngine:
         if memories:
             memory_lines = "\n".join(f"- {m}" for m in memories)
             prompt += f"\n\n## 对话记忆\n{memory_lines}"
-
-        # Append RAG context (optional, silent on failure)
-        try:
-            if self._rag and current_message:
-                query = current_message.strip()[:200]  # 截断避免超长查询
-                results = self._rag.search(query=query, top_k=20, final_k=5)
-                if results:
-                    context = self._rag.build_context(results)
-                    prompt += f"\n\n## 相关聊天记录\n{context}"
-        except Exception as e:
-            logger.debug("[RAG] context injection skipped: %s", e)
 
         return prompt
 

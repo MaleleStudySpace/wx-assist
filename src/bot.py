@@ -444,9 +444,9 @@ class Bot:
                 rag_engine = RAGEngine(store=vec_store, embedder=embedder, chunker=chunker)
                 rag_engine.warmup()
 
-                # Inject into Router and Agent
+                # Inject into Router（用于实时索引）和 ToolExecutor（用于搜索工具）
                 router.set_rag(rag_engine)
-                agent_engine.set_rag(rag_engine)
+                tool_executor.set_rag(rag_engine)
 
                 logger.info("[RAG] RAGEngine initialized and injected")
 
