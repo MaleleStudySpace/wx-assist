@@ -576,22 +576,31 @@ class ContentCache:
 
     @staticmethod
     def _clean_sns(raw: dict) -> dict | None:
-        """清洗朋友圈。hex 解码 content，保留完整媒体结构。"""
+        """清洗朋友圈。优先取 contentDesc（已解码明文），无则 hex 解码。"""
         post_id = raw.get("tid") or raw.get("id")
         if not post_id:
             return None
-        content_hex = raw.get("content") or raw.get("messageContent") or ""
+
+        # contentDesc = 已解码明文，content/messageContent = hex 编码
         clean_content = ""
-        if content_hex and content_hex != "0":
-            try:
-                raw_bytes = bytes.fromhex(content_hex)
-                clean_content = raw_bytes.decode("utf-8", errors="replace")
-                import html, re
-                clean_content = html.unescape(clean_content)
-                clean_content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean_content)
-                clean_content = clean_content.strip()[:2000]
-            except Exception:
-                pass
+        desc = raw.get("contentDesc", "") or ""
+        if desc.strip():
+            clean_content = desc.strip()[:2000]
+            import html, re
+            clean_content = html.unescape(clean_content)
+            clean_content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean_content)
+        else:
+            content_hex = raw.get("content") or raw.get("messageContent") or ""
+            if content_hex and content_hex != "0":
+                try:
+                    raw_bytes = bytes.fromhex(content_hex)
+                    clean_content = raw_bytes.decode("utf-8", errors="replace")
+                    import html, re
+                    clean_content = html.unescape(clean_content)
+                    clean_content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean_content)
+                    clean_content = clean_content.strip()[:2000]
+                except Exception:
+                    pass
         media_list = raw.get("media") or []
         return {
             "post_id": str(post_id),
@@ -626,12 +635,11 @@ class ContentCache:
             existing = self._get_existing_fav_ids()
             for page in range(max_pages):
                 offset = page * 200
-                # ── 批量读 + 降级（完全内联，不依赖 _get_fav_items_safe）───
                 items = None
                 try:
                     items = reader.get_items(limit=200, offset=offset) or []
                 except Exception:
-                    logger.warning("[CACHE] fav batch 失败，降级逐条加载")
+                    logger.warning("[CACHE] fav batch 失败，降级逐条加载 (page=%d)", page)
                     # 降级：元数据 + 逐条 content
                     try:
                         meta_sql = (
@@ -655,10 +663,10 @@ class ContentCache:
                                     if c_rows[0]["content"].strip().startswith("<favitem"):
                                         item.update(reader._parse_fav_xml(c_rows[0]["content"]))
                             except Exception:
-                                logger.warning("[CACHE] fav content 加载失败: local_id=%s", lid)
+                                pass
                             items.append(item)
                         except Exception:
-                            logger.warning("[CACHE] fav 行跳过")
+                            pass
                 if not items:
                     break
                 new = []
