@@ -77,7 +77,7 @@ class ChromaStore(VectorStore):
             self._client = chromadb.PersistentClient(
                 path=self._path,
                 settings=_Settings(
-                    chroma_telemetry_disabled=True,
+                    chroma_telemetry_impl="",        # 禁用遥测，避免 posthog 导入
                     anonymized_telemetry=False,
                 ),
             )
