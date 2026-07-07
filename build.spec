@@ -101,6 +101,15 @@ a = Analysis(
         'zstandard', 'Crypto',
         # RAG dependencies
         'numpy', 'chromadb', 'fastembed',
+        # ChromaDB submodules not statically imported (loaded via Settings
+        # dynamic import) — bundle explicitly to avoid No module named errors
+        # in the frozen EXE.
+        'chromadb.telemetry',
+        'chromadb.telemetry.product',
+        'chromadb.telemetry.product.posthog',
+        'chromadb.telemetry.product.events',
+        'chromadb.telemetry.opentelemetry',
+        'overrides',
     ],
     hookspath=[],
     hooksconfig={},
