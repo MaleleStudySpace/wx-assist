@@ -403,8 +403,16 @@ class ContentCache:
     # OA 全文抓取队列
     # ══════════════════════════════════════════════════════════════
 
-    def start_oa_content_fetcher(self):
-        """启动 OA 全文抓取后台线程。每秒 1 篇，失败标记 -1 不重试。"""
+    def start_oa_content_fetcher(self, task_center=None):
+        """启动 OA 全文抓取后台线程。每秒 1 篇，失败标记 -1 不重试。
+
+        Args:
+            task_center: 可选，用于创建 cache_oa_content 任务追踪。
+        """
+        self._fetcher_tc = task_center
+        self._fetcher_count = 0
+        self._fetcher_task_id = None
+
         def _loop():
             while True:
                 try:
@@ -422,7 +430,20 @@ class ContentCache:
             "SELECT url FROM oa_cache WHERE content_status=0 LIMIT 1"
         )
         if not row:
+            # 没有待抓取文章时，重置任务状态
+            if self._fetcher_task_id:
+                _complete_task(self._fetcher_tc, self._fetcher_task_id,
+                               f"抓取完成: {self._fetcher_count} 篇")
+                self._fetcher_task_id = None
+                self._fetcher_count = 0
             return
+
+        # 首次有文章时创建任务
+        if not self._fetcher_task_id and self._fetcher_tc:
+            self._fetcher_task_id = _create_task(
+                self._fetcher_tc, "cache_oa_content", "", "OA全文抓取"
+            )
+
         url = row["url"]
         try:
             from src.assistant.oa_reader import fetch_article_content
@@ -436,6 +457,11 @@ class ContentCache:
                     "full_content": content[:50000],  # 最长 5 万字
                     "content_status": 1,
                 })
+                self._fetcher_count += 1
+                # 每 5 篇更新一次任务进度
+                if self._fetcher_count % 5 == 0 and self._fetcher_task_id:
+                    _update_task(self._fetcher_tc, self._fetcher_task_id,
+                                 f"已抓取 {self._fetcher_count} 篇")
             else:
                 self.upsert("oa_cache", {"url": url, "content_status": -1})
         except Exception as e:

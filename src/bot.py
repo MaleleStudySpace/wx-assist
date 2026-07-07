@@ -514,8 +514,8 @@ class Bot:
                     threading.Thread(target=_cache_init_task, daemon=True,
                                      name="cache-init").start()
 
-                    # 启动 OA 全文抓取队列（每秒 1 篇）
-                    content_cache.start_oa_content_fetcher()
+                    # 启动 OA 全文抓取队列（每秒 1 篇），传入 task_center 追踪
+                    content_cache.start_oa_content_fetcher(task_center=task_center)
 
                     # 定时增量同步（SNS 5min / Fav 10min）
                     def _sns_timer():
