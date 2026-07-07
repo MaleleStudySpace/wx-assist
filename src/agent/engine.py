@@ -120,7 +120,7 @@ class AgentEngine:
         logger.info("[Agent] run() — user_message='%s', history=%d entries",
                     user_message[:80], len(self._history))
 
-        system = self._build_system_prompt()
+        system = self._build_system_prompt(current_message=user_message)
 
         logger.info("[Agent] Entering _react_loop — tools=%s",
                     [t["function"]["name"] for t in self._tools.registry.get_all_schemas()])
@@ -380,8 +380,12 @@ class AgentEngine:
         except json.JSONDecodeError:
             return {}
 
-    def _build_system_prompt(self) -> str:
-        """Build the system prompt with tool descriptions and memories."""
+    def _build_system_prompt(self, current_message: str = "") -> str:
+        """Build the system prompt with tool descriptions and memories.
+
+        Args:
+            current_message: The user's current message, used as RAG search query.
+        """
         desc = self._tools.registry.get_descriptions()
         prompt = AGENT_SYSTEM_PROMPT.replace("{tool_descriptions}", desc)
 
@@ -393,9 +397,9 @@ class AgentEngine:
 
         # Append RAG context (optional, silent on failure)
         try:
-            last_user_msg = self._history[-1][0] if self._history else ""
-            if self._rag and last_user_msg:
-                results = self._rag.search(query=last_user_msg, top_k=20, final_k=5)
+            if self._rag and current_message:
+                query = current_message.strip()[:200]  # 截断避免超长查询
+                results = self._rag.search(query=query, top_k=20, final_k=5)
                 if results:
                     context = self._rag.build_context(results)
                     prompt += f"\n\n## 相关聊天记录\n{context}"
