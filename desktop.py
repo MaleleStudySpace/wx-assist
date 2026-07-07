@@ -142,6 +142,29 @@ def main():
     else:
         os.chdir(str(PROJECT_ROOT))
 
+    # ── Single-instance mutex (EXE only, source mode allows multi) ─
+    # Creates a Windows named mutex so double-clicking the EXE twice
+    # doesn't start two instances that fight over the same port, DB,
+    # and iLink session.  The mutex lives as long as this handle is
+    # open; when the process exits, Windows auto-releases it.
+    if getattr(sys, "frozen", False):
+        import ctypes as _ctypes
+        _MUTEX_NAME = "Global\\wx-assist-17327"
+        _mutex_h = _ctypes.windll.kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+        if not _mutex_h:
+            pass  # CreateMutex failed — proceed anyway
+        elif _ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            _ctypes.windll.kernel32.CloseHandle(_mutex_h)
+            # Show a message box so the user knows what happened
+            _ctypes.windll.user32.MessageBoxW(
+                0,
+                "wx-assist 已在运行，无需重复启动。\n\n"
+                "如果无法正常使用，请先关闭已有窗口再试。",
+                "微信助手 — 提示",
+                0x40,  # MB_ICONINFORMATION
+            )
+            sys.exit(0)
+
     # ── Register graceful shutdown ─────────────────────────────────
     # atexit fires on sys.exit() and normal interpreter shutdown.
     # signal handlers fire on SIGTERM (kill) and SIGINT (Ctrl+C).
