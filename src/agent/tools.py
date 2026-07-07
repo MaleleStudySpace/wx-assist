@@ -43,13 +43,13 @@ class ToolExecutor:
         self._scheduler = scheduler
         self._rag = rag
 
-    def set_rag(self, rag):
-        """Set RAGEngine for search tools. Called after init if RAG available."""
-        self._rag = rag
-
         from .registry import ToolRegistry
         self.registry = ToolRegistry()
         self._register_all_tools()
+
+    def set_rag(self, rag):
+        """Set RAGEngine for search tools. Called after init if RAG available."""
+        self._rag = rag
 
     # ── Registry population ─────────────────────────────────────────
 
