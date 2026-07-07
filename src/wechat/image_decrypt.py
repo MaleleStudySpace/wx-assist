@@ -70,6 +70,7 @@ class _PersistentWasmService:
                 cwd=os.path.dirname(WASM_DECRYPT_SCRIPT),
                 text=True,
                 bufsize=1,  # Line-buffered
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
             )
             # Wait for WASM to initialize (2s)
             time.sleep(2.2)
