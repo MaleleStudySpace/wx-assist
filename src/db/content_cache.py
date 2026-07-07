@@ -206,6 +206,22 @@ class ContentCache:
             return self._syncing.get(source, False)
 
     # ══════════════════════════════════════════════════════════════
+    # OA 账号同步（30min 定时器）
+    # ══════════════════════════════════════════════════════════════
+
+    def sync_oa_accounts(self, client, task_center=None) -> bool:
+        """增量刷新 OA 账号列表。30min 定时器调用。"""
+        tid = _create_task(task_center, "cache_oa_accounts", "", "OA账号同步")
+        try:
+            self._sync_oa_accounts(client)
+            _complete_task(task_center, tid, "OA 账号同步完成")
+            return True
+        except Exception as e:
+            logger.warning("[CACHE] OA 账号同步失败: %s", e)
+            _fail_task(task_center, tid, str(e))
+            return False
+
+    # ══════════════════════════════════════════════════════════════
     # OA 全量同步
     # ══════════════════════════════════════════════════════════════
 
@@ -349,6 +365,9 @@ class ContentCache:
         if self._is_full_syncing("oa"):
             logger.debug("[CACHE] OA 全量进行中，增量跳过")
             return
+        if client is None:
+            logger.warning("[CACHE] WCDB 不可用, OA 同步跳过")
+            return
         accounts = self.query("SELECT gh_id FROM oa_accounts")
         if not accounts:
             return
@@ -471,6 +490,9 @@ class ContentCache:
     def sync_sns_incremental(self, client, task_center=None):
         """增量合并朋友圈：只拉第 1 页。"""
         if self._is_full_syncing("sns"):
+            return
+        if client is None:
+            logger.warning("[CACHE] WCDB 不可用, SNS 增量同步跳过")
             return
         tid = _create_task(task_center, "cache_sns_incremental", "", "朋友圈增量")
         try:
@@ -617,6 +639,7 @@ class ContentCache:
         """清洗收藏。保留完整 chat_records 用于 Web UI，展平 clean_text 用于 RAG。"""
         fav_id = item.get("local_id")
         if not fav_id:
+            logger.warning("[CACHE] 跳过无效收藏: local_id 为空")
             return None
         import html, re
         title = html.unescape(item.get("title", "")).strip()

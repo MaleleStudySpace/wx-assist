@@ -544,6 +544,34 @@ class Bot:
                     threading.Thread(target=_fav_timer, daemon=True,
                                      name="fav-sync-timer").start()
 
+                    # ── OA 60s 增量定时器（TaskCenter 追踪） ──
+                    def _oa_timer():
+                        while True:
+                            _t.sleep(60)
+                            try:
+                                from src.web.api_handlers import get_wcdb_client
+                                _c = get_wcdb_client()
+                                if _c:
+                                    content_cache.sync_oa_incremental(_c, task_center)
+                            except Exception:
+                                pass
+                    threading.Thread(target=_oa_timer, daemon=True,
+                                     name="oa-sync-timer").start()
+
+                    # ── OA 账号 30min 刷新定时器 ──
+                    def _oa_accounts_timer():
+                        while True:
+                            _t.sleep(1800)
+                            try:
+                                from src.web.api_handlers import get_wcdb_client
+                                _c = get_wcdb_client()
+                                if _c:
+                                    content_cache.sync_oa_accounts(_c, task_center)
+                            except Exception:
+                                pass
+                    threading.Thread(target=_oa_accounts_timer, daemon=True,
+                                     name="oa-accounts-timer").start()
+
             except Exception as rag_e:
                 logger.warning("[RAG] RAGEngine init failed (continuing without): %s", rag_e)
                 rag_engine = None

@@ -419,6 +419,7 @@ def handle_fav_list(params, config: AssistantConfig):
                         "tags": fav_tags.get(str(r["fav_id"]), []),
                     })
 
+                logger.debug("[CACHE] handle_fav_list 返回 %d 条缓存数据", len(favorites))
                 return {"ok": True, "data": favorites, "total": len(favorites)}
         except Exception as e:
             logger.warning("[CACHE] fav_cache 读失败，降级到 WCDB: %s", e)
@@ -3743,6 +3744,7 @@ def handle_sns_timeline(params, config: AssistantConfig):
                         "rawXml": raw_xml,
                     })
 
+                logger.debug("[CACHE] handle_sns_timeline 返回 %d 条缓存数据", len(mapped))
                 return {"ok": True, "data": mapped, "total": len(mapped)}
         except Exception as e:
             logger.warning("[CACHE] sns_cache 读失败，降级到 WCDB: %s", e)
@@ -5064,6 +5066,9 @@ def handle_oa_articles(params, config: AssistantConfig):
                     ],
                     "total": len(cached),
                 }
+
+                logger.debug("[CACHE] handle_oa_articles 返回 %d 条缓存数据 (gh_id=%s)",
+                             len(cached), gh_id)
         except Exception as e:
             logger.warning("[CACHE] oa_articles 缓存读失败，降级到 WCDB: %s", e)
 
