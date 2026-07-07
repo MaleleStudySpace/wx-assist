@@ -10,12 +10,13 @@ and XML parsing, rather than re-implementing content decoding.
 
 import logging
 import threading
-import time
+import time as _time
 from datetime import datetime
 from typing import Optional
 
 from .config import AssistantConfig, OAMonitorGroup
 from .outbox import Outbox
+from src.utils.llm_logger import log_llm_interaction
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ class OAMonitorEngine:
             for _ in range(POLL_SEC):
                 if not self._running:
                     return
-                time.sleep(1)
+                _time.sleep(1)
 
     def _poll_cycle(self) -> None:
         """One poll cycle: check all enabled monitor groups for new articles."""
@@ -133,7 +134,7 @@ class OAMonitorEngine:
         if not articles:
             return
 
-        now = time.time()
+        now = _time.time()
         cutoff = now - MONITOR_MAX_AGE_SEC
 
         for art in articles:
@@ -176,36 +177,66 @@ class OAMonitorEngine:
             # Build notification content
             source = art.source_name or gh_id
             title = art.title or "(无标题)"
-            # OA article XML often has empty <digest> in WeChat 4.x,
-            # Try AI-generated digest first, fall back to title
-            digest = (art.digest or "")[:50] or title[:50]
-            # AI摘要: 尝试调用 AI 生成摘要，失败则降级为标题
+
+            # ── AI 摘要：调用 LLM 生成，失败降级为原标题/摘要 ──
+            digest = ""
+            llm_summary_text = ""
+            llm_ok = 0
             try:
                 from src.config import load_config
                 from src.summarize import create_summarizer
                 cfg = load_config()
                 smrz = create_summarizer(cfg)
-                ai_content = art.content or art.digest or title
+                # 输入文本：用 digest（最长可用字段），最差用 title
+                input_text = (art.digest or art.title or "无摘要")[:500]
+                prompt = "请用1-2句话总结以下文章的核心内容:\n" + input_text
+                _t0 = _time.monotonic()
                 ai_digest = smrz.chat(
-                    message="请用1-2句话总结以下文章的核心内容:\n" + ai_content[:500],
+                    message=prompt,
                     context_messages=[],
                     requester_name="system",
                     group_name=source,
                 )
-                if ai_digest and ai_digest.strip():
-                    digest = ai_digest.strip()[:80]
-                    logger.info(f"OAMonitor AI digest for '{title[:20]}': {digest[:30]}")
-                    # ── Save LLM summary to oa_cache ──
-                    if self._content_cache:
-                        try:
-                            self._content_cache.update("oa_cache", {
-                                "llm_summary": ai_digest.strip()[:500],
-                                "llm_summary_ok": 1,
-                            }, {"url": art.url})
-                        except Exception:
-                            pass
+                _latency = (_time.monotonic() - _t0) * 1000
+                _resp = (ai_digest or "").strip()
+                log_llm_interaction(
+                    backend="oa_monitor", call_type="oa_article_summary",
+                    model=getattr(smrz, 'model', 'unknown'),
+                    system_prompt="", user_prompt=prompt,
+                    response=_resp[:200], latency_ms=_latency,
+                    extra={"title": title[:50], "url": art.url, "gh_id": gh_id},
+                )
+                if _resp:
+                    digest = _resp[:80]
+                    llm_summary_text = _resp[:500]
+                    llm_ok = 1
+                    logger.info("OAMonitor AI digest for '%s': %s", title[:20], digest[:40])
+                else:
+                    logger.info("OAMonitor AI digest returned empty for '%s', use title", title[:20])
             except Exception as e:
-                logger.warning(f"OAMonitor AI digest failed, falling back to title: {e}")
+                logger.warning("OAMonitor AI digest failed for '%s': %s", title[:20], e)
+                # log failure (latency = 0 since we don't have it on exception path here)
+                log_llm_interaction(
+                    backend="oa_monitor", call_type="oa_article_summary",
+                    model="unknown", system_prompt="",
+                    user_prompt=(art.digest or art.title or "无摘要")[:200],
+                    response=f"[Error: {e}]", latency_ms=0,
+                    extra={"title": title[:50], "url": art.url, "error": str(e)[:200]},
+                )
+
+            # 最终展示用的 digest：AI摘要 > 原文摘要 > 标题
+            if not digest:
+                digest = (art.digest or "")[:50] or title[:50]
+
+            # ── 保存 LLM 摘要到 oa_cache ──
+            if llm_ok and llm_summary_text and self._content_cache:
+                try:
+                    self._content_cache.update("oa_cache", {
+                        "llm_summary": llm_summary_text,
+                        "llm_summary_ok": 1,
+                    }, {"url": art.url})
+                except Exception:
+                    pass
 
             import json as _json
 
@@ -319,7 +350,7 @@ class OAMonitorEngine:
         if len(self._alerted_urls) <= DEDUP_MAX:
             return
 
-        cutoff = time.time() - DEDUP_MAX_AGE_SEC
+        cutoff = _time.time() - DEDUP_MAX_AGE_SEC
         stale = [url for url, ts in self._alerted_urls.items() if ts < cutoff]
         for url in stale:
             del self._alerted_urls[url]
