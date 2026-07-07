@@ -347,6 +347,7 @@ class Bot:
         assistant_alert = None
         assistant_scheduler = None
         oa_monitor = None
+        content_cache = None  # 由下面 try 块赋值，外层确保引用安全
         try:
             from src.assistant.config import load_assistant_config
             asst_cfg = load_assistant_config()
@@ -363,6 +364,17 @@ class Bot:
                 task_center.cleanup_expired()
             except Exception as e:
                 logger.warning("TaskCenter init failed (continuing without): %s", e)
+
+            # ── Content Cache (本地持久化缓存，OA/SNS/Fav 读取加速) ──
+            content_cache = None
+            try:
+                from src.db.content_cache import ContentCache
+                content_cache = ContentCache()
+                from src.web.server import register_content_cache
+                register_content_cache(content_cache)
+                logger.info("[CACHE] ContentCache 已创建并注册")
+            except Exception as e:
+                logger.warning("[CACHE] ContentCache init failed (continuing without): %s", e)
 
             # Always create all engines unconditionally so they can be hot-enabled
             # via the API even if assistant_enabled was false at boot.
@@ -401,7 +413,8 @@ class Bot:
 
             # ── OA Monitor (thread loop, no-ops when no groups) ──
             from src.assistant.oa_monitor import OAMonitorEngine
-            oa_monitor = OAMonitorEngine(asst_cfg, outbox)
+            oa_monitor = OAMonitorEngine(asst_cfg, outbox,
+                                         content_cache=content_cache)
             oa_monitor.start()
             try:
                 from src.web.server import register_oa_monitor
@@ -460,6 +473,77 @@ class Bot:
 
                 threading.Thread(target=_cold_start_task, daemon=True,
                                  name="rag-cold-start").start()
+
+                # ── Cache sync: 后台全量同步 + RAG 索引 ──
+                if content_cache:
+                    def _cache_init_task():
+                        """初始化缓存：全量同步 + RAG 索引 + 定时增量循环。"""
+                        import time as _t
+                        _t.sleep(5)  # 等 WCDB client 就绪
+                        # 获取 WCDB client
+                        _client = None
+                        try:
+                            from src.web.api_handlers import get_wcdb_client
+                            _client = get_wcdb_client()
+                        except Exception:
+                            pass
+                        if not _client:
+                            logger.warning("[CACHE] WCDB 不可用，全量同步跳过")
+                            return
+
+                        # 全量同步（三源）
+                        content_cache.sync_oa_all(_client, task_center)
+                        content_cache.sync_sns_all(_client, task_center)
+                        content_cache.sync_fav_all(_client, task_center)
+
+                        # RAG 索引缓存数据
+                        try:
+                            content_cache.index_to_rag(rag_engine, "oa")
+                        except Exception:
+                            pass
+                        try:
+                            content_cache.index_to_rag(rag_engine, "sns")
+                        except Exception:
+                            pass
+                        try:
+                            content_cache.index_to_rag(rag_engine, "fav")
+                        except Exception:
+                            pass
+                        logger.info("[CACHE] 全量同步 + RAG 索引完成")
+
+                    threading.Thread(target=_cache_init_task, daemon=True,
+                                     name="cache-init").start()
+
+                    # 启动 OA 全文抓取队列（每秒 1 篇）
+                    content_cache.start_oa_content_fetcher()
+
+                    # 定时增量同步（SNS 5min / Fav 10min）
+                    def _sns_timer():
+                        while True:
+                            _t.sleep(300)
+                            try:
+                                from src.web.api_handlers import get_wcdb_client
+                                _c = get_wcdb_client()
+                                if _c:
+                                    content_cache.sync_sns_incremental(_c, task_center)
+                            except Exception:
+                                pass
+                    threading.Thread(target=_sns_timer, daemon=True,
+                                     name="sns-sync-timer").start()
+
+                    def _fav_timer():
+                        while True:
+                            _t.sleep(600)
+                            try:
+                                from src.web.api_handlers import get_wcdb_client
+                                _c = get_wcdb_client()
+                                if _c:
+                                    content_cache.sync_fav_incremental(_c, task_center)
+                            except Exception:
+                                pass
+                    threading.Thread(target=_fav_timer, daemon=True,
+                                     name="fav-sync-timer").start()
+
             except Exception as rag_e:
                 logger.warning("[RAG] RAGEngine init failed (continuing without): %s", rag_e)
                 rag_engine = None

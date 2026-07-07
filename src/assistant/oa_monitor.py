@@ -39,15 +39,20 @@ class OAMonitorEngine:
 
     Runs a background daemon thread that polls WCDB for new articles from
     monitored gh_xxx accounts. When a new article is found, it:
-    1. Creates an outbox notification
-    2. Optionally pushes to WeChat via iLink
-    3. Marks the URL as alerted for dedup
+    1. Writes to oa_cache (ContentCache) for persistence
+    2. Creates an outbox notification
+    3. Optionally pushes to WeChat via iLink
+
+    If content_cache is provided, URL dedup uses the persistent cache
+    instead of the in-memory set (enables cross-restart dedup).
     """
 
-    def __init__(self, config: AssistantConfig, outbox: Outbox):
+    def __init__(self, config: AssistantConfig, outbox: Outbox,
+                 content_cache=None):
         self._config = config
         self._outbox = outbox
-        # URL dedup: url -> timestamp
+        self._content_cache = content_cache
+        # URL dedup: url -> timestamp (secondary, per-session dedup only)
         self._alerted_urls: dict[str, float] = {}
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -106,7 +111,11 @@ class OAMonitorEngine:
         self._cleanup_dedup()
 
     def _check_account(self, mg: OAMonitorGroup, gh_id: str) -> None:
-        """Check one OA account for new articles."""
+        """Check one OA account for new articles.
+
+        Writes all fetched articles to oa_cache (ContentCache) for persistence,
+        then sends notifications for recent, previously unseen articles.
+        """
         from .oa_parser import fetch_oa_articles
 
         # Lazily get WCDB client — it's a singleton in api_handlers,
@@ -128,16 +137,32 @@ class OAMonitorEngine:
         cutoff = now - MONITOR_MAX_AGE_SEC
 
         for art in articles:
-            # Filter by age
             art_ts = art.timestamp or art.pub_time or 0
-            if art_ts < cutoff:
+            in_window = art_ts >= cutoff
+
+            if not art.url:
                 continue
 
-            # Dedup by URL
-            if not art.url or art.url in self._alerted_urls:
+            # ── Dedup: check cache + per-session set ─────────────────
+            is_known = art.url in self._alerted_urls
+            if not is_known and self._content_cache:
+                try:
+                    existing = self._content_cache.query_one(
+                        "SELECT 1 FROM oa_cache WHERE url=?", [art.url]
+                    )
+                    is_known = existing is not None
+                except Exception:
+                    pass
+
+            # ── Persist to oa_cache (INSERT OR REPLACE, idempotent) ──
+            if not is_known:
+                self._cache_article(art)
+
+            # ── Skip notification for out-of-window or already known ──
+            if not in_window or is_known:
                 continue
 
-            # Mark as alerted immediately (before notification to prevent races)
+            # Mark as alerted immediately (prevents race within same poll)
             self._alerted_urls[art.url] = now
 
             # Format time
@@ -170,6 +195,16 @@ class OAMonitorEngine:
                 if ai_digest and ai_digest.strip():
                     digest = ai_digest.strip()[:80]
                     logger.info(f"OAMonitor AI digest for '{title[:20]}': {digest[:30]}")
+                    # ── Save LLM summary to oa_cache ──
+                    if self._content_cache:
+                        try:
+                            self._content_cache.upsert("oa_cache", {
+                                "url": art.url,
+                                "llm_summary": ai_digest.strip()[:500],
+                                "llm_summary_ok": 1,
+                            })
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.warning(f"OAMonitor AI digest failed, falling back to title: {e}")
 
@@ -207,6 +242,40 @@ class OAMonitorEngine:
             # Push to WeChat via iLink (if configured)
             if mg.push_target == "ilink":
                 self._push_to_wechat(nid, mg.name or source, notif_title, notif_content)
+
+    def _cache_article(self, art) -> None:
+        """Write a single OA article to oa_cache. Idempotent (INSERT OR REPLACE)."""
+        if not self._content_cache:
+            return
+        try:
+            cache = self._content_cache
+            url = (art.url or "").strip()
+            title = art.title or ""
+            if not url or not title:
+                return
+            import html, re
+            title = html.unescape(title).strip()
+            title = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', title)
+            if not title:
+                return
+            digest = html.unescape(art.digest or "").strip()
+            digest = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', digest)[:500]
+            cache.upsert("oa_cache", {
+                "url": url,
+                "gh_id": art.gh_id,
+                "title": title,
+                "digest": digest,
+                "cover_url": (art.cover or "").strip(),
+                "source_name": html.unescape(art.source_name or "").strip() or art.gh_id,
+                "pub_time": art.pub_time or art.timestamp or 0,
+                "full_content": "",
+                "content_status": 0,
+                "llm_summary": "",
+                "llm_summary_ok": 0,
+                "cached_at": int(time.time()),
+            })
+        except Exception as e:
+            logger.warning("[CACHE] _cache_article 失败: %s", e)
 
     def _push_to_wechat(self, nid: int, group_name: str, title: str, content: str) -> None:
         """Push notification to WeChat via iLink Bot."""

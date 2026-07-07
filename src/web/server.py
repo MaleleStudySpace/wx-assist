@@ -760,11 +760,18 @@ def register_oa_monitor(monitor):
     _oa_monitor = monitor
 
 _task_center = None
+_content_cache = None  # ContentCache — registered by bot.py for cache-first reads
 
 def register_task_center(tc):
     """Register the TaskCenter so the API can query task status."""
     global _task_center
     _task_center = tc
+
+
+def register_content_cache(cc):
+    """Register the ContentCache so API handlers can do cache-first reads."""
+    global _content_cache
+    _content_cache = cc
 
 
 def is_shutting_down():

@@ -332,6 +332,18 @@ class ContentCache:
     # OA 增量合并（定时器 + 用户访问触发）
     # ══════════════════════════════════════════════════════════════
 
+    def sync_oa_single(self, client, gh_id: str, task_center=None) -> int:
+        """增量同步单个公众号的文章。返回新增条数。
+
+        由 API 触发器调用，轻量级操作（只拉最新 10 篇），
+        不检查 _syncing flag（增量合并无冲突风险）。
+        """
+        try:
+            return self._sync_oa_gh(client, gh_id)
+        except Exception as e:
+            logger.warning("[CACHE] sync_oa_single %s 失败: %s", gh_id, e)
+            return 0
+
     def sync_oa_incremental(self, client, task_center=None):
         """增量合并 OA 文章。定时器 60s + 用户访问触发。"""
         if self._is_full_syncing("oa"):
