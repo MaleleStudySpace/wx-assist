@@ -110,6 +110,9 @@ a = Analysis(
         'chromadb.telemetry.product.events',
         'chromadb.telemetry.opentelemetry',
         'overrides',
+        # ChromaDB native Rust bindings (compiled .pyd, not auto-detected)
+        'chromadb_rust_bindings',
+        'chromadb.api.rust',
     ],
     hookspath=[],
     hooksconfig={},
