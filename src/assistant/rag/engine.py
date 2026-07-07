@@ -108,6 +108,23 @@ class RAGEngine:
 
     # ── 索引 ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def _is_readable_content(content: str) -> bool:
+        """判断消息内容是否可读（非加密 blob）。
+
+        微信 4.x 非文本消息在 WCDB 中 content 字段存的是加密数据，
+        特征：以 '28b52ffd' 开头且长度 > 100 的 hex 字符串。
+        此类内容索引后搜索能命中但不可读，应跳过。
+
+        Returns:
+            True 表示可读，应索引；False 表示加密数据，跳过。
+        """
+        if not content or len(content) < 2:
+            return False
+        if content.startswith("28b52ffd") and len(content) > 100:
+            return False
+        return True
+
     def ingest(self, messages: list[dict], source: str = "msg"):
         """批量索引。用于冷启动。
 
@@ -119,7 +136,13 @@ class RAGEngine:
             return
 
         try:
-            chunks = self._chunker.chunk(messages, source=source)
+            # 过滤加密 blob 消息，只索引可读文本
+            valid = [m for m in messages
+                     if self._is_readable_content(m.get("content", ""))]
+            if not valid:
+                return
+
+            chunks = self._chunker.chunk(valid, source=source)
             if not chunks:
                 return
 
@@ -138,12 +161,8 @@ class RAGEngine:
             msg: 单条消息
             source: 数据源标识
         """
-        # 过滤无意义内容
         content = msg.get("content", "").strip()
-        if not content:
-            return
-        if len(content) < 2:
-            # 单字/表情包不索引
+        if not self._is_readable_content(content):
             return
 
         chat_id = str(msg.get("chat_id", "__unknown__"))
@@ -194,16 +213,25 @@ class RAGEngine:
             # 多召一些用于过滤和重排序
             results = self._store.search(q_emb[0], top_k=top_k * 2, where=where)
             if not results:
+                logger.info("[RAG] search 无结果: query='%s'", query[:60])
                 return []
 
             # 相似度阈值过滤
+            before = len(results)
             results = [r for r in results
                       if r.score >= DEFAULT_SCORE_THRESHOLD]
+            after = len(results)
+            if before != after:
+                logger.info("[RAG] search 阈值过滤: %d→%d (threshold=%.2f, query='%s')",
+                           before, after, DEFAULT_SCORE_THRESHOLD, query[:40])
             if not results:
+                logger.info("[RAG] search 过滤后无结果: threshold=%.2f, query='%s'",
+                           DEFAULT_SCORE_THRESHOLD, query[:60])
                 return []
 
             # 重排序
             results = self._reranker.rerank(query, results, top_n=final_k)
+            logger.info("[RAG] search 返回 %d 条结果: query='%s'", len(results), query[:60])
             return results
 
         except Exception as e:

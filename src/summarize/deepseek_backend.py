@@ -266,7 +266,16 @@ class OpenAICompatSummarizer(AbstractSummarizer):
              "tools": tools, "tool_choice": "auto"},
             self.extra_body,
         )
-        response = self.client.chat.completions.create(**params)
+
+        start = time.monotonic()
+        try:
+            response = self.client.chat.completions.create(**params)
+            latency = (time.monotonic() - start) * 1000
+        except Exception:
+            latency = (time.monotonic() - start) * 1000
+            logger.info("[LLM] agent_chat FAILED after %.1fms", latency)
+            raise
+
         msg = response.choices[0].message
         tool_calls = (
             [{
@@ -279,7 +288,39 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             } for tc in msg.tool_calls]
             if msg.tool_calls else None
         )
-        return msg.content or "", tool_calls
+
+        content = msg.content or ""
+
+        # Build user_prompt string from messages (for logging)
+        user_lines = []
+        for m in messages:
+            role = m.get("role", "unknown")
+            text = m.get("content", "")
+            user_lines.append(f"[{role}]: {text}")
+        user_prompt = "\n".join(user_lines)
+
+        # Tool descriptions for logging
+        tool_names = [t.get("function", {}).get("name", "?") for t in tools]
+
+        try:
+            usage = response.usage
+            token_in = usage.prompt_tokens if usage else 0
+            token_out = usage.completion_tokens if usage else 0
+        except Exception:
+            token_in = token_out = 0
+
+        log_llm_interaction(
+            backend="deepseek", call_type="agent_chat",
+            model=self.model, system_prompt=system_prompt,
+            user_prompt=user_prompt, response=content,
+            latency_ms=latency,
+            token_in=token_in, token_out=token_out,
+            extra={"tool_calls": len(tool_calls) if tool_calls else 0,
+                   "tools": ",".join(tool_names),
+                   "messages": len(messages)},
+        )
+
+        return content, tool_calls
 
     # ── Direct summarization ──────────────────────────────────────
 
