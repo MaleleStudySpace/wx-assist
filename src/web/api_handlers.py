@@ -248,6 +248,58 @@ def get_task_center():
     except Exception:
         return None
 
+
+def get_content_cache():
+    """Get the ContentCache singleton from server module."""
+    try:
+        from src.web.server import _content_cache
+        return _content_cache
+    except Exception:
+        return None
+
+
+# ── 后台缓存同步辅助（非阻塞，daemon 线程） ──────────────────────────
+
+def _bg_sync_oa(cc, gh_id=None):
+    """后台增量同步 OA 缓存。gh_id 指定则只同步一个公众号。"""
+    def _run():
+        try:
+            client = get_wcdb_client()
+            if not client:
+                return
+            if gh_id:
+                cc.sync_oa_single(client, gh_id)
+            else:
+                cc.sync_oa_incremental(client)
+        except Exception:
+            pass
+    threading.Thread(target=_run, daemon=True, name="bg-oa-sync").start()
+
+
+def _bg_sync_sns(cc):
+    """后台增量同步朋友圈缓存。"""
+    def _run():
+        try:
+            client = get_wcdb_client()
+            if client:
+                cc.sync_sns_incremental(client)
+        except Exception:
+            pass
+    threading.Thread(target=_run, daemon=True, name="bg-sns-sync").start()
+
+
+def _bg_sync_fav(cc):
+    """后台增量同步收藏缓存。"""
+    def _run():
+        try:
+            client = get_wcdb_client()
+            if client:
+                cc.sync_fav_incremental(client)
+        except Exception:
+            pass
+    threading.Thread(target=_run, daemon=True, name="bg-fav-sync").start()
+
+
 def get_wcdb_client():
     """Get or create WCDB client singleton.
 
@@ -290,17 +342,95 @@ def get_wcdb_client():
 # ── 收藏 API ─────────────────────────────────────────────────────────
 
 def handle_fav_list(params, config: AssistantConfig):
-    """GET /api/fav/list — List favorites"""
+    """GET /api/fav/list — List favorites (cache-first)"""
+    limit = int(params.get("limit", [200])[0]) if params.get("limit") else 200
+    offset = int(params.get("offset", [0])[0]) if params.get("offset") else 0
+
+    # ── Cache-first: 从 fav_cache 读取基础元数据 ──
+    cc = get_content_cache()
+    if cc:
+        try:
+            cached = cc.query(
+                "SELECT * FROM fav_cache ORDER BY update_time DESC LIMIT ? OFFSET ?",
+                [limit, offset],
+            )
+            if cached:
+                # 后台触发增量同步
+                _bg_sync_fav(cc)
+
+                # 标签仍从 WCDB 读取（独立表，未缓存）
+                fav_tags = {}
+                try:
+                    from src.wechat.wcdb_fav_reader import WcdbFavReader
+                    fav_reader = _get_wcdb_fav_reader()
+                    if fav_reader:
+                        tags_data = fav_reader.get_tags() or []
+                        bindings_data = fav_reader.get_tag_bindings() or []
+                        tag_map = {t.get("local_id", ""): t.get("name", "") for t in tags_data}
+                        for b in bindings_data:
+                            tid = b.get("tag_local_id", "")
+                            fid = b.get("fav_local_id", "")
+                            if tid and fid:
+                                fav_tags.setdefault(str(fid), []).append(
+                                    {"id": str(tid), "name": tag_map.get(tid, "")}
+                                )
+                except Exception:
+                    pass
+
+                favorites = []
+                for r in cached:
+                    chat_records = json.loads(r["chat_records_json"]) if r["chat_records_json"] else []
+                    media_json_data = json.loads(r["media_json"]) if r["media_json"] else []
+                    # content = description（与 WCDB 路径相同的逻辑）
+                    content = r["description"] or ""
+                    # images 从 media_json 提取（与 _extract_fav_image_info 逻辑一致：类型 14/3 跳过顶层图片）
+                    ftype = int(r["type"])
+                    images = []
+                    if ftype not in (14, 3):
+                        for m in media_json_data:
+                            dataurl = m.get("dataurl") or m.get("url", "")
+                            if dataurl:
+                                if isinstance(dataurl, str) and dataurl.startswith(("305", "306", "307")):
+                                    images.append({
+                                        "url": dataurl,
+                                        "key": "v2_cache",
+                                        "fullmd5": m.get("fullmd5", ""),
+                                        "fullsize": m.get("fullsize", 0),
+                                    })
+                                else:
+                                    images.append({
+                                        "url": dataurl,
+                                        "key": m.get("datakey") or m.get("key", 0),
+                                    })
+
+                    favorites.append({
+                        "id": r["fav_id"],
+                        "type": r["type"],
+                        "type_name": r["type_name"],
+                        "create_time": r["update_time"],
+                        "datetime": "",  # 缓存不存此字段，前端兼容空字符串
+                        "title": r["title"],
+                        "content": content,
+                        "from_user": r["from_user"],
+                        "link": r["link"],
+                        "images": images,
+                        "chat_records": chat_records,
+                        "content_raw": "",
+                        "tags": fav_tags.get(str(r["fav_id"]), []),
+                    })
+
+                logger.debug("[CACHE] handle_fav_list 返回 %d 条缓存数据", len(favorites))
+                return {"ok": True, "data": favorites, "total": len(favorites)}
+        except Exception as e:
+            logger.warning("[CACHE] fav_cache 读失败，降级到 WCDB: %s", e)
+
+    # ── 降级：直接读 WCDB ──
     reader = _get_wcdb_fav_reader()
     if not reader:
         return {"ok": False, "error": "WCDB not available"}
 
     try:
         t0 = time.monotonic()
-        # Parse limit/offset from params
-        limit = int(params.get("limit", [200])[0]) if params.get("limit") else 200
-        offset = int(params.get("offset", [0])[0]) if params.get("offset") else 0
-
         items = reader.get_items(limit=limit, offset=offset)
         logger.debug("[API-TRACE] /api/fav/list: get_items took %.0fms, got %d items",
                     (time.monotonic() - t0) * 1000, len(items) if items else 0)
@@ -3520,22 +3650,112 @@ def _get_common_groups_fallback(client, friend_wxid):
 # ── 朋友圈 API ─────────────────────────────────────────────────────────
 
 def handle_sns_timeline(params, config: AssistantConfig):
-    """GET /api/sns/timeline — Get Moments timeline"""
+    """GET /api/sns/timeline — Get Moments timeline (cache-first)"""
+    limit = int(params.get("limit", [20])[0]) if params.get("limit") else 20
+    offset = int(params.get("offset", [0])[0]) if params.get("offset") else 0
+    username = params.get("username", [None])[0]
+    keyword = params.get("keyword", [None])[0]
+    start_time = int(params.get("start_time", [0])[0]) if params.get("start_time") else 0
+    end_time = int(params.get("end_time", [0])[0]) if params.get("end_time") else 0
+
+    # ── Cache-first: 无 keyword/时间范围过滤时，从 sns_cache 读取 ──
+    cc = get_content_cache()
+    if cc and not keyword and not start_time and not end_time:
+        try:
+            where_clauses = []
+            query_args = []
+            if username:
+                where_clauses.append("username=?")
+                query_args.append(username)
+            where_sql = " AND ".join(where_clauses) if where_clauses else "1"
+            cached = cc.query(
+                f"SELECT * FROM sns_cache WHERE {where_sql} "
+                f"ORDER BY create_time DESC LIMIT ? OFFSET ?",
+                query_args + [limit, offset],
+            )
+            if cached:
+                # 后台触发增量同步
+                _bg_sync_sns(cc)
+
+                # 收集所有 username 批量查头像
+                all_usernames = list(set(r["username"] for r in cached if r["username"]))
+                avatar_map = {}
+                if all_usernames:
+                    try:
+                        client = get_wcdb_client()
+                        if client:
+                            avatar_map = client.get_avatar_urls(all_usernames) or {}
+                    except Exception:
+                        pass
+
+                mapped = []
+                for r in cached:
+                    media_list = json.loads(r["media_json"]) if r["media_json"] else []
+                    likes = json.loads(r["likes_json"]) if r["likes_json"] else []
+                    comments = json.loads(r["comments_json"]) if r["comments_json"] else []
+                    raw_xml = r["raw_xml"] or ""
+
+                    # 视频加密 key 提取（与 WCDB 路径相同逻辑）
+                    video_key = ""
+                    if raw_xml and "<enc" in raw_xml:
+                        import re as _re_enc
+                        enc_match = _re_enc.search(r'<enc\s+key="(\d+)"', raw_xml)
+                        if enc_match:
+                            video_key = enc_match.group(1)
+
+                    processed_media = []
+                    for m in media_list:
+                        url = m.get("url", "")
+                        thumb_url = m.get("thumb", "")
+                        mtype = m.get("type", "")
+                        if not mtype:
+                            if ("snsvideodownload" in url.lower() or
+                                (".mp4" in url.lower()) or
+                                ("video" in url.lower() and "vweixinthumb" not in url.lower())):
+                                mtype = "video"
+                            elif url.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+                                mtype = "image"
+                            else:
+                                mtype = "image"
+                        media_key = m.get("key", "")
+                        if mtype == "video" and (not media_key or str(media_key) == "0") and video_key:
+                            media_key = video_key
+                        processed_media.append({
+                            "type": mtype,
+                            "thumb_url": thumb_url or url,
+                            "url": url,
+                            "key": str(media_key),
+                            "token": m.get("token", ""),
+                        })
+
+                    mapped.append({
+                        "id": r["post_id"],
+                        "username": r["username"],
+                        "nickname": r["nickname"],
+                        "user_head_url": avatar_map.get(r["username"], ""),
+                        "create_time": r["create_time"],
+                        "content": r["clean_content"],
+                        "like_count": r["like_count"],
+                        "comment_count": r["comment_count"],
+                        "likes": likes,
+                        "comments": comments,
+                        "media_list": processed_media,
+                        "location": r["location_name"],
+                        "rawXml": raw_xml,
+                    })
+
+                logger.debug("[CACHE] handle_sns_timeline 返回 %d 条缓存数据", len(mapped))
+                return {"ok": True, "data": mapped, "total": len(mapped)}
+        except Exception as e:
+            logger.warning("[CACHE] sns_cache 读失败，降级到 WCDB: %s", e)
+
+    # ── 降级：有 keyword/时间过滤，或缓存为空，直接读 WCDB ──
     reader = _get_wcdb_sns_reader()
     if not reader:
         return {"ok": False, "error": "WCDB not available"}
 
     try:
-        limit = int(params.get("limit", [20])[0]) if params.get("limit") else 20
-        offset = int(params.get("offset", [0])[0]) if params.get("offset") else 0
-        username = params.get("username", [None])[0]
-        keyword = params.get("keyword", [None])[0]
-        start_time = int(params.get("start_time", [0])[0]) if params.get("start_time") else 0
-        end_time = int(params.get("end_time", [0])[0]) if params.get("end_time") else 0
-
-        # Build usernames filter if provided
         usernames = [username] if username else None
-
         posts = reader.get_timeline(
             limit=limit, offset=offset, usernames=usernames,
             keyword=keyword or "", start_time=start_time, end_time=end_time
@@ -4322,7 +4542,26 @@ def handle_sns_export(params, config: AssistantConfig):
 # ── 公众号 API ─────────────────────────────────────────────────────────
 
 def handle_oa_accounts(params, config: AssistantConfig):
-    """GET /api/oa/accounts — List all OA accounts"""
+    """GET /api/oa/accounts — List all OA accounts (cache-first)"""
+    # ── Cache-first: 从 oa_accounts 读取 ──
+    cc = get_content_cache()
+    if cc:
+        try:
+            cached = cc.query("SELECT gh_id, display_name FROM oa_accounts ORDER BY display_name")
+            if cached:
+                # 后台触发增量同步（不阻塞响应）
+                _bg_sync_oa(cc)
+                return {
+                    "ok": True,
+                    "data": [
+                        {"username": r["gh_id"], "nickname": r["display_name"]}
+                        for r in cached
+                    ],
+                }
+        except Exception as e:
+            logger.warning("[CACHE] oa_accounts 缓存读失败，降级到 WCDB: %s", e)
+
+    # ── 降级：直接读 WCDB ──
     client = get_wcdb_client()
     if not client:
         return {"ok": False, "error": "WCDB not available"}
@@ -4790,18 +5029,55 @@ def handle_oa_search(params, config: AssistantConfig):
 
 
 def handle_oa_articles(params, config: AssistantConfig):
-    """GET /api/oa/articles — Get all articles from a specific OA"""
+    """GET /api/oa/articles — Get all articles from a specific OA (cache-first)"""
+    gh_id = params.get("gh_id", [""])[0]
+    if not gh_id:
+        return {"ok": False, "error": "Missing gh_id"}
+
+    limit = int(params.get("limit", ["50"])[0]) if params.get("limit") else 50
+
+    # ── Cache-first: 从 oa_cache 读取 ──
+    cc = get_content_cache()
+    if cc:
+        try:
+            cached = cc.query(
+                "SELECT * FROM oa_cache WHERE gh_id=? ORDER BY pub_time DESC LIMIT ?",
+                [gh_id, limit],
+            )
+            if cached:
+                # 后台触发该 gh_id 的增量同步
+                _bg_sync_oa(cc, gh_id)
+                return {
+                    "ok": True,
+                    "data": [
+                        {
+                            "title": r["title"],
+                            "url": r["url"],
+                            "digest": r["digest"],
+                            "cover": r["cover_url"],
+                            "source_name": r["source_name"],
+                            "source_username": gh_id,
+                            "pub_time": r["pub_time"],
+                            "gh_id": gh_id,
+                            "timestamp": r["pub_time"],
+                            "create_time": r["pub_time"],
+                        }
+                        for r in cached
+                    ],
+                    "total": len(cached),
+                }
+
+                logger.debug("[CACHE] handle_oa_articles 返回 %d 条缓存数据 (gh_id=%s)",
+                             len(cached), gh_id)
+        except Exception as e:
+            logger.warning("[CACHE] oa_articles 缓存读失败，降级到 WCDB: %s", e)
+
+    # ── 降级：直接读 WCDB ──
     client = get_wcdb_client()
     if not client:
         return {"ok": False, "error": "WCDB not available"}
 
     try:
-        gh_id = params.get("gh_id", [""])[0]
-        if not gh_id:
-            return {"ok": False, "error": "Missing gh_id"}
-
-        limit = int(params.get("limit", ["50"])[0]) if params.get("limit") else 50
-
         from src.assistant.oa_parser import fetch_oa_articles
         articles = fetch_oa_articles(client, gh_id, limit=limit)
 

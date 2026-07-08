@@ -264,6 +264,78 @@ class ToolExecutor:
             handler=self._handle_search_chat_history,
         )
 
+        # ── search_oa_articles（语义搜索公众号文章）─────────────────
+        r.register(
+            name="search_oa_articles",
+            description="语义搜索已关注的公众号文章内容。当用户想回顾某篇文章、"
+                       "或查找之前读过的公众号文章时调用。"
+                       "输入自然语言查询，返回相关的文章片段。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索内容，用自然语言描述你想找的文章内容",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "返回结果数量，默认 5",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+            handler=self._handle_search_oa_articles,
+        )
+
+        # ── search_moments（语义搜索朋友圈）─────────────────────────
+        r.register(
+            name="search_moments",
+            description="语义搜索朋友圈历史内容。当用户想找之前看过的朋友圈、"
+                       "某个朋友发的动态，或者某个话题的朋友圈时调用。"
+                       "输入自然语言查询，返回相关的朋友圈内容。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索内容，用自然语言描述你想找的朋友圈内容",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "返回结果数量，默认 5",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+            handler=self._handle_search_moments,
+        )
+
+        # ── search_favorites（语义搜索收藏）─────────────────────────
+        r.register(
+            name="search_favorites",
+            description="语义搜索微信收藏中的内容。当用户想找之前收藏的文章、链接、"
+                       "聊天记录等时调用。"
+                       "输入自然语言查询，返回相关的收藏片段。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索内容，用自然语言描述你想找的收藏内容",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "返回结果数量，默认 5",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+            handler=self._handle_search_favorites,
+        )
+
     # ══════════════════════════════════════════════════════════════
     # Tool handlers (all ``def _handle_*(self, ...) -> str``)
     # ══════════════════════════════════════════════════════════════
@@ -649,4 +721,91 @@ class ToolExecutor:
                 f"{i}. [{group} {ts} {sender}] {chunk.content[:200]}"
             )
 
+        return "\n".join(lines)
+
+    # ── search_oa_articles ──────────────────────────────────────────
+
+    def _handle_search_oa_articles(self, query: str,
+                                    top_k: int = 5) -> str:
+        """语义搜索公众号文章。"""
+        if not self._rag:
+            return "搜索服务未就绪（RAG 引擎未初始化）。"
+        try:
+            results = self._rag.search(
+                query=query, top_k=top_k * 4, final_k=top_k,
+                where={"source": "oa"},
+            )
+        except Exception as e:
+            logger.warning("search_oa_articles failed: %s", e)
+            return f"搜索失败: {e}"
+        if not results:
+            return f"没有找到与「{query}」相关的公众号文章。"
+        lines = [f"找到 {len(results)} 条相关公众号文章："]
+        for i, r in enumerate(results, 1):
+            chunk = r.chunk
+            ts = chunk.created_at
+            if len(ts) > 10:
+                ts = ts[5:16]
+            source = chunk.chat_id or chunk.sender_name or "公众号"
+            lines.append(
+                f"{i}. [{source} {ts}] {chunk.content[:200]}"
+            )
+        return "\n".join(lines)
+
+    # ── search_moments ─────────────────────────────────────────────
+
+    def _handle_search_moments(self, query: str,
+                                top_k: int = 5) -> str:
+        """语义搜索朋友圈。"""
+        if not self._rag:
+            return "搜索服务未就绪（RAG 引擎未初始化）。"
+        try:
+            results = self._rag.search(
+                query=query, top_k=top_k * 4, final_k=top_k,
+                where={"source": "sns"},
+            )
+        except Exception as e:
+            logger.warning("search_moments failed: %s", e)
+            return f"搜索失败: {e}"
+        if not results:
+            return f"没有找到与「{query}」相关的朋友圈内容。"
+        lines = [f"找到 {len(results)} 条相关朋友圈："]
+        for i, r in enumerate(results, 1):
+            chunk = r.chunk
+            ts = chunk.created_at
+            if len(ts) > 10:
+                ts = ts[5:16]
+            sender = chunk.sender_name or "好友"
+            lines.append(
+                f"{i}. [{sender} {ts}] {chunk.content[:200]}"
+            )
+        return "\n".join(lines)
+
+    # ── search_favorites ───────────────────────────────────────────
+
+    def _handle_search_favorites(self, query: str,
+                                  top_k: int = 5) -> str:
+        """语义搜索收藏。"""
+        if not self._rag:
+            return "搜索服务未就绪（RAG 引擎未初始化）。"
+        try:
+            results = self._rag.search(
+                query=query, top_k=top_k * 4, final_k=top_k,
+                where={"source": "fav"},
+            )
+        except Exception as e:
+            logger.warning("search_favorites failed: %s", e)
+            return f"搜索失败: {e}"
+        if not results:
+            return f"没有找到与「{query}」相关的收藏内容。"
+        lines = [f"找到 {len(results)} 条相关收藏："]
+        for i, r in enumerate(results, 1):
+            chunk = r.chunk
+            ts = chunk.created_at
+            if len(ts) > 10:
+                ts = ts[5:16]
+            sender = chunk.sender_name or "收藏"
+            lines.append(
+                f"{i}. [{sender} {ts}] {chunk.content[:200]}"
+            )
         return "\n".join(lines)

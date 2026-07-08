@@ -39,6 +39,38 @@ function validateCronExpr(cronExpr) {
   return ''
 }
 
+/** 从 cron_expr 估算智能回溯小时数 */
+function estimateAutoLookback(cronExpr) {
+  if (!cronExpr) return 24
+  const parts = cronExpr.trim().split(/\s+/)
+  if (parts.length < 2) return 24
+  const hourPart = parts[1]
+  const hours = new Set()
+  for (const segment of hourPart.split(',')) {
+    const h = segment.trim()
+    if (h.startsWith('*/')) {
+      const step = parseInt(h.slice(2), 10)
+      if (step > 0) { for (let hh = 0; hh < 24; hh += step) hours.add(hh) }
+    } else if (h.includes('-') && !h.startsWith('-')) {
+      const [lo, hi] = h.split('-', 2).map(Number)
+      if (!isNaN(lo) && !isNaN(hi)) { for (let hh = lo; hh <= hi; hh++) hours.add(hh) }
+    } else {
+      const n = parseInt(h, 10)
+      if (!isNaN(n)) hours.add(n)
+    }
+  }
+  if (hours.size >= 2) {
+    const sorted = [...hours].sort((a, b) => a - b)
+    const gaps = []
+    for (let i = 1; i < sorted.length; i++) gaps.push(sorted[i] - sorted[i - 1])
+    gaps.push(24 - sorted[sorted.length - 1] + sorted[0])
+    return Math.min(...gaps) + 1
+  } else if (hours.size === 1) {
+    return 25
+  }
+  return 24
+}
+
 // ── Digest templates with clear descriptions ──
 const TEMPLATES = [
   { value: 'default', label: '默认摘要', PhosphorIcon: FileText,
@@ -172,7 +204,9 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
               <div className="flex items-center justify-between text-xs">
                 <span className="text-text-muted">时间范围</span>
                 <span className="text-text-main">
-                  {group.lookback_mode === 'auto' ? '智能回溯' : `${group.lookback_hours || 24} 小时`}
+                  {group.lookback_mode === 'auto'
+                    ? `智能 · ~${estimateAutoLookback(group.cron_expr)}h`
+                    : `${group.lookback_hours || 24} 小时`}
                 </span>
               </div>
               {group.push_target && (
@@ -305,40 +339,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
   }
 
   // ── Cron / lookback logic ─────────────────────────────────────────────
-  function estimateAutoLookback() {
-    if (!cronExpr) return 24
-    const parts = cronExpr.trim().split(/\s+/)
-    if (parts.length < 2) return 24
-    const hourPart = parts[1]
-    const hours = new Set()
-    for (const segment of hourPart.split(',')) {
-      const h = segment.trim()
-      if (h.startsWith('*/')) {
-        // Step expression: */6 → 0, 6, 12, 18
-        const step = parseInt(h.slice(2), 10)
-        if (step > 0) { for (let hh = 0; hh < 24; hh += step) hours.add(hh) }
-      } else if (h.includes('-') && !h.startsWith('-')) {
-        // Range expression: 9-17 → 9, 10, ..., 17
-        const [lo, hi] = h.split('-', 2).map(Number)
-        if (!isNaN(lo) && !isNaN(hi)) { for (let hh = lo; hh <= hi; hh++) hours.add(hh) }
-      } else {
-        const n = parseInt(h, 10)
-        if (!isNaN(n)) hours.add(n)
-      }
-    }
-    if (hours.size >= 2) {
-      const sorted = [...hours].sort((a, b) => a - b)
-      const gaps = []
-      for (let i = 1; i < sorted.length; i++) gaps.push(sorted[i] - sorted[i - 1])
-      gaps.push(24 - sorted[sorted.length - 1] + sorted[0])
-      return Math.min(...gaps) + 1
-    } else if (hours.size === 1) {
-      return 25
-    }
-    return 24
-  }
-
-  const autoLookbackEstimate = estimateAutoLookback()
+  const autoLookbackEstimate = estimateAutoLookback(cronExpr)
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (

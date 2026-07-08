@@ -1061,6 +1061,28 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
     limit = int(body.get("limit", 20) or 20)
     username = body.get("username", "")
 
+    # ── TaskCenter：创建任务 ──
+    tid = None
+    try:
+        from src.web.server import _task_center
+        if _task_center:
+            tid = _task_center.create_task(
+                "sns_summarize", "manual", username or "朋友圈", "朋友圈总结",
+            )
+            _task_center.update_task(tid, progress="正在读取朋友圈内容")
+    except Exception:
+        pass
+
+    # ── 辅助：错误路径清理 TaskCenter ──
+    def _fail_task(error=""):
+        if tid:
+            try:
+                from src.web.server import _task_center as _tc
+                if _tc:
+                    _tc.fail_task(tid, error=error[:200])
+            except Exception:
+                pass
+
     # Build context from SNS
     context_text, context_tokens, source_name, _ = _build_sns_context(
         limit=limit, username=username,
@@ -1068,15 +1090,26 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
     logger.info(f"[SNS_SUMMARIZE] context built: tokens={context_tokens}, source={source_name}, text_len={len(context_text) if context_text else 0}")
 
     if not context_text:
+        _fail_task("没有朋友圈内容可总结")
         _send_sse_headers(wfile)
         _send_sse_event(wfile, "error", {"message": "没有可用的朋友圈内容"})
         return
+
+    # Update task
+    if tid:
+        try:
+            from src.web.server import _task_center as _tc
+            if _tc:
+                _tc.update_task(tid, status="running", progress="AI 生成摘要中")
+        except Exception:
+            pass
 
     # Get summarizer — need it early for token budget check
     try:
         config = load_config()
         summarizer = create_summarizer(config)
     except Exception as e:
+        _fail_task(f"AI 后端初始化失败: {e}")
         _send_sse_headers(wfile)
         _send_sse_event(wfile, "error", {"message": f"AI 后端初始化失败: {e}"})
         return
@@ -1160,17 +1193,21 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
                         _status.update_status(ai_ok=False, ai_verified=False)
                     except Exception:
                         pass
+                    _fail_task("AI 首 token 超时")
                     return
             _send_sse_event(wfile, "token", {"content": token})
             full_response.append(token)
     except BrokenPipeError:
         logger.info("Client disconnected during SNS AI summarize stream")
+        _fail_task("客户端断开连接")
         return
     except ConnectionResetError:
         logger.info("Client reset during SNS AI summarize stream")
+        _fail_task("客户端连接重置")
         return
     except Exception as e:
         logger.error("SNS AI summarize stream error: %s", e)
+        _fail_task(f"AI 服务错误: {e}")
         try:
             _send_sse_event(wfile, "error", {"message": f"AI 服务错误: {e}"})
         except (BrokenPipeError, ConnectionResetError):
@@ -1190,6 +1227,14 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
         latency_ms=latency,
         extra={"limit": limit, "username": username},
     )
+
+    # Task complete
+    try:
+        from src.web.server import _task_center as _tc
+        if tid and _tc:
+            _tc.complete_task(tid, result=response_text[:200])
+    except Exception:
+        pass
 
     try:
         _send_sse_event(wfile, "done", {"source_name": source_name})

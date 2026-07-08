@@ -246,16 +246,26 @@ def call_llm(prompt: str, system_prompt: str = "", summarizer=None) -> str:
 class OADigestService:
     """Service for generating OA article digests."""
 
-    def __init__(self, config, wcdb_client=None, summarizer=None):
+    def __init__(self, config, wcdb_client=None, summarizer=None,
+                 content_cache=None):
         """
         Args:
             config: AssistantConfig instance
             wcdb_client: WcdbNativeClient instance
             summarizer: AbstractSummarizer instance (for unified LLM calls)
+            content_cache: Optional ContentCache instance (cache-first reads)
         """
         self._config = config
         self._client = wcdb_client
         self._summarizer = summarizer
+        self._cache = content_cache
+        # 自动从 api_handlers 获取 content_cache（兼容已有调用方不传参的情况）
+        if self._cache is None:
+            try:
+                from src.web.api_handlers import get_content_cache
+                self._cache = get_content_cache()
+            except Exception:
+                pass
         self._history = DigestHistory()
 
     def generate_digest(
@@ -286,21 +296,50 @@ class OADigestService:
         if not group:
             return {"success": False, "error": f"Group {group_id} not found"}
 
-        if not self._client:
+        if not self._client and not self._cache:
             return {"success": False, "error": "WCDB client not available"}
 
-        # Fetch articles from all accounts in group
+        # ── Fetch articles: 缓存优先，降级到 WCDB ──
         all_articles = []
-        for gh_id in group.accounts:
+        if self._cache:
             try:
-                articles = fetch_oa_articles(self._client, gh_id, limit=50)
-                all_articles.extend(articles)
-                logger.debug(
-                    "[OA-DIGEST] Fetched %d articles from %s for group '%s'",
-                    len(articles), gh_id, group.name,
-                )
+                for gh_id in group.accounts:
+                    rows = self._cache.query(
+                        "SELECT * FROM oa_cache WHERE gh_id=? ORDER BY pub_time DESC LIMIT 50",
+                        [gh_id],
+                    )
+                    from src.assistant.oa_parser import OAArticle
+                    for r in rows:
+                        art = OAArticle()
+                        art.url = r["url"]
+                        art.title = r["title"]
+                        art.digest = r["digest"]
+                        art.cover = r["cover_url"]
+                        art.source_name = r["source_name"]
+                        art.gh_id = r["gh_id"]
+                        art.pub_time = r["pub_time"]
+                        art.timestamp = r["pub_time"]
+                        all_articles.append(art)
+                    logger.debug(
+                        "[OA-DIGEST] Cache read %d articles from %s for group '%s'",
+                        len(rows), gh_id, group.name,
+                    )
             except Exception as e:
-                logger.error("[OA-DIGEST] Failed to fetch articles from %s: %s", gh_id, e)
+                logger.warning("[OA-DIGEST] Cache read failed, fallback to WCDB: %s", e)
+                all_articles = []
+
+        if not all_articles and self._client:
+            # Fallback: direct WCDB read
+            for gh_id in group.accounts:
+                try:
+                    articles = fetch_oa_articles(self._client, gh_id, limit=50)
+                    all_articles.extend(articles)
+                    logger.debug(
+                        "[OA-DIGEST] WCDB fetched %d articles from %s for group '%s'",
+                        len(articles), gh_id, group.name,
+                    )
+                except Exception as e:
+                    logger.error("[OA-DIGEST] Failed to fetch articles from %s: %s", gh_id, e)
 
         logger.debug(
             "[OA-DIGEST] Generating digest for group '%s' (%d accounts, %d articles fetched)",
@@ -580,21 +619,42 @@ class OADigestService:
             return 24
 
     def search_articles(self, keyword: str, limit: int = 50) -> list[OAArticle]:
-        """Search OA articles by keyword across all groups.
+        """Search OA articles by keyword across all groups (cache-first)."""
+        from src.assistant.oa_parser import OAArticle
+        results = []
 
-        Args:
-            keyword: Search keyword
-            limit: Max results
+        # ── Cache-first: LIKE 搜索 oa_cache ──
+        if self._cache:
+            try:
+                rows = self._cache.query(
+                    "SELECT * FROM oa_cache WHERE title LIKE ? OR digest LIKE ? "
+                    "ORDER BY pub_time DESC LIMIT ?",
+                    [f"%{keyword}%", f"%{keyword}%", limit],
+                )
+                for r in rows:
+                    art = OAArticle()
+                    art.url = r["url"]
+                    art.title = r["title"]
+                    art.digest = r["digest"]
+                    art.cover = r["cover_url"]
+                    art.source_name = r["source_name"]
+                    art.gh_id = r["gh_id"]
+                    art.pub_time = r["pub_time"]
+                    art.timestamp = r["pub_time"]
+                    results.append(art)
+                if results:
+                    return results
+            except Exception as e:
+                logger.warning("[OA-DIGEST] Cache search failed, fallback to WCDB: %s", e)
 
-        Returns:
-            List of matching OAArticle objects
-        """
+        # ── Fallback: iterate OA sessions via WCDB ──
         if not self._client:
             return []
-
-        # Get all OA sessions
-        oa_sessions = get_oa_sessions(self._client)
-        results = []
+        try:
+            oa_sessions = get_oa_sessions(self._client)
+        except Exception as e:
+            logger.debug(f"OA session query failed: {e}")
+            return []
 
         for session in oa_sessions:
             gh_id = session.get("username", "")

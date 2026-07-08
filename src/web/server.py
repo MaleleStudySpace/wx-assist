@@ -760,11 +760,30 @@ def register_oa_monitor(monitor):
     _oa_monitor = monitor
 
 _task_center = None
+_content_cache = None  # ContentCache — registered by bot.py for cache-first reads
 
 def register_task_center(tc):
     """Register the TaskCenter so the API can query task status."""
     global _task_center
     _task_center = tc
+
+
+def register_content_cache(cc):
+    """Register the ContentCache so API handlers can do cache-first reads."""
+    global _content_cache
+    _content_cache = cc
+
+
+_rag_engine = None
+
+def register_rag_engine(re):
+    """Register the RAGEngine so components can trigger re-indexing."""
+    global _rag_engine
+    _rag_engine = re
+
+def get_rag_engine():
+    """Get the registered RAGEngine instance, or None if not available."""
+    return _rag_engine
 
 
 def is_shutting_down():
@@ -1716,7 +1735,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     context_messages=context_messages,
                     requester_name=sender_name,
                     group_name=group_name,
-                    group_memory=group_memory,
                 )
 
                 self.send_json({
