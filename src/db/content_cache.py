@@ -44,9 +44,41 @@ class ContentCache:
         self._pending: dict[str, bool] = {"oa": False, "sns": False, "fav": False}
         self._reindex_lock = threading.Lock()
         # 增量重索引：只索引进 cached_at > last_indexed_at[source] 的数据
-        # 默认 0 表示全量索引（首次启动）
-        self._last_indexed_at: dict[str, float] = {"oa": 0.0, "sns": 0.0, "fav": 0.0}
+        # 默认 0 表示全量索引（首次启动），缓存到 data/last_indexed.json 跨重启持久化
+        self._last_indexed_at: dict[str, float] = self._load_index_cursor()
         self._init_tables()
+
+    def _index_cursor_path(self) -> str:
+        return "data/last_indexed.json"
+
+    def _load_index_cursor(self) -> dict[str, float]:
+        """从磁盘加载增量游标，避免每次重启全量索引。"""
+        import os, json
+        path = self._index_cursor_path()
+        try:
+            if os.path.exists(path):
+                data = json.loads(open(path, encoding="utf-8").read())
+                return {
+                    "oa": float(data.get("oa") or 0),
+                    "sns": float(data.get("sns") or 0),
+                    "fav": float(data.get("fav") or 0),
+                }
+        except Exception:
+            pass
+        return {"oa": 0.0, "sns": 0.0, "fav": 0.0}
+
+    def _save_index_cursor(self):
+        """持久化增量游标到磁盘（原子写入）。"""
+        import json, os, tempfile
+        try:
+            path = self._index_cursor_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self._last_indexed_at, f, ensure_ascii=False)
+            os.replace(tmp, path)  # 原子替换，避免写一半崩溃
+        except Exception:
+            pass
 
     # ══════════════════════════════════════════════════════════════
     # 连接管理
@@ -756,7 +788,11 @@ class ContentCache:
             new = []
             for item in items:
                 fid = item.get("local_id")
-                if fid and fid > max_cached:
+                try:
+                    fid = int(fid)
+                except (ValueError, TypeError):
+                    continue
+                if fid > max_cached:
                     cleaned = self._clean_fav(item)
                     if cleaned:
                         new.append(cleaned)
@@ -965,6 +1001,7 @@ class ContentCache:
         # 更新游标
         if chunks and max_cached_at > self._last_indexed_at["oa"]:
             self._last_indexed_at["oa"] = max_cached_at
+            self._save_index_cursor()
 
     def _index_sns(self, rag):
         """索引朋友圈到 ChromaDB（增量）。"""
@@ -1000,6 +1037,7 @@ class ContentCache:
         self._index_chunks(rag, chunks, "朋友圈")
         if chunks and max_cached_at > self._last_indexed_at["sns"]:
             self._last_indexed_at["sns"] = max_cached_at
+            self._save_index_cursor()
 
     def _index_fav(self, rag):
         """索引收藏到 ChromaDB（增量）。"""
@@ -1034,6 +1072,7 @@ class ContentCache:
         self._index_chunks(rag, chunks, "收藏")
         if chunks and max_cached_at > self._last_indexed_at["fav"]:
             self._last_indexed_at["fav"] = max_cached_at
+            self._save_index_cursor()
 
     def _index_chunks(self, rag, chunks, label: str):
         """批量索引 chunks 到 ChromaDB。"""

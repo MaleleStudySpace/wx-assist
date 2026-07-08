@@ -498,10 +498,25 @@ class Bot:
                             logger.warning("[CACHE] WCDB 不可用，全量同步跳过")
                             return
 
-                        # 全量同步（三源）
-                        content_cache.sync_oa_all(_client, task_center)
-                        content_cache.sync_sns_all(_client, task_center)
-                        content_cache.sync_fav_all(_client, task_center)
+                        # 全量同步（三源）— 已有缓存则跳过，避免重启重复拉取
+                        try:
+                            _cnt = content_cache.query("SELECT COUNT(*) as c FROM oa_cache")[0]["c"]
+                            if _cnt == 0:
+                                content_cache.sync_oa_all(_client, task_center)
+                        except Exception:
+                            content_cache.sync_oa_all(_client, task_center)
+                        try:
+                            _cnt = content_cache.query("SELECT COUNT(*) as c FROM sns_cache")[0]["c"]
+                            if _cnt == 0:
+                                content_cache.sync_sns_all(_client, task_center)
+                        except Exception:
+                            content_cache.sync_sns_all(_client, task_center)
+                        try:
+                            _cnt = content_cache.query("SELECT COUNT(*) as c FROM fav_cache")[0]["c"]
+                            if _cnt == 0:
+                                content_cache.sync_fav_all(_client, task_center)
+                        except Exception:
+                            content_cache.sync_fav_all(_client, task_center)
 
                         # RAG 索引缓存数据
                         try:
