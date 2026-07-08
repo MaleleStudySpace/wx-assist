@@ -176,7 +176,7 @@ class MessageStore:
         row = self.conn.execute(
             """SELECT sender_name FROM messages
                WHERE sender_id = ? AND sender_name != sender_id
-               ORDER BY id DESC LIMIT 1""",
+               ORDER BY rowid DESC LIMIT 1""",
             (sender_id,),
         ).fetchone()
         return row["sender_name"] if row else None
@@ -382,12 +382,12 @@ class MessageStore:
                 (chat_id,),
             ).fetchone()
         else:
-            # Get the id of the last incorporated message, then count newer ones
+            # Get the rowid of the last incorporated message, then count newer ones
             row = self.conn.execute(
                 """SELECT COUNT(*) as cnt FROM messages
-                   WHERE chat_id = ? AND id > (
+                   WHERE chat_id = ? AND rowid > (
                        SELECT COALESCE(
-                           (SELECT id FROM messages WHERE message_id = ?), 0
+                           (SELECT rowid FROM messages WHERE message_id = ?), 0
                        )
                    )""",
                 (chat_id, since_message_id),
@@ -422,9 +422,9 @@ class MessageStore:
                 """SELECT message_id, chat_id, sender_id, sender_name,
                           content, msg_type, timestamp
                    FROM messages
-                   WHERE chat_id = ? AND id > (
+                   WHERE chat_id = ? AND rowid > (
                        SELECT COALESCE(
-                           (SELECT id FROM messages WHERE message_id = ?), 0
+                           (SELECT rowid FROM messages WHERE message_id = ?), 0
                        )
                    )
                    ORDER BY timestamp ASC

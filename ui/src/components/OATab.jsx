@@ -39,6 +39,38 @@ function validateCronExpr(cronExpr) {
   return ''
 }
 
+/** 从 cron_expr 估算智能回溯小时数 */
+function estimateAutoLookback(cronExpr) {
+  if (!cronExpr) return 24
+  const parts = cronExpr.trim().split(/\s+/)
+  if (parts.length < 2) return 24
+  const hourPart = parts[1]
+  const hours = new Set()
+  for (const segment of hourPart.split(',')) {
+    const h = segment.trim()
+    if (h.startsWith('*/')) {
+      const step = parseInt(h.slice(2), 10)
+      if (step > 0) { for (let hh = 0; hh < 24; hh += step) hours.add(hh) }
+    } else if (h.includes('-') && !h.startsWith('-')) {
+      const [lo, hi] = h.split('-', 2).map(Number)
+      if (!isNaN(lo) && !isNaN(hi)) { for (let hh = lo; hh <= hi; hh++) hours.add(hh) }
+    } else {
+      const n = parseInt(h, 10)
+      if (!isNaN(n)) hours.add(n)
+    }
+  }
+  if (hours.size >= 2) {
+    const sorted = [...hours].sort((a, b) => a - b)
+    const gaps = []
+    for (let i = 1; i < sorted.length; i++) gaps.push(sorted[i] - sorted[i - 1])
+    gaps.push(24 - sorted[sorted.length - 1] + sorted[0])
+    return Math.min(...gaps) + 1
+  } else if (hours.size === 1) {
+    return 25
+  }
+  return 24
+}
+
 // ── Digest templates with clear descriptions ──
 const TEMPLATES = [
   { value: 'default', label: '默认摘要', PhosphorIcon: FileText,
@@ -70,18 +102,28 @@ const DEFAULT_CUSTOM_PROMPT = `你是一个专业的公众号信息摘要助手�
 2. 摘要提炼核心要点，不重复标题
 3. 总结要有洞察，不要简单罗列`
 
-function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accounts, lastDigest }) {
+function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accounts, lastDigest, onViewAccount }) {
   const [expanded, setExpanded] = useState(false)
   const [showDigest, setShowDigest] = useState(false)
   const isRunning = digestRunning === group.id
   const digest = lastDigest?.groupId === group.id ? lastDigest : null
+  const cardRef = useRef(null)
 
-  // Resolve account nicknames, filter out accounts not in current list (e.g. removed service accounts)
-  const accountNames = (group.accounts || [])
+  // Auto-scroll when expanded so the card body is fully visible
+  useEffect(() => {
+    if (expanded && cardRef.current) {
+      setTimeout(() => {
+        cardRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 150)
+    }
+  }, [expanded])
+
+  // Resolve account info, filter out accounts not in current list
+  const accountEntries = (group.accounts || [])
     .filter(gh => accounts?.some(a => a.username === gh))
     .map(gh => {
       const acc = accounts?.find(a => a.username === gh)
-      return acc ? acc.nickname : gh
+      return { username: gh, nickname: acc ? acc.nickname : gh }
     })
 
   const scheduleLabel = (() => {
@@ -94,7 +136,7 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
   const templateInfo = TEMPLATES.find(t => t.value === (group.digest_template || 'default'))
 
   return (
-    <div className={`border rounded-xl overflow-hidden bg-bg-card transition-colors
+    <div ref={cardRef} className={`border rounded-xl overflow-hidden bg-bg-card transition-colors
       ${isRunning ? 'border-brand-green/40 shadow-[0_0_12px_rgba(24,226,153,0.08)]' : 'border-border-main hover:border-text-muted/20'}`}>
       <div
         className="flex items-center gap-3 p-4 cursor-pointer hover:bg-bg-raised/50 transition-colors"
@@ -106,13 +148,21 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-text-main">{group.name}</p>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-xs text-text-muted">{accountNames.length} 个公众号</span>
+            <span className="text-xs text-text-muted">{accountEntries.length} 个公众号</span>
             <span className="text-xs text-text-muted">·</span>
             <span className="text-xs text-text-muted">{scheduleLabel}</span>
             {templateInfo && (
               <>
                 <span className="text-xs text-text-muted">·</span>
                 <span className="text-xs text-brand-green/70">{templateInfo.label}</span>
+              </>
+            )}
+            {group.push_target === 'ilink' && (
+              <>
+                <span className="text-xs text-text-muted">·</span>
+                <span className="text-xs text-status-success flex items-center gap-0.5">
+                  <Bell size={10} weight="fill" />推送
+                </span>
               </>
             )}
           </div>
@@ -154,7 +204,9 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
               <div className="flex items-center justify-between text-xs">
                 <span className="text-text-muted">时间范围</span>
                 <span className="text-text-main">
-                  {group.lookback_mode === 'auto' ? '智能回溯' : `${group.lookback_hours || 24} 小时`}
+                  {group.lookback_mode === 'auto'
+                    ? `智能 · ~${estimateAutoLookback(group.cron_expr)}h`
+                    : `${group.lookback_hours || 24} 小时`}
                 </span>
               </div>
               {group.push_target && (
@@ -190,17 +242,19 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
               </div>
             )}
 
-            {accountNames.length > 0 && (
+            {accountEntries.length > 0 && (
               <div className="mt-3 pt-3 border-t border-border-main">
                 <p className="text-xs text-text-muted mb-2">包含公众号</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {accountNames.map((name, i) => (
-                    <span
+                  {accountEntries.map((entry, i) => (
+                    <button
                       key={i}
-                      className="text-xs px-2.5 py-1 rounded-full bg-brand-green-light/20 text-brand-green/80 border border-brand-green/10"
+                      onClick={() => onViewAccount?.(entry.username, entry.nickname)}
+                      className="text-xs px-2.5 py-1 rounded-full bg-brand-green-light/20 text-brand-green/80 border border-brand-green/10 hover:bg-brand-green-light/40 hover:text-brand-green transition-colors cursor-pointer"
+                      title="点击查看历史文章"
                     >
-                      {name}
-                    </span>
+                      {entry.nickname}
+                    </button>
                   ))}
                 </div>
               </div>
@@ -242,7 +296,7 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
   )
 }
 
-function GroupEditor({ group, accounts, onSave, onCancel }) {
+function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
   const [name, setName] = useState(group?.name || '')
   const [cronExpr, setCronExpr] = useState(group?.cron_expr || '')
   const [template, setTemplate] = useState(group?.digest_template || 'default')
@@ -267,13 +321,12 @@ function GroupEditor({ group, accounts, onSave, onCancel }) {
     return (acc.nickname || '').toLowerCase().includes(q) || (acc.username || '').toLowerCase().includes(q)
   })
 
-  // Sort: selected first, then alphabetically
-  const sortedAccounts = [...filteredAccounts].sort((a, b) => {
-    const aSel = selectedAccounts.includes(a.username) ? 0 : 1
-    const bSel = selectedAccounts.includes(b.username) ? 0 : 1
-    if (aSel !== bSel) return aSel - bSel
-    return (a.nickname || a.username).localeCompare(b.nickname || b.username)
-  })
+  // Sort: alphabetically by nickname — no "selected first" sort, which causes
+  // the list to reflow when selecting multiple accounts, making it hard to
+  // pick more than one in a session.
+  const sortedAccounts = [...filteredAccounts].sort((a, b) =>
+    (a.nickname || a.username).localeCompare(b.nickname || b.username),
+  )
 
   function toggleAccount(username) {
     setSelectedAccounts(prev =>
@@ -286,40 +339,7 @@ function GroupEditor({ group, accounts, onSave, onCancel }) {
   }
 
   // ── Cron / lookback logic ─────────────────────────────────────────────
-  function estimateAutoLookback() {
-    if (!cronExpr) return 24
-    const parts = cronExpr.trim().split(/\s+/)
-    if (parts.length < 2) return 24
-    const hourPart = parts[1]
-    const hours = new Set()
-    for (const segment of hourPart.split(',')) {
-      const h = segment.trim()
-      if (h.startsWith('*/')) {
-        // Step expression: */6 → 0, 6, 12, 18
-        const step = parseInt(h.slice(2), 10)
-        if (step > 0) { for (let hh = 0; hh < 24; hh += step) hours.add(hh) }
-      } else if (h.includes('-') && !h.startsWith('-')) {
-        // Range expression: 9-17 → 9, 10, ..., 17
-        const [lo, hi] = h.split('-', 2).map(Number)
-        if (!isNaN(lo) && !isNaN(hi)) { for (let hh = lo; hh <= hi; hh++) hours.add(hh) }
-      } else {
-        const n = parseInt(h, 10)
-        if (!isNaN(n)) hours.add(n)
-      }
-    }
-    if (hours.size >= 2) {
-      const sorted = [...hours].sort((a, b) => a - b)
-      const gaps = []
-      for (let i = 1; i < sorted.length; i++) gaps.push(sorted[i] - sorted[i - 1])
-      gaps.push(24 - sorted[sorted.length - 1] + sorted[0])
-      return Math.min(...gaps) + 1
-    } else if (hours.size === 1) {
-      return 25
-    }
-    return 24
-  }
-
-  const autoLookbackEstimate = estimateAutoLookback()
+  const autoLookbackEstimate = estimateAutoLookback(cronExpr)
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (
@@ -360,7 +380,13 @@ function GroupEditor({ group, accounts, onSave, onCancel }) {
                   key={gh}
                   className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-brand-green-light/30 border border-brand-green/20 text-brand-green"
                 >
-                  {acc?.nickname || gh}
+                  <button
+                    onClick={() => onViewAccount?.(gh, acc?.nickname)}
+                    className="hover:text-brand-green-hover transition-colors cursor-pointer"
+                    title="点击查看该公众号的历史文章"
+                  >
+                    {acc?.nickname || gh}
+                  </button>
                   <button
                     onClick={() => removeAccount(gh)}
                     className="hover:text-brand-green-hover cursor-pointer"
@@ -972,7 +998,12 @@ export default function OATab() {
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const [editingMonitor, setEditingMonitor] = useState(null)
 
+  // "已关注公众号" collapse
+  const [showAllAccounts, setShowAllAccounts] = useState(false)
+  const ACCOUNTS_COLLAPSE_LIMIT = 5
+
   const editorRef = useRef(null)
+  const articlesRef = useRef(null)
 
   useEffect(() => {
     loadData()
@@ -986,6 +1017,16 @@ export default function OATab() {
       }, 350)
     }
   }, [showEditor])
+
+  // Auto-scroll to monitor editor when it opens
+  const monitorEditorRef = useRef(null)
+  useEffect(() => {
+    if (showMonitorEditor && monitorEditorRef.current) {
+      setTimeout(() => {
+        monitorEditorRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 350)
+    }
+  }, [showMonitorEditor])
 
   // WebSocket for digest + monitor push results
   const [monitorToast, setMonitorToast] = useState(null)
@@ -1129,6 +1170,10 @@ export default function OATab() {
     setSelectedAccount({ username: ghId, nickname })
     setLoadingArticles(true)
     setAccountArticles([])
+    // Scroll to the articles panel so the user sees results directly
+    setTimeout(() => {
+      articlesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 100)
     try {
       const res = await fetch(`${API_BASE}/api/oa/articles?gh_id=${encodeURIComponent(ghId)}&limit=50`)
       const data = await res.json()
@@ -1255,6 +1300,7 @@ export default function OATab() {
           <div className="flex flex-wrap gap-1.5">
             {accounts
               .filter(acc => !accountFilter || (acc.nickname || acc.username).toLowerCase().includes(accountFilter.toLowerCase()))
+              .slice(0, showAllAccounts || accountFilter ? undefined : ACCOUNTS_COLLAPSE_LIMIT)
               .map(acc => (
                 <button
                   key={acc.username}
@@ -1268,6 +1314,14 @@ export default function OATab() {
                   {acc.nickname || acc.username}
                 </button>
               ))}
+            {!accountFilter && accounts.length > ACCOUNTS_COLLAPSE_LIMIT && (
+              <button
+                onClick={() => setShowAllAccounts(!showAllAccounts)}
+                className="text-xs px-2.5 py-1 rounded-full border border-border-main text-text-muted hover:text-text-main hover:border-text-muted/30 transition-colors cursor-pointer"
+              >
+                {showAllAccounts ? `收起` : `+ ${accounts.length - ACCOUNTS_COLLAPSE_LIMIT} 个`}
+              </button>
+            )}
             {accountFilter && accounts.filter(acc => (acc.nickname || acc.username).toLowerCase().includes(accountFilter.toLowerCase())).length === 0 && (
               <p className="text-xs text-text-muted py-1">没有匹配的公众号</p>
             )}
@@ -1284,7 +1338,7 @@ export default function OATab() {
             exit={{ opacity: 0, height: 0 }}
             className="mb-5 overflow-hidden"
           >
-            <div className="p-4 rounded-xl border border-brand-green/20 bg-bg-card">
+            <div ref={articlesRef} className="p-4 rounded-xl border border-brand-green/20 bg-bg-card">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Globe size={14} className="text-brand-green" />
@@ -1404,6 +1458,8 @@ export default function OATab() {
         <AnimatePresence>
           {showMonitorEditor && (
             <motion.div
+              key={editingMonitor?.id || 'new'}
+              ref={monitorEditorRef}
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
@@ -1454,6 +1510,7 @@ export default function OATab() {
       <AnimatePresence>
         {showEditor && (
           <motion.div
+            key={editingGroup?.id || 'new'}
             ref={editorRef}
             initial={{ opacity: 0, y: -12 }}
             animate={{ opacity: 1, y: 0 }}
@@ -1465,6 +1522,7 @@ export default function OATab() {
               accounts={accounts}
               onSave={handleSaveGroup}
               onCancel={() => { setShowEditor(false); setEditingGroup(null) }}
+              onViewAccount={handleViewAccount}
             />
           </motion.div>
         )}
@@ -1521,6 +1579,7 @@ export default function OATab() {
               onRunDigest={handleRunDigest}
               digestRunning={digestRunning}
               lastDigest={lastDigest}
+              onViewAccount={handleViewAccount}
             />
           ))}
         </div>

@@ -51,6 +51,9 @@ wxid2p/
 skill/**/*.bin
 skill/**/*.safetensors
 
+# ONNX embedding model (downloaded, ~182MB)
+models/
+
 # Runtime training artifacts
 TRAIN_DONE.flag
 

@@ -15,7 +15,7 @@ const STATUS_STYLES = {
   failed:   { label: '失败', color: 'text-[#d45656]', bg: 'bg-[#d45656]/[0.06]', dot: 'bg-[#d45656]' },
 }
 
-const SOURCE_LABELS = { scheduler: '调度', manual: '手动' }
+const SOURCE_LABELS = { scheduler: '调度', manual: '手动', agent: 'Agent' }
 
 function timeAgo(dateStr) {
   if (!dateStr) return ''

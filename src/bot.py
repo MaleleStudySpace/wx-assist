@@ -347,6 +347,7 @@ class Bot:
         assistant_alert = None
         assistant_scheduler = None
         oa_monitor = None
+        content_cache = None  # 由下面 try 块赋值，外层确保引用安全
         try:
             from src.assistant.config import load_assistant_config
             asst_cfg = load_assistant_config()
@@ -363,6 +364,17 @@ class Bot:
                 task_center.cleanup_expired()
             except Exception as e:
                 logger.warning("TaskCenter init failed (continuing without): %s", e)
+
+            # ── Content Cache (本地持久化缓存，OA/SNS/Fav 读取加速) ──
+            content_cache = None
+            try:
+                from src.db.content_cache import ContentCache
+                content_cache = ContentCache()
+                from src.web.server import register_content_cache
+                register_content_cache(content_cache)
+                logger.info("[CACHE] ContentCache 已创建并注册")
+            except Exception as e:
+                logger.warning("[CACHE] ContentCache init failed (continuing without): %s", e)
 
             # Always create all engines unconditionally so they can be hot-enabled
             # via the API even if assistant_enabled was false at boot.
@@ -401,7 +413,8 @@ class Bot:
 
             # ── OA Monitor (thread loop, no-ops when no groups) ──
             from src.assistant.oa_monitor import OAMonitorEngine
-            oa_monitor = OAMonitorEngine(asst_cfg, outbox)
+            oa_monitor = OAMonitorEngine(asst_cfg, outbox,
+                                         content_cache=content_cache)
             oa_monitor.start()
             try:
                 from src.web.server import register_oa_monitor
@@ -412,6 +425,218 @@ class Bot:
             logger.info("Assistant: alert engine + OA monitor + digest scheduler initialized")
         except Exception as e:
             logger.warning("Assistant init failed (continuing without): %s", e)
+
+        # ── 7b. AI Agent ─────────────────────────────────────────────
+        agent_engine = None
+        try:
+            from .agent import ToolExecutor, AgentEngine
+            from .web.server import register_agent_engine, get_status_snapshot
+
+            tool_executor = ToolExecutor(
+                store=store,
+                summarizer=summarizer,
+                status_fn=get_status_snapshot,
+                task_center=task_center,
+                scheduler=assistant_scheduler,
+            )
+            agent_engine = AgentEngine(
+                summarizer=summarizer,
+                tool_executor=tool_executor,
+            )
+            register_agent_engine(agent_engine)
+            logger.info("Agent engine created")
+
+            # ── RAG Engine (optional, zero impact on failure) ──
+            rag_engine = None
+            try:
+                from .assistant.rag import RAGEngine, FastEmbedder, ChromaStore, SlidingWindowChunker
+
+                embedder = FastEmbedder()
+                vec_store = ChromaStore(path="data/chroma")
+                chunker = SlidingWindowChunker()
+                rag_engine = RAGEngine(store=vec_store, embedder=embedder, chunker=chunker)
+                rag_engine.warmup()
+
+                # Inject into Router（用于实时索引）和 ToolExecutor（用于搜索工具）
+                router.set_rag(rag_engine)
+                tool_executor.set_rag(rag_engine)
+
+                # Register global (for OA Monitor to trigger re-index)
+                try:
+                    from src.web.server import register_rag_engine
+                    register_rag_engine(rag_engine)
+                except Exception:
+                    pass
+
+                logger.info("[RAG] RAGEngine initialized and injected")
+
+                # ── Cold start (background thread) ──
+                def _cold_start_task():
+                    try:
+                        db_conn = self._conn
+                        rag_engine.cold_start(db_conn, tracked_groups=None)
+                    except Exception:
+                        pass
+
+                threading.Thread(target=_cold_start_task, daemon=True,
+                                 name="rag-cold-start").start()
+
+                # ── Cache sync: 后台全量同步 + RAG 索引 ──
+                if content_cache:
+                    def _cache_init_task():
+                        """初始化缓存：全量同步 + RAG 索引 + 定时增量循环。"""
+                        import time as _t
+                        _t.sleep(5)  # 等 WCDB client 就绪
+                        # 获取 WCDB client
+                        _client = None
+                        try:
+                            from src.web.api_handlers import get_wcdb_client
+                            _client = get_wcdb_client()
+                        except Exception:
+                            pass
+                        if not _client:
+                            logger.warning("[CACHE] WCDB 不可用，全量同步跳过")
+                            return
+
+                        # 全量同步（三源）— 已有缓存则跳过，避免重启重复拉取
+                        try:
+                            _cnt = content_cache.query("SELECT COUNT(*) as c FROM oa_cache")[0]["c"]
+                            if _cnt == 0:
+                                content_cache.sync_oa_all(_client, task_center)
+                        except Exception:
+                            content_cache.sync_oa_all(_client, task_center)
+                        try:
+                            _cnt = content_cache.query("SELECT COUNT(*) as c FROM sns_cache")[0]["c"]
+                            if _cnt == 0:
+                                content_cache.sync_sns_all(_client, task_center)
+                        except Exception:
+                            content_cache.sync_sns_all(_client, task_center)
+                        try:
+                            _cnt = content_cache.query("SELECT COUNT(*) as c FROM fav_cache")[0]["c"]
+                            if _cnt == 0:
+                                content_cache.sync_fav_all(_client, task_center)
+                        except Exception:
+                            content_cache.sync_fav_all(_client, task_center)
+
+                        # RAG 索引缓存数据
+                        try:
+                            content_cache.index_to_rag(rag_engine, "oa")
+                        except Exception:
+                            pass
+                        try:
+                            content_cache.index_to_rag(rag_engine, "sns")
+                        except Exception:
+                            pass
+                        try:
+                            content_cache.index_to_rag(rag_engine, "fav")
+                        except Exception:
+                            pass
+                        logger.info("[CACHE] 全量同步 + RAG 索引完成")
+
+                    threading.Thread(target=_cache_init_task, daemon=True,
+                                     name="cache-init").start()
+
+                    # 启动 OA 全文抓取队列（每秒 1 篇），传入 task_center 追踪
+                    content_cache.start_oa_content_fetcher(task_center=task_center)
+
+                    # 定时增量同步（SNS 5min / Fav 10min）
+                    def _sns_timer():
+                        while True:
+                            _t.sleep(300)
+                            try:
+                                from src.web.api_handlers import get_wcdb_client
+                                _c = get_wcdb_client()
+                                if _c:
+                                    _n = content_cache.sync_sns_incremental(_c, task_center)
+                                    if _n > 0 and rag_engine:
+                                        content_cache.index_to_rag(rag_engine, "sns")
+                            except Exception:
+                                pass
+                    threading.Thread(target=_sns_timer, daemon=True,
+                                     name="sns-sync-timer").start()
+
+                    def _fav_timer():
+                        while True:
+                            _t.sleep(600)
+                            try:
+                                from src.web.api_handlers import get_wcdb_client
+                                _c = get_wcdb_client()
+                                if _c:
+                                    _n = content_cache.sync_fav_incremental(_c, task_center)
+                                    if _n > 0 and rag_engine:
+                                        content_cache.index_to_rag(rag_engine, "fav")
+                            except Exception:
+                                pass
+                    threading.Thread(target=_fav_timer, daemon=True,
+                                     name="fav-sync-timer").start()
+
+                    # ── OA 60s 增量定时器（TaskCenter 追踪） ──
+                    def _oa_timer():
+                        while True:
+                            _t.sleep(60)
+                            try:
+                                from src.web.api_handlers import get_wcdb_client
+                                _c = get_wcdb_client()
+                                if _c:
+                                    _n = content_cache.sync_oa_incremental(_c, task_center)
+                                    if _n > 0 and rag_engine:
+                                        content_cache.index_to_rag(rag_engine, "oa")
+                            except Exception:
+                                pass
+                    threading.Thread(target=_oa_timer, daemon=True,
+                                     name="oa-sync-timer").start()
+
+                    # ── OA 账号 30min 刷新定时器 ──
+                    def _oa_accounts_timer():
+                        while True:
+                            _t.sleep(1800)
+                            try:
+                                from src.web.api_handlers import get_wcdb_client
+                                _c = get_wcdb_client()
+                                if _c:
+                                    content_cache.sync_oa_accounts(_c, task_center)
+                            except Exception:
+                                pass
+                    threading.Thread(target=_oa_accounts_timer, daemon=True,
+                                     name="oa-accounts-timer").start()
+
+            except Exception as rag_e:
+                logger.warning("[RAG] RAGEngine init failed (continuing without): %s", rag_e)
+                rag_engine = None
+
+            # ── Start MCP Server (daemon thread) ───────────────────
+            try:
+                from .agent.mcp_server import start_mcp_server
+                start_mcp_server(tool_executor.registry)
+            except Exception as mcp_e:
+                logger.warning("MCP server not started: %s", mcp_e)
+        except Exception as e:
+            logger.warning("Failed to create agent engine: %s", e)
+
+        # ── 7c. Inject agent_engine into router ─────────────────────
+        try:
+            router.set_agent_engine(agent_engine)
+        except Exception:
+            pass
+
+        # ── 7d. Register router.handle as iLink callback ────────────
+        try:
+            from .web.server import register_ilink_callback
+            register_ilink_callback(router.handle)
+            logger.info("iLink callback registered (router.handle)")
+        except Exception as e:
+            logger.debug("iLink callback not registered: %s", e)
+
+        # ── 7e. Auto-start iLink receiver if account was bound ──────
+        try:
+            from src.wechat.ilink_push import get_ilink_push
+            ilink = get_ilink_push()
+            if ilink.is_available():
+                from .web.server import _start_ilink_receiver
+                _start_ilink_receiver()
+                logger.info("iLink receiver auto-started (bound account found)")
+        except Exception as e:
+            logger.debug("iLink auto-start skipped: %s", e)
 
         # Wrap callback to include assistant alert checking.
         # IMPORTANT: alert.check() must always run even if router.handle()
@@ -460,6 +685,11 @@ class Bot:
                     pass
             if self._health:
                 self._health.stop()
+            try:
+                from .web.server import _stop_ilink_receiver
+                _stop_ilink_receiver()
+            except Exception:
+                pass
             if self._conn is not None:
                 self._conn.close()
             try:

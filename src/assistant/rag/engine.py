@@ -1,0 +1,346 @@
+"""RAGEngine — 编排层。
+
+对外暴露两个核心方法：
+  - ingest() / ingest_one(): 消息 → 分块 → 编码 → 存储
+  - search(): 用户提问 → 编码 → 检索 → 重排序 → 拼上下文
+
+对现有系统零影响：所有方法 try/except 包裹，失败静默降级。
+"""
+
+import json
+import logging
+import os
+import threading
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+
+from . import chunking as chunking_mod
+from .embedder import Embedder
+from .models import Chunk, ChunkConfig, SearchResult
+from .reranker import NoopReranker, Reranker
+from .vector_store import VectorStore
+
+logger = logging.getLogger(__name__)
+
+# 默认值
+DEFAULT_TOP_K = 20       # 粗搜条数
+DEFAULT_FINAL_K = 5      # 最终返回条数
+DEFAULT_SCORE_THRESHOLD = 0.4  # 相似度阈值
+COLD_START_BATCH = 1000  # 冷启动每批处理条数
+COLD_START_DAYS = 30     # 冷启动回溯天数
+MAX_CHUNK_AGE_DAYS = 60  # chunk 最大存活天数，超过的被 compress 清理
+STATE_FILE = "data/rag_state.json"  # 索引进度持久化
+
+
+class RAGEngine:
+    """RAG 编排引擎。
+
+    用法：
+        rag = RAGEngine(store, embedder, chunker)
+        rag.warmup()
+        rag.ingest_one(msg)          # 增量索引
+        results = rag.search(query)  # 检索
+        context = rag.build_context(results)  # 拼上下文
+    """
+
+    def __init__(self, store: VectorStore, embedder: Embedder,
+                 chunker: Optional[chunking_mod.ChunkingStrategy] = None,
+                 reranker: Optional[Reranker] = None):
+        self._store = store
+        self._embedder = embedder
+        self._chunker = chunker or chunking_mod.SlidingWindowChunker()
+        self._reranker = reranker or NoopReranker()
+
+        # 增量 buffer：按 chat_id 维护，凑够 window 条才索引
+        self._msg_buffer: dict[str, list[dict]] = {}
+        self._buffer_lock = threading.Lock()
+
+        # 索引进度（按群追踪）
+        self._last_indexed_ids: dict[str, int] = {}
+        self._state_path = Path(STATE_FILE)
+
+    # ── 生命周期 ──────────────────────────────────────────────────
+
+    def warmup(self):
+        """启动时调用。加载模型 + 初始化 ChromaDB。"""
+        self._embedder.warmup()
+        self._store.warmup()  # ChromaStore 的 warmup
+        self._reranker.warmup()
+        self._load_state()
+        # 启动时清理过期 chunk，控制 ChromaDB 大小
+        self.compress()
+        # 后台线程：每小时清理一次过期 chunk
+        self._start_compress_loop()
+        logger.info("[RAG] RAGEngine 就绪: dim=%d", self._embedder.dim)
+
+    def _start_compress_loop(self):
+        """启动后台清理线程，每小时压缩一次 ChromaDB。"""
+        def _loop():
+            while True:
+                time.sleep(3600)  # 每小时
+                self.compress()
+        t = threading.Thread(target=_loop, daemon=True, name="rag-compress")
+        t.start()
+
+    def close(self):
+        """关闭时调用。释放资源。"""
+        self._store.close()
+        logger.info("[RAG] RAGEngine 已关闭")
+
+    def compress(self, max_age_days: int = MAX_CHUNK_AGE_DAYS):
+        """删除超过 max_age_days 的旧 chunk，控制 ChromaDB 大小。
+
+        由 DigestScheduler 定期调用，或启动时调一次。
+        ChromaDB 只存最近 N 天的向量，防止无限膨胀到 GB 级。
+        """
+        try:
+            cutoff = int((datetime.now() - timedelta(days=max_age_days)).timestamp())
+            deleted = self._store.delete_older_than(cutoff)
+            if deleted:
+                logger.info("[RAG] compress: 清理了 %d 个超过 %d 天的过期 chunk",
+                            deleted, max_age_days)
+        except Exception as e:
+            logger.warning("[RAG] compress 失败: %s", e)
+
+    # ── 索引 ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_readable_content(content: str) -> bool:
+        """判断消息内容是否可读（非加密 blob）。
+
+        微信 4.x 非文本消息在 WCDB 中 content 字段存的是加密数据，
+        特征：以 '28b52ffd' 开头且长度 > 100 的 hex 字符串。
+        此类内容索引后搜索能命中但不可读，应跳过。
+
+        Returns:
+            True 表示可读，应索引；False 表示加密数据，跳过。
+        """
+        if not content or len(content) < 2:
+            return False
+        if content.startswith("28b52ffd") and len(content) > 100:
+            return False
+        return True
+
+    def ingest(self, messages: list[dict], source: str = "msg"):
+        """批量索引。用于冷启动。
+
+        Args:
+            messages: 原始消息列表
+            source: 数据源标识
+        """
+        if not messages:
+            return
+
+        try:
+            # 过滤加密 blob 消息，只索引可读文本
+            valid = [m for m in messages
+                     if self._is_readable_content(m.get("content", ""))]
+            if not valid:
+                return
+
+            chunks = self._chunker.chunk(valid, source=source)
+            if not chunks:
+                return
+
+            texts = [c.content for c in chunks]
+            embeddings = self._embedder.encode(texts)
+            self._store.add(chunks, embeddings)
+        except Exception as e:
+            logger.warning("[RAG] ingest 批量索引失败: %s", e)
+
+    def ingest_one(self, msg: dict, source: str = "msg"):
+        """增量索引单条消息。
+
+        消息先进入 buffer（按 chat_id 隔离），凑够 window 条才索引。
+
+        Args:
+            msg: 单条消息
+            source: 数据源标识
+        """
+        content = msg.get("content", "").strip()
+        if not self._is_readable_content(content):
+            return
+
+        chat_id = str(msg.get("chat_id", "__unknown__"))
+
+        # buffer 操作需要线程安全
+        with self._buffer_lock:
+            buf = self._msg_buffer.setdefault(chat_id, [])
+            buf.append(msg)
+            window = (self._chunker.config.window
+                     if hasattr(self._chunker, 'config')
+                     else 3)
+            stride = (self._chunker.config.stride
+                     if hasattr(self._chunker, 'config')
+                     else 2)
+            if len(buf) >= window:
+                group = buf[-window:]
+                buf[:] = buf[-(stride):]  # 保留重叠
+            else:
+                return  # 缓冲未满，等待下一条
+
+        # 拼成 chunk 并索引
+        try:
+            chunk = self._chunker.chunk_one(msg, source, group[:-1])
+            if chunk is None:
+                return
+            emb = self._embedder.encode([chunk.content])
+            self._store.add([chunk], emb)
+        except Exception as e:
+            logger.warning("[RAG] ingest_one 失败: %s", e)
+
+    # ── 检索 ──────────────────────────────────────────────────────
+
+    def search(self, query: str, top_k: int = DEFAULT_TOP_K,
+               final_k: int = DEFAULT_FINAL_K,
+               where: Optional[dict] = None) -> list[SearchResult]:
+        """检索。query 文本 → 编码 → 向量搜索 → 重排序。
+
+        Args:
+            query: 用户提问
+            top_k: 粗搜条数（不含 reranker 时此值即最终条数的搜索范围）
+            final_k: 最终返回条数
+            where: 过滤条件
+        Returns:
+            SearchResult 列表，已按相似度降序排序
+        """
+        try:
+            q_emb = self._embedder.encode([query])
+            # 多召一些用于过滤和重排序
+            results = self._store.search(q_emb[0], top_k=top_k * 2, where=where)
+            if not results:
+                logger.info("[RAG] search 无结果: query='%s'", query[:60])
+                return []
+
+            # 相似度阈值过滤
+            before = len(results)
+            results = [r for r in results
+                      if r.score >= DEFAULT_SCORE_THRESHOLD]
+            after = len(results)
+            if before != after:
+                logger.info("[RAG] search 阈值过滤: %d→%d (threshold=%.2f, query='%s')",
+                           before, after, DEFAULT_SCORE_THRESHOLD, query[:40])
+            if not results:
+                logger.info("[RAG] search 过滤后无结果: threshold=%.2f, query='%s'",
+                           DEFAULT_SCORE_THRESHOLD, query[:60])
+                return []
+
+            # 重排序
+            results = self._reranker.rerank(query, results, top_n=final_k)
+            logger.info("[RAG] search 返回 %d 条结果: query='%s'", len(results), query[:60])
+            return results
+
+        except Exception as e:
+            logger.warning("[RAG] search 失败: %s", e)
+            return []
+
+    def build_context(self, results: list[SearchResult]) -> str:
+        """检索结果 → 可读文本。
+
+        格式：
+            [1] [07-01 张三] 明天下午3点开评审会
+            [2] [07-01 李四] 会议室订了A301
+        """
+        lines = []
+        for i, r in enumerate(results, 1):
+            ts = r.chunk.created_at
+            if len(ts) > 10:
+                ts = ts[5:16]  # 取 "MM-DD HH:MM"
+            sender = r.chunk.sender_name or "未知"
+            lines.append(f"[{i}] [{ts} {sender}] {r.chunk.content}")
+
+        if not lines:
+            return ""
+
+        return "\n".join(lines)
+
+    # ── 冷启动 ────────────────────────────────────────────────────
+
+    def cold_start(self, db_conn, tracked_groups: Optional[list[str]] = None):
+        """后台线程：批量索引已有历史消息。
+
+        直接使用 SQLite 连接查询，不依赖 MessageStore 的 API。
+        tracked_groups 为 None 时索引所有群。
+
+        Args:
+            db_conn: SQLite 连接对象（MessageStore 的 conn 属性）
+            tracked_groups: 关注的群 ID 列表
+        """
+        logger.info("[RAG] 冷启动开始")
+        try:
+            groups = tracked_groups
+            if not groups:
+                # 查询所有群
+                try:
+                    rows = db_conn.execute(
+                        "SELECT DISTINCT chat_id FROM messages WHERE chat_id NOT LIKE 'ilink_%'"
+                    ).fetchall()
+                    groups = [r["chat_id"] for r in rows] if rows else []
+                except Exception:
+                    groups = []
+
+            if not groups:
+                logger.info("[RAG] 冷启动跳过：没有需要索引的群")
+                return
+
+            # created_at 是 UNIX 时间戳（秒）
+            cutoff_ts = int((datetime.now() - timedelta(days=COLD_START_DAYS)).timestamp())
+            batch_size = COLD_START_BATCH
+            total = 0
+            cursor = db_conn.cursor()
+
+            for chat_id in groups:
+                last_id = self._last_indexed_ids.get(chat_id, 0)
+                while True:
+                    rows = cursor.execute(
+                        """SELECT rowid AS id, chat_id, sender_name, content, created_at
+                           FROM messages
+                           WHERE chat_id = ? AND rowid > ? AND created_at >= ?
+                           ORDER BY rowid ASC LIMIT ?""",
+                        (chat_id, last_id, cutoff_ts, batch_size),
+                    ).fetchall()
+
+                    if not rows:
+                        break
+
+                    messages = [dict(r) for r in rows]
+                    self.ingest(messages, source="msg")
+                    total += len(messages)
+                    last_id = messages[-1]["id"]
+                    self._last_indexed_ids[chat_id] = last_id
+                    self._save_state()
+
+            logger.info("[RAG] 冷启动完成: 共索引 %d 条消息", total)
+
+        except Exception as e:
+            logger.warning("[RAG] 冷启动失败: %s", e)
+
+    # 状态持久化 — 前面已有
+
+    def _load_state(self):
+        try:
+            if self._state_path.exists():
+                data = json.loads(self._state_path.read_text(encoding="utf-8"))
+                self._last_indexed_ids = data.get("last_indexed_ids", {})
+                logger.info("[RAG] 恢复索引进度: %d 个群",
+                           len(self._last_indexed_ids))
+        except Exception as e:
+            logger.warning("[RAG] 状态文件读取失败: %s", e)
+            self._last_indexed_ids = {}
+
+    def _save_state(self):
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._state_path.write_text(
+                json.dumps({
+                    "last_indexed_ids": self._last_indexed_ids,
+                    "updated_at": datetime.now().isoformat(),
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning("[RAG] 状态文件写入失败: %s", e)

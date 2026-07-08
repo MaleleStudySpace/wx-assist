@@ -108,6 +108,50 @@ class ClaudeSummarizer(AbstractSummarizer):
             for text in stream.text_stream:
                 yield text
 
+    # ── Agent chat (tool calling) ──────────────────────────────────
+
+    def agent_chat(self, system_prompt: str,
+                   messages: list[dict],
+                   tools: list[dict]) -> tuple[str, list[dict] | None]:
+        """Agent chat with tool calling via Anthropic API."""
+        def _to_anthropic_tool(t: dict) -> dict:
+            fn = t["function"]
+            return {
+                "name": fn["name"],
+                "description": fn.get("description", ""),
+                "input_schema": fn["parameters"],
+            }
+
+        request_kwargs = dict(
+            model=self.model,
+            max_tokens=2000,
+            system=system_prompt,
+            messages=messages,
+        )
+        if tools:
+            request_kwargs["tools"] = [_to_anthropic_tool(t) for t in tools]
+
+        response = self.client.messages.create(**request_kwargs)
+
+        content_parts: list[str] = []
+        tool_calls: list[dict] = []
+
+        for block in response.content:
+            if block.type == "text":
+                content_parts.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls.append({
+                    "id": block.id,
+                    "type": "function",
+                    "function": {
+                        "name": block.name,
+                        "arguments": json.dumps(block.input),
+                    },
+                })
+
+        content = "".join(content_parts) if content_parts else None
+        return content or "", tool_calls or None
+
     # ── Direct summarization ──────────────────────────────────────
 
     def _summarize_direct(self, messages: list[dict],
