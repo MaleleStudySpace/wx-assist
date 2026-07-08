@@ -143,54 +143,47 @@ function cronToLabel(cronExpr) {
   return cronExpr
 }
 
-const LOOKBACK_DETENTS = [0, 6, 12, 24, 48, 72]
-
-function formatLookback(h) {
-  if (h === 0) return '不限'
-  if (h >= 24) return `${Math.floor(h/24)}天${h%24>0?h%24+'小时':''}`
-  return `${h}小时`
-}
-
-function snapLookback(raw) {
-  for (const d of LOOKBACK_DETENTS) {
-    if (Math.abs(raw - d) <= 2) return d
-  }
-  return raw
-}
 
 /** 从 schedule 或 cron_expr 推导智能 lookback 值（前端计算，无上限） */
 function estimateGroupLookback(schedule, cronExpr) {
   // 优先 cron 表达式
   if (cronExpr && cronExpr.trim()) {
-    const parts = cronExpr.trim().split(/\s+/)
-    if (parts.length < 5) return 24
-    const hourPart = parts[1]
-    const dowPart = parts[4]  // 0=Sun, 1=Mon...6=Sat
+    const lines = cronExpr.trim().split('\n').map(l => l.trim()).filter(Boolean)
+    if (!lines.length) return 24
 
+    // 收集所有行的小时和星期
     const hours = new Set()
-    for (const seg of hourPart.split(',')) {
-      const s = seg.trim()
-      if (s === '*') { for (let h = 0; h < 24; h++) hours.add(h); break }
-      if (s.startsWith('*/')) { const step = parseInt(s.slice(2)); if (step) for (let h = 0; h < 24; h += step) hours.add(h); continue }
-      if (s.includes('-') && !s.startsWith('-')) { const [lo, hi] = s.split('-').map(Number); if (!isNaN(lo) && !isNaN(hi)) for (let h = lo; h <= hi; h++) hours.add(h); continue }
-      const n = parseInt(s); if (!isNaN(n)) hours.add(n)
-    }
-    if (!hours.size) return 24
-
-    // 解析星期
     const days = new Set()
-    if (dowPart === '*') {
-      for (let d = 0; d < 7; d++) days.add(d)
-    } else {
-      for (const seg of dowPart.split(',')) {
+
+    for (const line of lines) {
+      const parts = line.split(/\s+/)
+      if (parts.length < 5) continue
+
+      // 解析小时
+      for (const seg of parts[1].split(',')) {
         const s = seg.trim()
-        if (s.includes('-') && !s.startsWith('-')) {
-          const [lo, hi] = s.split('-').map(Number)
-          if (!isNaN(lo) && !isNaN(hi)) for (let d = lo; d <= hi; d++) days.add(d % 7)
-        } else { const n = parseInt(s); if (!isNaN(n)) days.add(n % 7) }
+        if (s === '*') { for (let h = 0; h < 24; h++) hours.add(h); break }
+        if (s.startsWith('*/')) { const step = parseInt(s.slice(2)); if (step) for (let h = 0; h < 24; h += step) hours.add(h); continue }
+        if (s.includes('-') && !s.startsWith('-')) { const [lo, hi] = s.split('-').map(Number); if (!isNaN(lo) && !isNaN(hi)) for (let h = lo; h <= hi; h++) hours.add(h); continue }
+        const n = parseInt(s); if (!isNaN(n)) hours.add(n)
+      }
+
+      // 解析星期
+      const dow = parts[4] || '*'
+      if (dow === '*') {
+        for (let d = 0; d < 7; d++) days.add(d)
+      } else {
+        for (const seg of dow.split(',')) {
+          const s = seg.trim()
+          if (s.includes('-') && !s.startsWith('-')) {
+            const [lo, hi] = s.split('-').map(Number)
+            if (!isNaN(lo) && !isNaN(hi)) for (let d = lo; d <= hi; d++) days.add(d % 7)
+          } else { const n = parseInt(s); if (!isNaN(n)) days.add(n % 7) }
+        }
       }
     }
-    if (!days.size) return 24
+
+    if (!hours.size || !days.size) return 24
 
     // 构建所有 (天×24+小时) 时间槽
     const slots = []
@@ -199,9 +192,9 @@ function estimateGroupLookback(schedule, cronExpr) {
     slots.sort((a, b) => a - b)
     let maxGap = 0
     for (let i = 1; i < slots.length; i++) maxGap = Math.max(maxGap, slots[i] - slots[i - 1])
-    // 跨周间隔
+    // 跨周间隔（上限 48h，避免跳过周末导致 96h+）
     maxGap = Math.max(maxGap, 7 * 24 - slots[slots.length - 1] + slots[0])
-    return maxGap + 1
+    return Math.min(maxGap + 1, 48)
   }
 
   // schedule 格式 ["09:00", "18:00"]
@@ -219,6 +212,70 @@ function estimateGroupLookback(schedule, cronExpr) {
     return 25
   }
   return 24
+}
+
+/** 带卡点的滑杆组件：0-72h，可点击卡点 6/12/24/48/72，松开吸附 */
+function LookbackSlider({ value, onChange, min = 0, max = 72 }) {
+  const DETENTS = [0, 6, 12, 24, 48, 72]
+
+  function fmt(h) {
+    if (h === 0) return '0小时'
+    if (h >= 24) return `${Math.floor(h / 24)}天${h % 24 > 0 ? h % 24 + '小时' : ''}`
+    return `${h}小时`
+  }
+
+  function snap(val) {
+    let nearest = DETENTS[0], minDist = Infinity
+    for (const d of DETENTS) { const dist = Math.abs(val - d); if (dist < minDist) { minDist = dist; nearest = d } }
+    return minDist <= 2 ? nearest : val
+  }
+
+  // 最近卡点（用于高亮）
+  const bestIdx = DETENTS.reduce((b, d, i) => Math.abs(d - value) < Math.abs(DETENTS[b] - value) ? i : b, 0)
+  const nearDetent = Math.abs(DETENTS[bestIdx] - value) <= 0.5
+
+  return (
+    <div className="space-y-2">
+      <div className="relative">
+        <input
+          type="range" min={min} max={max} step="1"
+          value={value}
+          onChange={e => onChange(parseInt(e.target.value))}
+          onMouseUp={e => { const s = snap(parseInt(e.target.value)); if (s !== parseInt(e.target.value)) onChange(s) }}
+          onTouchEnd={e => { const s = snap(parseInt(e.target.value)); if (s !== parseInt(e.target.value)) onChange(s) }}
+          className="w-full accent-brand-green-hover cursor-pointer relative z-10"
+        />
+        {/* 刻度容器：左偏移 thumb 半宽(11px)使其对齐滑杆起点 */}
+        <div
+          className="relative pointer-events-none"
+          style={{ marginTop: '-6px', marginLeft: '11px', width: 'calc(100% - 22px)' }}
+        >
+          {DETENTS.map(v => {
+            const active = nearDetent && DETENTS[bestIdx] === v
+            const pct = (v / max) * 100
+            return (
+              <div key={v} className="absolute" style={{ left: `${pct}%`, transform: 'translateX(-50%)' }}>
+                <div className={`w-0.5 h-2 rounded-full mx-auto transition-colors ${active ? 'bg-brand-green' : 'bg-border-main'}`} />
+                <span
+                  className={`block text-[11px] mt-1.5 px-1.5 py-0.5 rounded transition-all cursor-pointer pointer-events-auto select-none
+                    ${active ? 'text-brand-green font-semibold' : 'text-text-muted hover:text-brand-green hover:bg-brand-green/5'}`}
+                  onClick={() => onChange(v)}
+                >
+                  {v === 0 ? '0' : v}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-text-main">{fmt(value)}</span>
+        <span className="text-xs text-text-muted/60">
+          {value === 0 ? '不回溯消息' : `往前推 ${value} 小时`}
+        </span>
+      </div>
+    </div>
+  )
 }
 
 const notificationTypes = {
@@ -1636,26 +1693,7 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                   </button>
                 </div>
                 {lookbackMode === 'manual' && (
-                  <div className="space-y-2">
-                    <input
-                      type="range" min="0" max="72" step="1"
-                      value={values.lookback_hours ?? 6}
-                      onChange={e => onLookbackChange(parseInt(e.target.value))}
-                      onMouseUp={e => onLookbackChange(snapLookback(parseInt(e.target.value)))}
-                      onTouchEnd={e => onLookbackChange(snapLookback(parseInt(e.target.value)))}
-                      className="w-full accent-brand-green-hover cursor-pointer"
-                    />
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-text-main min-w-[5rem]">
-                        {formatLookback(values.lookback_hours ?? 6)}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        {LOOKBACK_DETENTS.filter(d => d > 0).map(d => (
-                          <span key={d} className="text-[10px] text-text-muted/60 w-6 text-center">{d}</span>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
+                  <LookbackSlider value={values.lookback_hours ?? 6} onChange={onLookbackChange} />
                 )}
                 {lookbackMode === 'auto' && (
                   <p className="text-xs text-text-muted/70">根据定时计划间隔 + 1h 缓冲自动计算</p>
@@ -1916,26 +1954,10 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
           </button>
         </div>
         {draft.lookback_mode === 'manual' && (
-          <div className="space-y-2">
-            <input
-              type="range" min="0" max="72" step="1"
-              value={draft.lookback_hours ?? 6}
-              onChange={e => onDraftChange({ ...draft, lookback_hours: parseInt(e.target.value) })}
-              onMouseUp={e => onDraftChange({ ...draft, lookback_hours: snapLookback(parseInt(e.target.value)) })}
-              onTouchEnd={e => onDraftChange({ ...draft, lookback_hours: snapLookback(parseInt(e.target.value)) })}
-              className="w-full accent-brand-green-hover cursor-pointer"
-            />
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-text-main min-w-[5rem]">
-                {formatLookback(draft.lookback_hours ?? 6)}
-              </span>
-              <div className="flex items-center gap-1">
-                {LOOKBACK_DETENTS.filter(d => d > 0).map(d => (
-                  <span key={d} className="text-[10px] text-text-muted/60 w-6 text-center">{d}</span>
-                ))}
-              </div>
-            </div>
-          </div>
+          <LookbackSlider
+            value={draft.lookback_hours ?? 6}
+            onChange={v => onDraftChange({ ...draft, lookback_hours: v })}
+          />
         )}
         {draft.lookback_mode === 'auto' && (
           <p className="text-xs text-text-muted/70">根据定时计划间隔 + 1h 缓冲自动计算</p>

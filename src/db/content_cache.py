@@ -37,6 +37,15 @@ class ContentCache:
             "oa": False, "sns": False, "fav": False,
         }
         self._sync_lock = threading.Lock()
+        # RAG 重索引状态：防止 OA/SNS/Fav 定时器 + OA Monitor 多线程并发重索引
+        # _reindexing[source] = True 表示正在跑，False 表示空闲
+        # _pending[source] = True 表示有新数据等待，下一次重索引会自动触发
+        self._reindexing: dict[str, bool] = {"oa": False, "sns": False, "fav": False}
+        self._pending: dict[str, bool] = {"oa": False, "sns": False, "fav": False}
+        self._reindex_lock = threading.Lock()
+        # 增量重索引：只索引进 cached_at > last_indexed_at[source] 的数据
+        # 默认 0 表示全量索引（首次启动）
+        self._last_indexed_at: dict[str, float] = {"oa": 0.0, "sns": 0.0, "fav": 0.0}
         self._init_tables()
 
     # ══════════════════════════════════════════════════════════════
@@ -388,17 +397,20 @@ class ContentCache:
             logger.warning("[CACHE] sync_oa_single %s 失败: %s", gh_id, e)
             return 0
 
-    def sync_oa_incremental(self, client, task_center=None):
-        """增量合并 OA 文章。定时器 60s + 用户访问触发。"""
+    def sync_oa_incremental(self, client, task_center=None) -> int:
+        """增量合并 OA 文章。定时器 60s + 用户访问触发。
+        Returns:
+            int: 新增文章数，0 表示无新内容。
+        """
         if self._is_full_syncing("oa"):
             logger.debug("[CACHE] OA 全量进行中，增量跳过")
-            return
+            return 0
         if client is None:
             logger.warning("[CACHE] WCDB 不可用, OA 同步跳过")
-            return
+            return 0
         accounts = self.query("SELECT gh_id FROM oa_accounts")
         if not accounts:
-            return
+            return 0
         tid = _create_task(task_center, "cache_oa_incremental", "", "OA增量同步")
         total = 0
         try:
@@ -426,6 +438,7 @@ class ContentCache:
         except Exception as e:
             logger.warning("[CACHE] OA 增量合并失败: %s", e)
             _fail_task(task_center, tid, str(e))
+        return total
 
     # ══════════════════════════════════════════════════════════════
     # OA 全文抓取队列
@@ -483,6 +496,7 @@ class ContentCache:
                 self.update("oa_cache", {
                     "full_content": content[:50000],  # 最长 5 万字
                     "content_status": 1,
+                    "cached_at": int(time.time()),  # 触及时戳触发增量重索引
                 }, {"url": url})
                 self._fetcher_count += 1
                 # 每 5 篇更新一次任务进度
@@ -540,19 +554,22 @@ class ContentCache:
         finally:
             self._end_full_sync("sns")
 
-    def sync_sns_incremental(self, client, task_center=None):
-        """增量合并朋友圈：只拉第 1 页。"""
+    def sync_sns_incremental(self, client, task_center=None) -> int:
+        """增量合并朋友圈：只拉第 1 页。
+        Returns:
+            int: 新增朋友圈条数，0 表示无新内容。
+        """
         if self._is_full_syncing("sns"):
-            return
+            return 0
         if client is None:
             logger.warning("[CACHE] WCDB 不可用, SNS 增量同步跳过")
-            return
+            return 0
         tid = _create_task(task_center, "cache_sns_incremental", "", "朋友圈增量")
         try:
             posts = client.get_sns_timeline(limit=20, offset=0)
             if not posts:
                 _complete_task(task_center, tid, "朋友圈增量: 0 条")
-                return
+                return 0
             existing = self._get_existing_sns_ids()
             new = []
             for p in posts:
@@ -569,6 +586,8 @@ class ContentCache:
         except Exception as e:
             logger.warning("[CACHE] 朋友圈增量合并失败: %s", e)
             _fail_task(task_center, tid, str(e))
+            return 0
+        return len(new)
 
     def _get_existing_sns_ids(self) -> set:
         rows = self.query("SELECT post_id FROM sns_cache")
@@ -689,11 +708,15 @@ class ContentCache:
         finally:
             self._end_full_sync("fav")
 
-    def sync_fav_incremental(self, client, task_center=None):
-        """增量合并收藏。"""
+    def sync_fav_incremental(self, client, task_center=None) -> int:
+        """增量合并收藏。
+        Returns:
+            int: 新增收藏条数，0 表示无新内容。
+        """
         if self._is_full_syncing("fav"):
-            return
+            return 0
         tid = _create_task(task_center, "cache_fav_incremental", "", "收藏增量")
+        new_count = 0
         try:
             from src.wechat.wcdb_fav_reader import WcdbFavReader
             reader = WcdbFavReader(client)
@@ -708,7 +731,7 @@ class ContentCache:
                     rows = reader._exec(meta_sql) or []
                 except Exception:
                     _complete_task(task_center, tid, "收藏增量: 0 条")
-                    return
+                    return 0
                 items = []
                 for r in rows:
                     try:
@@ -728,7 +751,7 @@ class ContentCache:
                         pass
             if not items:
                 _complete_task(task_center, tid, "收藏增量: 0 条")
-                return
+                return 0
             max_cached = self._get_max_fav_id()
             new = []
             for item in items:
@@ -739,11 +762,14 @@ class ContentCache:
                         new.append(cleaned)
             if new:
                 self.batch_upsert("fav_cache", new)
-            logger.info("[CACHE] 收藏增量合并: 新增 %d 条", len(new))
-            _complete_task(task_center, tid, f"收藏增量: {len(new)} 条")
+            new_count = len(new)
+            logger.info("[CACHE] 收藏增量合并: 新增 %d 条", new_count)
+            _complete_task(task_center, tid, f"收藏增量: {new_count} 条")
         except Exception as e:
             logger.warning("[CACHE] 收藏增量合并失败: %s", e)
             _fail_task(task_center, tid, str(e))
+            return 0
+        return new_count
 
     def _get_existing_fav_ids(self) -> set:
         rows = self.query("SELECT fav_id FROM fav_cache")
@@ -853,7 +879,37 @@ class ContentCache:
         return items
 
     def index_to_rag(self, rag_engine, source: str):
-        """将缓存数据索引到 ChromaDB。"""
+        """将缓存数据索引到 ChromaDB（线程安全 + pending 防丢）。"""
+        if source not in self._reindexing:
+            return
+
+        # 抢占：已在跑 → 标记 pending 后立即返回
+        with self._reindex_lock:
+            if self._reindexing[source]:
+                self._pending[source] = True
+                logger.debug("[CACHE] RAG 索引 %s 已在进行中，标记 pending", source)
+                return
+            self._reindexing[source] = True
+
+        try:
+            # ── 第一轮：执行重索引 ──
+            self._do_index(rag_engine, source)
+            # ── 第二轮：检查 pending 期间是否有新数据 ──
+            with self._reindex_lock:
+                if self._pending[source]:
+                    self._pending[source] = False
+                    logger.info("[CACHE] RAG 索引 %s 完成后发现 pending 数据，再跑一轮", source)
+                    # 递归再跑一次（但 _reindexing=True 会让任何新进入的调用走 pending 分支）
+                    try:
+                        self._do_index(rag_engine, source)
+                    except Exception as e:
+                        logger.warning("[CACHE] pending 重索引 %s 失败: %s", source, e)
+        finally:
+            with self._reindex_lock:
+                self._reindexing[source] = False
+
+    def _do_index(self, rag_engine, source: str):
+        """执行一次具体的索引逻辑（不涉及锁）。"""
         logger.info("[CACHE] RAG 索引开始: source=%s", source)
         try:
             if source == "oa":
@@ -865,15 +921,30 @@ class ContentCache:
         except Exception as e:
             logger.warning("[CACHE] RAG 索引 %s 失败: %s", source, e)
 
+    def reset_index_cursor(self, source: str):
+        """重置增量游标，下次 index_to_rag 会全量重索引。"""
+        if source in self._last_indexed_at:
+            self._last_indexed_at[source] = 0.0
+
     def _index_oa(self, rag):
-        """索引 OA 文章到 ChromaDB。"""
-        rows = self.query(
-            "SELECT url, title, digest, full_content, source_name, pub_time "
-            "FROM oa_cache WHERE title != ''"
-        )
+        """索引 OA 文章到 ChromaDB（增量：只索引进 cached_at > last_indexed_at 的）。"""
+        _cutoff = self._last_indexed_at["oa"]
+        if _cutoff > 0:
+            rows = self.query(
+                "SELECT url, title, digest, full_content, source_name, pub_time, cached_at "
+                "FROM oa_cache WHERE title != '' AND cached_at > ?",
+                [_cutoff],
+            )
+        else:
+            # 首次或重置：全量索引
+            rows = self.query(
+                "SELECT url, title, digest, full_content, source_name, pub_time, cached_at "
+                "FROM oa_cache WHERE title != ''"
+            )
         from src.assistant.rag.models import Chunk
         import numpy as np
         chunks = []
+        max_cached_at = _cutoff
         for r in rows:
             text = f"{r['title']} {r['digest']}"
             if r['full_content']:
@@ -887,16 +958,31 @@ class ContentCache:
                 content=text[:3000],
                 created_at=str(r['pub_time']),
             ))
+            _ca = r['cached_at'] or 0
+            if _ca > max_cached_at:
+                max_cached_at = _ca
         self._index_chunks(rag, chunks, "OA 文章")
+        # 更新游标
+        if chunks and max_cached_at > self._last_indexed_at["oa"]:
+            self._last_indexed_at["oa"] = max_cached_at
 
     def _index_sns(self, rag):
-        """索引朋友圈到 ChromaDB。"""
-        rows = self.query(
-            "SELECT post_id, clean_content, nickname, create_time "
-            "FROM sns_cache WHERE clean_content != ''"
-        )
+        """索引朋友圈到 ChromaDB（增量）。"""
+        _cutoff = self._last_indexed_at["sns"]
+        if _cutoff > 0:
+            rows = self.query(
+                "SELECT post_id, clean_content, nickname, create_time, cached_at "
+                "FROM sns_cache WHERE clean_content != '' AND cached_at > ?",
+                [_cutoff],
+            )
+        else:
+            rows = self.query(
+                "SELECT post_id, clean_content, nickname, create_time, cached_at "
+                "FROM sns_cache WHERE clean_content != ''"
+            )
         from src.assistant.rag.models import Chunk
         chunks = []
+        max_cached_at = _cutoff
         for r in rows:
             text = f"{r['nickname']}: {r['clean_content']}"
             chunks.append(Chunk(
@@ -908,16 +994,30 @@ class ContentCache:
                 content=text[:3000],
                 created_at=str(r['create_time']),
             ))
+            _ca = r['cached_at'] or 0
+            if _ca > max_cached_at:
+                max_cached_at = _ca
         self._index_chunks(rag, chunks, "朋友圈")
+        if chunks and max_cached_at > self._last_indexed_at["sns"]:
+            self._last_indexed_at["sns"] = max_cached_at
 
     def _index_fav(self, rag):
-        """索引收藏到 ChromaDB。"""
-        rows = self.query(
-            "SELECT fav_id, clean_text, type_name, update_time "
-            "FROM fav_cache WHERE clean_text != ''"
-        )
+        """索引收藏到 ChromaDB（增量）。"""
+        _cutoff = self._last_indexed_at["fav"]
+        if _cutoff > 0:
+            rows = self.query(
+                "SELECT fav_id, clean_text, type_name, update_time, cached_at "
+                "FROM fav_cache WHERE clean_text != '' AND cached_at > ?",
+                [_cutoff],
+            )
+        else:
+            rows = self.query(
+                "SELECT fav_id, clean_text, type_name, update_time, cached_at "
+                "FROM fav_cache WHERE clean_text != ''"
+            )
         from src.assistant.rag.models import Chunk
         chunks = []
+        max_cached_at = _cutoff
         for r in rows:
             chunks.append(Chunk(
                 id=f"fav_{r['fav_id']}",
@@ -928,7 +1028,12 @@ class ContentCache:
                 content=r['clean_text'][:3000],
                 created_at=str(r['update_time']),
             ))
+            _ca = r['cached_at'] or 0
+            if _ca > max_cached_at:
+                max_cached_at = _ca
         self._index_chunks(rag, chunks, "收藏")
+        if chunks and max_cached_at > self._last_indexed_at["fav"]:
+            self._last_indexed_at["fav"] = max_cached_at
 
     def _index_chunks(self, rag, chunks, label: str):
         """批量索引 chunks 到 ChromaDB。"""

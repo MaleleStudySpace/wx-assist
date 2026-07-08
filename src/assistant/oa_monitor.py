@@ -136,6 +136,7 @@ class OAMonitorEngine:
 
         now = _time.time()
         cutoff = now - MONITOR_MAX_AGE_SEC
+        cached_new = 0
 
         for art in articles:
             art_ts = art.timestamp or art.pub_time or 0
@@ -158,6 +159,7 @@ class OAMonitorEngine:
             # ── Persist to oa_cache (INSERT OR REPLACE, idempotent) ──
             if not is_known:
                 self._cache_article(art)
+                cached_new += 1
 
             # ── Skip notification for out-of-window or already known ──
             if not in_window or is_known:
@@ -178,7 +180,7 @@ class OAMonitorEngine:
             source = art.source_name or gh_id
             title = art.title or "(无标题)"
 
-            # ── AI 摘要：调用 LLM 生成，失败降级为原标题/摘要 ──
+            # ── AI 摘要：后台线程 + 5s 超时，防止慢 LLM 阻塞 OA Monitor 轮询 ──
             digest = ""
             llm_summary_text = ""
             llm_ok = 0
@@ -187,16 +189,29 @@ class OAMonitorEngine:
                 from src.summarize import create_summarizer
                 cfg = load_config()
                 smrz = create_summarizer(cfg)
-                # 输入文本：用 digest（最长可用字段），最差用 title
                 input_text = (art.digest or art.title or "无摘要")[:500]
                 prompt = "请用1-2句话总结以下文章的核心内容:\n" + input_text
                 _t0 = _time.monotonic()
-                ai_digest = smrz.chat(
-                    message=prompt,
-                    context_messages=[],
-                    requester_name="system",
-                    group_name=source,
-                )
+
+                # 后台线程执行 LLM 调用，硬超时 5 秒
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _exe:
+                    _fut = _exe.submit(
+                        smrz.chat,
+                        message=prompt,
+                        context_messages=[],
+                        requester_name="system",
+                        group_name=source,
+                    )
+                    try:
+                        ai_digest = _fut.result(timeout=5)
+                    except concurrent.futures.TimeoutError:
+                        logger.warning("OAMonitor: LLM 超时（5s），使用原标题: %s", title[:20])
+                        ai_digest = ""
+                    except Exception as e:
+                        logger.debug("OAMonitor: LLM 调用失败: %s", e)
+                        ai_digest = ""
+
                 _latency = (_time.monotonic() - _t0) * 1000
                 _resp = (ai_digest or "").strip()
                 log_llm_interaction(
@@ -204,7 +219,7 @@ class OAMonitorEngine:
                     model=getattr(smrz, 'model', 'unknown'),
                     system_prompt="", user_prompt=prompt,
                     response=_resp[:200], latency_ms=_latency,
-                    extra={"title": title[:50], "url": art.url, "gh_id": gh_id},
+                    extra={"title": title[:50], "url": art.url, "gh_id": gh_id, "timed_out": _resp=="" and _latency>=4900},
                 )
                 if _resp:
                     digest = _resp[:80]
@@ -234,6 +249,7 @@ class OAMonitorEngine:
                     self._content_cache.update("oa_cache", {
                         "llm_summary": llm_summary_text,
                         "llm_summary_ok": 1,
+                        "cached_at": int(_time.time()),
                     }, {"url": art.url})
                 except Exception:
                     pass
@@ -272,6 +288,16 @@ class OAMonitorEngine:
             # Push to WeChat via iLink (if configured)
             if mg.push_target == "ilink":
                 self._push_to_wechat(nid, mg.name or source, notif_title, notif_content)
+
+        # ── 本轮有新文章写入 oa_cache → 触发 RAG 重索引 ──
+        if cached_new > 0:
+            try:
+                from src.web.server import get_rag_engine
+                _re = get_rag_engine()
+                if _re and self._content_cache:
+                    self._content_cache.index_to_rag(_re, "oa")
+            except Exception:
+                pass
 
     def _cache_article(self, art) -> None:
         """Write a single OA article to oa_cache. Idempotent (INSERT OR REPLACE).

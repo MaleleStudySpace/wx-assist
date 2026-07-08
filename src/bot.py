@@ -461,6 +461,13 @@ class Bot:
                 router.set_rag(rag_engine)
                 tool_executor.set_rag(rag_engine)
 
+                # Register global (for OA Monitor to trigger re-index)
+                try:
+                    from src.web.server import register_rag_engine
+                    register_rag_engine(rag_engine)
+                except Exception:
+                    pass
+
                 logger.info("[RAG] RAGEngine initialized and injected")
 
                 # ── Cold start (background thread) ──
@@ -525,7 +532,9 @@ class Bot:
                                 from src.web.api_handlers import get_wcdb_client
                                 _c = get_wcdb_client()
                                 if _c:
-                                    content_cache.sync_sns_incremental(_c, task_center)
+                                    _n = content_cache.sync_sns_incremental(_c, task_center)
+                                    if _n > 0 and rag_engine:
+                                        content_cache.index_to_rag(rag_engine, "sns")
                             except Exception:
                                 pass
                     threading.Thread(target=_sns_timer, daemon=True,
@@ -538,7 +547,9 @@ class Bot:
                                 from src.web.api_handlers import get_wcdb_client
                                 _c = get_wcdb_client()
                                 if _c:
-                                    content_cache.sync_fav_incremental(_c, task_center)
+                                    _n = content_cache.sync_fav_incremental(_c, task_center)
+                                    if _n > 0 and rag_engine:
+                                        content_cache.index_to_rag(rag_engine, "fav")
                             except Exception:
                                 pass
                     threading.Thread(target=_fav_timer, daemon=True,
@@ -552,7 +563,9 @@ class Bot:
                                 from src.web.api_handlers import get_wcdb_client
                                 _c = get_wcdb_client()
                                 if _c:
-                                    content_cache.sync_oa_incremental(_c, task_center)
+                                    _n = content_cache.sync_oa_incremental(_c, task_center)
+                                    if _n > 0 and rag_engine:
+                                        content_cache.index_to_rag(rag_engine, "oa")
                             except Exception:
                                 pass
                     threading.Thread(target=_oa_timer, daemon=True,

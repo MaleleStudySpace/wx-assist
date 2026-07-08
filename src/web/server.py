@@ -774,6 +774,18 @@ def register_content_cache(cc):
     _content_cache = cc
 
 
+_rag_engine = None
+
+def register_rag_engine(re):
+    """Register the RAGEngine so components can trigger re-indexing."""
+    global _rag_engine
+    _rag_engine = re
+
+def get_rag_engine():
+    """Get the registered RAGEngine instance, or None if not available."""
+    return _rag_engine
+
+
 def is_shutting_down():
     """Check if shutdown has been signaled."""
     return _shutdown_event.is_set()
