@@ -143,6 +143,21 @@ function cronToLabel(cronExpr) {
   return cronExpr
 }
 
+const LOOKBACK_DETENTS = [0, 6, 12, 24, 48, 72]
+
+function formatLookback(h) {
+  if (h === 0) return '不限'
+  if (h >= 24) return `${Math.floor(h/24)}天${h%24>0?h%24+'小时':''}`
+  return `${h}小时`
+}
+
+function snapLookback(raw) {
+  for (const d of LOOKBACK_DETENTS) {
+    if (Math.abs(raw - d) <= 2) return d
+  }
+  return raw
+}
+
 const notificationTypes = {
   keyword_alert: '关键词提醒',
   group_digest: '定时摘要',
@@ -1433,13 +1448,6 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
       ? dg.schedule.join(' · ')
       : ''
 
-  const LOOKBACK_OPTIONS = [
-    { value: 3, label: '近3小时' },
-    { value: 6, label: '近6小时' },
-    { value: 12, label: '近12小时' },
-    { value: 24, label: '近1天' },
-  ]
-
   return (
     <div className="border border-border-main rounded-xl overflow-hidden transition-all duration-200 hover:border-border-main/80">
       {/* Header */}
@@ -1524,22 +1532,29 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                 onScheduleChange={onScheduleChange}
                 onCronExprChange={onCronExprChange}
               />
-              {/* Lookback — 改为易懂表达 */}
+              {/* Lookback — 滑杆 0-72h */}
               <div>
                 <label className="text-xs text-text-muted block mb-1.5">摘要时间范围</label>
                 <p className="text-xs text-text-muted mb-2">从当前时间往前取多少小时的消息进行摘要</p>
-                <div className="flex items-center gap-2">
-                  {LOOKBACK_OPTIONS.map(({ value, label }) => (
-                    <button
-                      key={value}
-                      onClick={() => onLookbackChange(value)}
-                      className={`text-xs px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                        values.lookback_hours === value
-                          ? 'bg-brand-green-hover text-white shadow-sm'
-                          : 'bg-bg-raised border border-border-main text-text-muted hover:border-brand-green/40'
-                      }`}
-                    >{label}</button>
-                  ))}
+                <div className="space-y-2">
+                  <input
+                    type="range" min="0" max="72" step="1"
+                    value={values.lookback_hours ?? 6}
+                    onChange={e => onLookbackChange(parseInt(e.target.value))}
+                    onMouseUp={e => onLookbackChange(snapLookback(parseInt(e.target.value)))}
+                    onTouchEnd={e => onLookbackChange(snapLookback(parseInt(e.target.value)))}
+                    className="w-full accent-brand-green-hover cursor-pointer"
+                  />
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-text-main min-w-[5rem]">
+                      {formatLookback(values.lookback_hours ?? 6)}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {LOOKBACK_DETENTS.filter(d => d > 0).map(d => (
+                        <span key={d} className="text-[10px] text-text-muted/60 w-6 text-center">{d}</span>
+                      ))}
+                    </div>
+                  </div>
                 </div>
                 {values.unread_only && (
                   <p className="text-xs text-status-warn/80 mt-1">仅摘要该时间窗口内的未读消息</p>
@@ -1765,19 +1780,28 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
         onScheduleChange={schedule => onDraftChange({ ...draft, schedule })}
         onCronExprChange={cron_expr => onDraftChange({ ...draft, cron_expr })}
       />
-      {/* 回溯时长 */}
+      {/* 回溯时长 — 滑杆 */}
       <div>
         <label className="text-xs text-text-muted block mb-1.5">摘要时间范围</label>
-        <div className="flex items-center gap-2">
-          {[3, 6, 12, 24].map(h => (
-            <button
-              key={h}
-              onClick={() => onDraftChange({ ...draft, lookback_hours: h })}
-              className={`text-xs px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                draft.lookback_hours === h ? 'bg-brand-green-hover text-white shadow-sm' : 'bg-bg-raised border border-border-main text-text-muted hover:border-brand-green/40'
-              }`}
-            >{h}h</button>
-          ))}
+        <div className="space-y-2">
+          <input
+            type="range" min="0" max="72" step="1"
+            value={draft.lookback_hours ?? 6}
+            onChange={e => onDraftChange({ ...draft, lookback_hours: parseInt(e.target.value) })}
+            onMouseUp={e => onDraftChange({ ...draft, lookback_hours: snapLookback(parseInt(e.target.value)) })}
+            onTouchEnd={e => onDraftChange({ ...draft, lookback_hours: snapLookback(parseInt(e.target.value)) })}
+            className="w-full accent-brand-green-hover cursor-pointer"
+          />
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-text-main min-w-[5rem]">
+              {formatLookback(draft.lookback_hours ?? 6)}
+            </span>
+            <div className="flex items-center gap-1">
+              {LOOKBACK_DETENTS.filter(d => d > 0).map(d => (
+                <span key={d} className="text-[10px] text-text-muted/60 w-6 text-center">{d}</span>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
       {/* 仅摘要未读 */}
