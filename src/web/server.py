@@ -1735,7 +1735,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     context_messages=context_messages,
                     requester_name=sender_name,
                     group_name=group_name,
-                    group_memory=group_memory,
                 )
 
                 self.send_json({

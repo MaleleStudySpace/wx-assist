@@ -1061,6 +1061,18 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
     limit = int(body.get("limit", 20) or 20)
     username = body.get("username", "")
 
+    # ── TaskCenter：创建任务 ──
+    tid = None
+    try:
+        from src.web.server import _task_center
+        if _task_center:
+            tid = _task_center.create_task(
+                "sns_summarize", "manual", username or "朋友圈", "朋友圈总结",
+            )
+            _task_center.update_task(tid, progress="正在读取朋友圈内容")
+    except Exception:
+        pass
+
     # Build context from SNS
     context_text, context_tokens, source_name, _ = _build_sns_context(
         limit=limit, username=username,
@@ -1071,6 +1083,15 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
         _send_sse_headers(wfile)
         _send_sse_event(wfile, "error", {"message": "没有可用的朋友圈内容"})
         return
+
+    # Update task
+    if tid:
+        try:
+            from src.web.server import _task_center as _tc
+            if _tc:
+                _tc.update_task(tid, status="running", progress="AI 生成摘要中")
+        except Exception:
+            pass
 
     # Get summarizer — need it early for token budget check
     try:
@@ -1190,6 +1211,14 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
         latency_ms=latency,
         extra={"limit": limit, "username": username},
     )
+
+    # Task complete
+    try:
+        from src.web.server import _task_center as _tc
+        if tid and _tc:
+            _tc.complete_task(tid, result=response_text[:200])
+    except Exception:
+        pass
 
     try:
         _send_sse_event(wfile, "done", {"source_name": source_name})
