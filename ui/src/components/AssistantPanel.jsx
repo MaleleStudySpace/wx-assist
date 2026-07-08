@@ -158,6 +158,69 @@ function snapLookback(raw) {
   return raw
 }
 
+/** 从 schedule 或 cron_expr 推导智能 lookback 值（前端计算，无上限） */
+function estimateGroupLookback(schedule, cronExpr) {
+  // 优先 cron 表达式
+  if (cronExpr && cronExpr.trim()) {
+    const parts = cronExpr.trim().split(/\s+/)
+    if (parts.length < 5) return 24
+    const hourPart = parts[1]
+    const dowPart = parts[4]  // 0=Sun, 1=Mon...6=Sat
+
+    const hours = new Set()
+    for (const seg of hourPart.split(',')) {
+      const s = seg.trim()
+      if (s === '*') { for (let h = 0; h < 24; h++) hours.add(h); break }
+      if (s.startsWith('*/')) { const step = parseInt(s.slice(2)); if (step) for (let h = 0; h < 24; h += step) hours.add(h); continue }
+      if (s.includes('-') && !s.startsWith('-')) { const [lo, hi] = s.split('-').map(Number); if (!isNaN(lo) && !isNaN(hi)) for (let h = lo; h <= hi; h++) hours.add(h); continue }
+      const n = parseInt(s); if (!isNaN(n)) hours.add(n)
+    }
+    if (!hours.size) return 24
+
+    // 解析星期
+    const days = new Set()
+    if (dowPart === '*') {
+      for (let d = 0; d < 7; d++) days.add(d)
+    } else {
+      for (const seg of dowPart.split(',')) {
+        const s = seg.trim()
+        if (s.includes('-') && !s.startsWith('-')) {
+          const [lo, hi] = s.split('-').map(Number)
+          if (!isNaN(lo) && !isNaN(hi)) for (let d = lo; d <= hi; d++) days.add(d % 7)
+        } else { const n = parseInt(s); if (!isNaN(n)) days.add(n % 7) }
+      }
+    }
+    if (!days.size) return 24
+
+    // 构建所有 (天×24+小时) 时间槽
+    const slots = []
+    for (const d of days) for (const h of hours) slots.push(d * 24 + h)
+    if (slots.length <= 1) return 25
+    slots.sort((a, b) => a - b)
+    let maxGap = 0
+    for (let i = 1; i < slots.length; i++) maxGap = Math.max(maxGap, slots[i] - slots[i - 1])
+    // 跨周间隔
+    maxGap = Math.max(maxGap, 7 * 24 - slots[slots.length - 1] + slots[0])
+    return maxGap + 1
+  }
+
+  // schedule 格式 ["09:00", "18:00"]
+  if (schedule && schedule.length) {
+    const times = schedule.map(t => {
+      const [h, m] = t.split(':').map(Number)
+      return h + m / 60
+    }).sort((a, b) => a - b)
+    if (times.length >= 2) {
+      const gaps = []
+      for (let i = 1; i < times.length; i++) gaps.push(times[i] - times[i - 1])
+      gaps.push(24 - times[times.length - 1] + times[0])
+      return Math.ceil(Math.min(...gaps) + 1)
+    }
+    return 25
+  }
+  return 24
+}
+
 const notificationTypes = {
   keyword_alert: '关键词提醒',
   group_digest: '定时摘要',
@@ -848,6 +911,9 @@ export default function AssistantPanel() {
                     onLookbackChange={lookback_hours => {
                       setDigestDrafts(prev => ({ ...prev, [i]: { ...prev[i], lookback_hours } }))
                     }}
+                    onLookbackModeChange={mode => {
+                      setDigestDrafts(prev => ({ ...prev, [i]: { ...prev[i], lookback_mode: mode } }))
+                    }}
                     onProfileChange={patch => {
                       setDigestDrafts(prev => {
                         const profile = prev[i]?.profile || {}
@@ -1436,7 +1502,7 @@ function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCron
   )
 }
 
-function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onSave, onCancel, defaultSystemPrompt, stylePresets, digestRunning, onRunDigest }) {
+function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onLookbackModeChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onSave, onCancel, defaultSystemPrompt, stylePresets, digestRunning, onRunDigest }) {
   const bodyRef = useRef(null)
   // Use draft if available (editing), otherwise use saved values
   const values = draft || dg
@@ -1447,6 +1513,10 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
     : (dg.schedule || []).length > 0
       ? dg.schedule.join(' · ')
       : ''
+
+  // 智能回溯计算
+  const autoEstimate = estimateGroupLookback(values.schedule, values.cron_expr)
+  const lookbackMode = values.lookback_mode ?? 'manual'
 
   return (
     <div className="border border-border-main rounded-xl overflow-hidden transition-all duration-200 hover:border-border-main/80">
@@ -1466,9 +1536,11 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
             ) : (
               <span className="text-xs text-status-warn">未设置时间</span>
             )}
-            {values.lookback_hours && values.lookback_hours !== 6 && (
+            {lookbackMode === 'auto' ? (
+              <span className="text-xs text-text-muted">智能 · ~{autoEstimate}h</span>
+            ) : values.lookback_hours && values.lookback_hours !== 6 ? (
               <span className="text-xs text-text-muted">{values.lookback_hours}h</span>
-            )}
+            ) : null}
             {values.unread_only && (
               <span className="text-xs px-1.5 py-0.5 rounded bg-status-warn-soft text-status-warn font-medium">未读</span>
             )}
@@ -1532,30 +1604,62 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                 onScheduleChange={onScheduleChange}
                 onCronExprChange={onCronExprChange}
               />
-              {/* Lookback — 滑杆 0-72h */}
+              {/* 时间范围：智能/手动 切换 */}
               <div>
                 <label className="text-xs text-text-muted block mb-1.5">摘要时间范围</label>
                 <p className="text-xs text-text-muted mb-2">从当前时间往前取多少小时的消息进行摘要</p>
-                <div className="space-y-2">
-                  <input
-                    type="range" min="0" max="72" step="1"
-                    value={values.lookback_hours ?? 6}
-                    onChange={e => onLookbackChange(parseInt(e.target.value))}
-                    onMouseUp={e => onLookbackChange(snapLookback(parseInt(e.target.value)))}
-                    onTouchEnd={e => onLookbackChange(snapLookback(parseInt(e.target.value)))}
-                    className="w-full accent-brand-green-hover cursor-pointer"
-                  />
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-text-main min-w-[5rem]">
-                      {formatLookback(values.lookback_hours ?? 6)}
-                    </span>
-                    <div className="flex items-center gap-1">
-                      {LOOKBACK_DETENTS.filter(d => d > 0).map(d => (
-                        <span key={d} className="text-[10px] text-text-muted/60 w-6 text-center">{d}</span>
-                      ))}
+                <div className="flex gap-2 mb-3">
+                  <button
+                    onClick={() => {
+                      onLookbackModeChange('auto')
+                      onLookbackChange(autoEstimate)
+                    }}
+                    className={`flex-1 text-left px-3 py-2 rounded-lg border transition-all cursor-pointer ${
+                      lookbackMode === 'auto'
+                        ? 'border-brand-green/40 bg-brand-green-light/15 text-brand-green'
+                        : 'border-border-main bg-bg-raised text-text-muted hover:border-text-muted/30 hover:text-text-main'
+                    }`}
+                  >
+                    <p className="text-xs font-medium">智能回溯</p>
+                    <p className="text-xs opacity-60 mt-0.5">约 {autoEstimate} 小时</p>
+                  </button>
+                  <button
+                    onClick={() => onLookbackModeChange('manual')}
+                    className={`flex-1 text-left px-3 py-2 rounded-lg border transition-all cursor-pointer ${
+                      lookbackMode === 'manual'
+                        ? 'border-brand-green/40 bg-brand-green-light/15 text-brand-green'
+                        : 'border-border-main bg-bg-raised text-text-muted hover:border-text-muted/30 hover:text-text-main'
+                    }`}
+                  >
+                    <p className="text-xs font-medium">手动指定</p>
+                    <p className="text-xs opacity-60 mt-0.5">自定义小时数</p>
+                  </button>
+                </div>
+                {lookbackMode === 'manual' && (
+                  <div className="space-y-2">
+                    <input
+                      type="range" min="0" max="72" step="1"
+                      value={values.lookback_hours ?? 6}
+                      onChange={e => onLookbackChange(parseInt(e.target.value))}
+                      onMouseUp={e => onLookbackChange(snapLookback(parseInt(e.target.value)))}
+                      onTouchEnd={e => onLookbackChange(snapLookback(parseInt(e.target.value)))}
+                      className="w-full accent-brand-green-hover cursor-pointer"
+                    />
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-text-main min-w-[5rem]">
+                        {formatLookback(values.lookback_hours ?? 6)}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        {LOOKBACK_DETENTS.filter(d => d > 0).map(d => (
+                          <span key={d} className="text-[10px] text-text-muted/60 w-6 text-center">{d}</span>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
+                {lookbackMode === 'auto' && (
+                  <p className="text-xs text-text-muted/70">根据定时计划间隔 + 1h 缓冲自动计算</p>
+                )}
                 {values.unread_only && (
                   <p className="text-xs text-status-warn/80 mt-1">仅摘要该时间窗口内的未读消息</p>
                 )}
@@ -1780,29 +1884,62 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
         onScheduleChange={schedule => onDraftChange({ ...draft, schedule })}
         onCronExprChange={cron_expr => onDraftChange({ ...draft, cron_expr })}
       />
-      {/* 回溯时长 — 滑杆 */}
+      {/* 回溯时长 — 智能/手动 */}
       <div>
         <label className="text-xs text-text-muted block mb-1.5">摘要时间范围</label>
-        <div className="space-y-2">
-          <input
-            type="range" min="0" max="72" step="1"
-            value={draft.lookback_hours ?? 6}
-            onChange={e => onDraftChange({ ...draft, lookback_hours: parseInt(e.target.value) })}
-            onMouseUp={e => onDraftChange({ ...draft, lookback_hours: snapLookback(parseInt(e.target.value)) })}
-            onTouchEnd={e => onDraftChange({ ...draft, lookback_hours: snapLookback(parseInt(e.target.value)) })}
-            className="w-full accent-brand-green-hover cursor-pointer"
-          />
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-text-main min-w-[5rem]">
-              {formatLookback(draft.lookback_hours ?? 6)}
-            </span>
-            <div className="flex items-center gap-1">
-              {LOOKBACK_DETENTS.filter(d => d > 0).map(d => (
-                <span key={d} className="text-[10px] text-text-muted/60 w-6 text-center">{d}</span>
-              ))}
+        <p className="text-xs text-text-muted mb-2">从当前时间往前取多少小时的消息进行摘要</p>
+        <div className="flex gap-2 mb-3">
+          <button
+            onClick={() => {
+              const est = estimateGroupLookback(draft.schedule, draft.cron_expr)
+              onDraftChange({ ...draft, lookback_mode: 'auto', lookback_hours: est })
+            }}
+            className={`flex-1 text-left px-3 py-2 rounded-lg border transition-all cursor-pointer ${
+              draft.lookback_mode === 'auto'
+                ? 'border-brand-green/40 bg-brand-green-light/15 text-brand-green'
+                : 'border-border-main bg-bg-raised text-text-muted hover:border-text-muted/30 hover:text-text-main'
+            }`}
+          >
+            <p className="text-xs font-medium">智能回溯</p>
+            <p className="text-xs opacity-60 mt-0.5">约 {estimateGroupLookback(draft.schedule, draft.cron_expr)} 小时</p>
+          </button>
+          <button
+            onClick={() => onDraftChange({ ...draft, lookback_mode: 'manual' })}
+            className={`flex-1 text-left px-3 py-2 rounded-lg border transition-all cursor-pointer ${
+              draft.lookback_mode === 'manual'
+                ? 'border-brand-green/40 bg-brand-green-light/15 text-brand-green'
+                : 'border-border-main bg-bg-raised text-text-muted hover:border-text-muted/30 hover:text-text-main'
+            }`}
+          >
+            <p className="text-xs font-medium">手动指定</p>
+            <p className="text-xs opacity-60 mt-0.5">自定义小时数</p>
+          </button>
+        </div>
+        {draft.lookback_mode === 'manual' && (
+          <div className="space-y-2">
+            <input
+              type="range" min="0" max="72" step="1"
+              value={draft.lookback_hours ?? 6}
+              onChange={e => onDraftChange({ ...draft, lookback_hours: parseInt(e.target.value) })}
+              onMouseUp={e => onDraftChange({ ...draft, lookback_hours: snapLookback(parseInt(e.target.value)) })}
+              onTouchEnd={e => onDraftChange({ ...draft, lookback_hours: snapLookback(parseInt(e.target.value)) })}
+              className="w-full accent-brand-green-hover cursor-pointer"
+            />
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-text-main min-w-[5rem]">
+                {formatLookback(draft.lookback_hours ?? 6)}
+              </span>
+              <div className="flex items-center gap-1">
+                {LOOKBACK_DETENTS.filter(d => d > 0).map(d => (
+                  <span key={d} className="text-[10px] text-text-muted/60 w-6 text-center">{d}</span>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        )}
+        {draft.lookback_mode === 'auto' && (
+          <p className="text-xs text-text-muted/70">根据定时计划间隔 + 1h 缓冲自动计算</p>
+        )}
       </div>
       {/* 仅摘要未读 */}
       <div className="flex items-center justify-between gap-3">
