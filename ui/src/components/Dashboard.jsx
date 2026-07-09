@@ -2,7 +2,6 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Stop, Key, Spinner, CheckCircle, XCircle, ArrowsClockwise, WarningOctagon, Clock, ChatCircle, Newspaper, Database, WechatLogo, Brain, Robot, Cube, Lightning, ArrowRight, PaperPlaneTilt, Bell } from '@phosphor-icons/react'
 import { API_BASE } from './SharedComponents'
-import LANCard from './LANCard'
 
 const spring = { type: 'spring', stiffness: 100, damping: 20 }
 const easeOut = [0.16, 1, 0.3, 1]
@@ -465,10 +464,6 @@ export default function Dashboard({ status, onTabChange }) {
             detail={status.ai_ok ? (status.model_name || '') : '未检测或未成功调用'} />
           <StatusTile icon={Robot} label="助手服务" ok={status.running} okText="运行" errText="停止"
             detail={status.running ? `已运行 ${uptimeStr}` : ''} />
-        </div>
-
-        <div className="px-6 pb-3">
-          <LANCard />
         </div>
 
         {diagResult && (
