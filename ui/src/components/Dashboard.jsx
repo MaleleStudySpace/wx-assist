@@ -370,7 +370,7 @@ export default function Dashboard({ status, onTabChange }) {
       >
         {/* Top accent line */}
         <div className={`h-[2px] transition-colors duration-700 ${status.running ? 'bg-brand-green/50' : 'bg-bg-inset'}`} />
-        <div className="px-6 py-5 flex items-center justify-between">
+        <div className="px-6 py-5 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-4">
             {/* Robot icon */}
             <div className={`relative w-14 h-14 rounded-2xl flex items-center justify-center transition-colors duration-500 ${

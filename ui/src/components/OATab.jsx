@@ -453,11 +453,11 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
       </div>
 
       {/* Row 3: Schedule + Template — two columns */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Schedule */}
         <div>
           <label className="block text-xs text-text-muted mb-2">执行时间</label>
-          <div className="grid grid-cols-3 gap-1.5 mb-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-2">
             {CRON_PRESETS.map((preset, idx) => {
               const isActive = preset.cron && cronExpr === preset.cron
               const isManual = !preset.cron && !cronExpr
@@ -497,7 +497,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
         {/* Template */}
         <div>
           <label className="block text-xs text-text-muted mb-2">摘要模板</label>
-          <div className="grid grid-cols-3 gap-1.5 mb-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-2">
             {TEMPLATES.map(t => (
               <button
                 key={t.value}
@@ -579,7 +579,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
       </div>
 
       {/* Row 4: Lookback + Push — two columns */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Lookback */}
         <div>
           <label className="block text-xs text-text-muted mb-2">时间范围</label>

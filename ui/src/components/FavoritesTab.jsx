@@ -930,7 +930,7 @@ export default function FavoritesTab() {
             </button>
             <button
               onClick={openExportFolder}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-medium bg-bg-raised border border-border-main text-text-muted hover:text-text-main hover:border-text-muted/30 transition-all cursor-pointer"
+              className="hidden lg:flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-medium bg-bg-raised border border-border-main text-text-muted hover:text-text-main hover:border-text-muted/30 transition-all cursor-pointer"
               title="打开导出文件夹"
             >
               <FolderOpen size={14} />
@@ -939,7 +939,7 @@ export default function FavoritesTab() {
             <button
               onClick={handleExport}
               disabled={exporting}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer
+              className={`hidden lg:flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer
                 ${exporting
                   ? 'bg-bg-raised text-text-muted cursor-wait'
                   : 'bg-brand-green-hover text-white hover:bg-brand-green-hover'

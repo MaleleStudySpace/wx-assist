@@ -127,8 +127,9 @@ export default function LANCard() {
             )}
           </AnimatePresence>
 
+          {/* Manual entry URL — always visible, includes token */}
           {!showQr && (
-            <p className="text-[12px] text-text-muted font-mono text-center">{lanIp}:{port}</p>
+            <p className="text-[12px] text-text-muted font-mono text-center break-all max-w-[300px]">{qrUrl}</p>
           )}
         </div>
       )}
@@ -145,13 +146,6 @@ export default function LANCard() {
           <Warning size={16} />
           {error}
         </div>
-      )}
-
-      {/* Manual input hint */}
-      {enabled && lanIp && (
-        <p className="text-[11px] text-text-muted text-center">
-          或在手机浏览器输入上方地址访问
-        </p>
       )}
     </div>
   )

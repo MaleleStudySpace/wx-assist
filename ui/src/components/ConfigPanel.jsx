@@ -102,8 +102,8 @@ function AiSection({ form, update, onOpenSandbox }) {
       <Field label="AI 站点 URL" hint={fullUrlMode
         ? '请填写完整请求 URL，将直接使用此 URL，不拼接路径'
         : '输入 API 根地址，不要以斜杠结尾，例如 https://api.deepseek.com'}>
-        <div className="flex items-center gap-2">
-          <div className="flex-1">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+          <div className="flex-1 w-full sm:w-auto">
             <Input
               value={form.ai_provider_base_url}
               onChange={v => { update('ai_provider_base_url', v); setDetectResult(null) }}
@@ -2357,7 +2357,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
 
       {activeSection !== 'push' && (
         <>
-          <div className="mt-8 flex items-center gap-4">
+          <div className="mt-8 flex flex-col sm:flex-row items-center gap-4">
             <motion.button
               whileTap={{ scale: 0.97 }}
               whileHover={{ scale: 1.02 }}
