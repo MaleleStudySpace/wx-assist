@@ -180,19 +180,8 @@ export default function App() {
     restricted_features_enabled: false,
   }
 
-  // Loading state
-  if (onboardingDone === null) {
-    return (
-      <div className="min-h-[100dvh] bg-bg-main flex items-center justify-center">
-        <div className="text-center">
-          <Spinner size={32} weight="bold" className="animate-spin text-brand-green mx-auto mb-4" />
-          <p className="text-sm text-text-muted font-mono">正在加载...</p>
-        </div>
-      </div>
-    )
-  }
-
-  // Unauthorized access (phone without LAN session)
+  // Unauthorized access (phone without LAN session) — check BEFORE loading
+  // because authError can be set while onboardingDone is still null
   if (authError) {
     return (
       <div className="min-h-[100dvh] bg-bg-main flex items-center justify-center p-8">
@@ -207,6 +196,18 @@ export default function App() {
           <p className="text-xs text-text-muted mt-6">
             wx-assist · LAN 远程访问
           </p>
+        </div>
+      </div>
+    )
+  }
+
+  // Loading state
+  if (onboardingDone === null) {
+    return (
+      <div className="min-h-[100dvh] bg-bg-main flex items-center justify-center">
+        <div className="text-center">
+          <Spinner size={32} weight="bold" className="animate-spin text-brand-green mx-auto mb-4" />
+          <p className="text-sm text-text-muted font-mono">正在加载...</p>
         </div>
       </div>
     )
