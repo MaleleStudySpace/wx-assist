@@ -69,12 +69,12 @@ export default function LANCard() {
     setLoading(false)
   }
 
-  async function handleKick(sessionId) {
+  async function handleKick(ip) {
     try {
       await fetch(`${API_BASE}/api/lan/kick`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId }),
+        body: JSON.stringify({ ip }),
       })
       await fetchStatus()
     } catch {}
@@ -146,7 +146,7 @@ export default function LANCard() {
                   <span className="text-text-muted/50 text-[11px] hidden sm:inline">{s.connected_at}</span>
                 </div>
                 <button
-                  onClick={(e) => { e.stopPropagation(); handleKick(s.session_id) }}
+                  onClick={(e) => { e.stopPropagation(); handleKick(s.ip) }}
                   className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/10 text-text-muted hover:text-red-500 transition-all cursor-pointer"
                   title="踢出设备"
                 >

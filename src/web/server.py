@@ -1084,25 +1084,33 @@ def _handle_ws_upgrade(headers, conn):
 # ── LAN Auth Manager ──────────────────────────────────────────────────
 
 class _Lanauth:
-    """Manages LAN pairing, session tokens, and access control."""
+    """Manages LAN pairing, session tokens, and access control.
+
+    Design:
+    - One shared pair_token for all devices, valid until LAN is disabled.
+    - Each device that connects via /?lan=xxx gets its own cookie session
+      for auth middleware, recorded by IP for the device list.
+    - pair_token is NOT single-use and NOT expiring — lasts until disable.
+    - Backend restart resets everything (acceptable per user requirement).
+    """
 
     def __init__(self):
         self._lock = threading.Lock()
         self._lan_enabled = False
         self._pair_token = None
-        self._pair_expiry = 0.0  # monotonic time
-        self._sessions = {}  # token -> {expiry, ip, connected_at}
+        # sessions: session_token -> {ip, connected_at}
+        # Used for auth middleware + device list display
+        self._sessions = {}
 
     @property
     def lan_enabled(self):
         return self._lan_enabled
 
     def enable(self) -> tuple:
-        """Enable LAN mode, generate one-time pair token. Returns (token, lan_ip)."""
+        """Enable LAN mode, generate shared pair token. Returns (token, lan_ip)."""
         with self._lock:
             self._lan_enabled = True
-            self._pair_token = os.urandom(16).hex()  # 32 hex chars, URL-safe
-            self._pair_expiry = time.monotonic() + 300  # 5 minutes
+            self._pair_token = os.urandom(16).hex()
             return self._pair_token, _get_lan_ip()
 
     def disable(self):
@@ -1112,43 +1120,38 @@ class _Lanauth:
             self._pair_token = None
             self._sessions.clear()
 
-    def validate_pair_token(self, token: str, client_ip: str = "") -> str | None:
-        """Validate one-time pair token and create a session. Returns session token or None."""
+    def connect_device(self, pair_token: str, client_ip: str = "") -> str | None:
+        """Validate pair token, register device session, return cookie session token.
+
+        pair_token is NOT invalidated — shared by all devices until disable.
+        """
         with self._lock:
             if not self._lan_enabled:
                 return None
-            if token != self._pair_token:
+            if pair_token != self._pair_token:
                 return None
-            if time.monotonic() > self._pair_expiry:
-                self._pair_token = None
-                return None
-            self._pair_token = None  # single use
+            # Create a cookie session for this device
             session = sha1(os.urandom(32)).hexdigest()
             self._sessions[session] = {
-                "expiry": time.monotonic() + 86400,  # 24h
                 "ip": client_ip,
                 "connected_at": time.strftime("%H:%M:%S"),
             }
             return session
 
     def check_session(self, token: str) -> bool:
-        """Check if session token is valid."""
+        """Check if cookie session token is valid."""
         with self._lock:
-            info = self._sessions.get(token)
-            if info is None:
-                return False
-            if time.monotonic() > info["expiry"]:
-                del self._sessions[token]
-                return False
-            return True
+            return token in self._sessions
 
-    def kick_session(self, token: str) -> bool:
-        """Remove a specific session by token. Returns True if found and removed."""
+    def kick_by_ip(self, client_ip: str) -> bool:
+        """Remove all sessions for a given client IP. Returns True if any removed."""
         with self._lock:
-            if token in self._sessions:
-                del self._sessions[token]
-                return True
-            return False
+            before = len(self._sessions)
+            self._sessions = {
+                k: v for k, v in self._sessions.items()
+                if v["ip"] != client_ip
+            }
+            return len(self._sessions) < before
 
     @property
     def status(self) -> dict:
@@ -1163,20 +1166,10 @@ class _Lanauth:
                     {
                         "ip": info["ip"],
                         "connected_at": info["connected_at"],
-                        "session_id": token[:8],  # short identifier for kick UI
                     }
-                    for token, info in self._sessions.items()
+                    for info in self._sessions.values()
                 ],
             }
-
-    def kick_by_id(self, session_id: str) -> bool:
-        """Remove a session by its first-8-chars identifier. Returns True if found."""
-        with self._lock:
-            for token in list(self._sessions):
-                if token.startswith(session_id):
-                    del self._sessions[token]
-                    return True
-            return False
 
 
 def _get_lan_ip() -> str:
@@ -1326,7 +1319,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
         client_ip = self.client_address[0]
         if self.path.startswith("/?lan=") and self.command == "GET":
             token = self.path.split("=", 1)[1]
-            session = _lan_auth.validate_pair_token(token, client_ip)
+            session = _lan_auth.connect_device(token, client_ip)
             if session:
                 self.send_response(302)
                 self.send_header(
@@ -1391,8 +1384,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/lan/kick" and self.command == "POST":
             length = min(int(self.headers.get("Content-Length", "0")), 1024)
             body = json.loads(self.rfile.read(length)) if length else {}
-            session_id = body.get("session_id", "")
-            if _lan_auth.kick_by_id(session_id):
+            ip = body.get("ip", "")
+            if _lan_auth.kick_by_ip(ip):
                 self.send_json({"ok": True})
             else:
                 self.send_json({"ok": False, "error": "未找到该设备"})

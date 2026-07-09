@@ -403,10 +403,10 @@ export default function App() {
                       <Icon size={13} weight={activeTab === id ? 'fill' : 'regular'} />
                       {label}
                     </button>
-                    {/* Config sub-tabs */}
+                    {/* Config sub-tabs (mobile: only AI + Push) */}
                     {activeTab === id && subs && (
                       <div className="flex gap-0.5 mt-0.5 ml-0.5">
-                        {subs.map(sub => (
+                        {subs.filter(sub => sub.id === 'ai' || sub.id === 'push').map(sub => (
                           <button
                             key={sub.id}
                             onClick={() => setConfigSection(sub.id)}
