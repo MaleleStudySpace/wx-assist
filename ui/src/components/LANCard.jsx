@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { QRCodeSVG } from 'qrcode.react'
-import { ShieldCheck, Eye, EyeSlash, Warning } from '@phosphor-icons/react'
+import { ShieldCheck, Warning, Trash, Clock } from '@phosphor-icons/react'
 import { API_BASE } from './SharedComponents'
 
 export default function LANCard() {
@@ -9,12 +9,19 @@ export default function LANCard() {
   const [token, setToken] = useState(null)
   const [lanIp, setLanIp] = useState('')
   const [port, setPort] = useState(17327)
-  const [activeSessions, setActiveSessions] = useState(0)
+  const [sessions, setSessions] = useState([])
   const [showQr, setShowQr] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => { fetchStatus() }, [])
+
+  // Poll session list when LAN is enabled
+  useEffect(() => {
+    if (!enabled) return
+    const id = setInterval(fetchStatus, 3000)
+    return () => clearInterval(id)
+  }, [enabled])
 
   async function fetchStatus() {
     try {
@@ -24,7 +31,9 @@ export default function LANCard() {
       setEnabled(data.lan_enabled)
       setLanIp(data.lan_ip || '')
       setPort(data.port)
-      setActiveSessions(data.active_sessions || 0)
+      setSessions(data.sessions || [])
+      // Restore pair token from backend (persists until used/expired)
+      if (data.token) setToken(data.token)
     } catch { /* server may not be ready */ }
   }
 
@@ -40,6 +49,7 @@ export default function LANCard() {
         setLanIp(data.lan_ip)
         setPort(data.port)
         setShowQr(true)
+        await fetchStatus()
       } else {
         setError(data.error || '开启失败')
       }
@@ -53,10 +63,21 @@ export default function LANCard() {
       await fetch(`${API_BASE}/api/lan/disable`, { method: 'POST' })
       setEnabled(false)
       setToken(null)
-      setActiveSessions(0)
+      setSessions([])
       setShowQr(false)
     } catch {}
     setLoading(false)
+  }
+
+  async function handleKick(sessionId) {
+    try {
+      await fetch(`${API_BASE}/api/lan/kick`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId }),
+      })
+      await fetchStatus()
+    } catch {}
   }
 
   const qrUrl = enabled && token && lanIp
@@ -64,16 +85,14 @@ export default function LANCard() {
     : null
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* Status + toggle */}
       <div className="flex items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2 text-[13px] text-text-secondary min-w-0">
+        <div className="flex items-center gap-2 text-[13px] text-text-secondary min-w-0">
           {enabled ? (
             <>
               <ShieldCheck size={16} className="text-brand-green flex-shrink-0" />
-              <span className="truncate">
-                已连接设备：{activeSessions}
-              </span>
+              <span className="truncate">已连接 {sessions.length} 台设备</span>
               {lanIp && (
                 <span className="font-mono text-text-muted hidden sm:inline">{lanIp}:{port}</span>
               )}
@@ -95,49 +114,73 @@ export default function LANCard() {
         </button>
       </div>
 
-      {/* QR code section - only when enabled */}
+      {/* Token URL — always visible when enabled */}
       {enabled && qrUrl && (
-        <div className="flex flex-col items-center gap-3">
-          <button
+        <p className="text-[12px] text-text-muted font-mono text-center break-all max-w-[300px] select-all mx-auto">
+          {qrUrl}
+        </p>
+      )}
+
+      {/* Connected devices list — click device IP to toggle QR */}
+      {enabled && sessions.length > 0 && (
+        <div className="space-y-1">
+          <div
             onClick={() => setShowQr(!showQr)}
-            className="flex items-center gap-1.5 text-[13px] text-text-secondary hover:text-text-main transition-colors"
+            className="flex items-center justify-between px-3 py-2 rounded-lg bg-bg-raised/50 border border-border-main cursor-pointer hover:bg-bg-raised transition-colors"
           >
-            {showQr ? <EyeSlash size={16} /> : <Eye size={16} />}
-            {showQr ? '隐藏二维码' : '显示二维码'}
-          </button>
-
-          <AnimatePresence>
-            {showQr && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9 }}
-                className="flex flex-col items-center gap-3"
-              >
-                <div className="bg-white p-3 rounded-xl shadow-sm">
-                  <QRCodeSVG value={qrUrl} size={200} level="M" />
+            <span className="text-[12px] text-text-muted font-medium">
+              {showQr ? '点击隐藏二维码' : '点击显示二维码'} · {sessions.length} 台设备
+            </span>
+            <div className="flex items-center gap-2">
+              {sessions[0] && (
+                <span className="text-[11px] font-mono text-text-muted/60">{sessions[0].ip}</span>
+              )}
+            </div>
+          </div>
+          <div className="space-y-1 max-h-28 overflow-y-auto pl-1">
+            {sessions.map((s, i) => (
+              <div key={s.ip + i} className="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] hover:bg-bg-raised/30 transition-colors group">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-brand-green flex-shrink-0" />
+                  <span className="font-mono text-text-main truncate">{s.ip}</span>
+                  <span className="text-text-muted/50 text-[11px] hidden sm:inline">{s.connected_at}</span>
                 </div>
-                <p className="text-[12px] text-text-muted break-all text-center max-w-[300px] font-mono">
-                  {qrUrl}
-                </p>
-                <p className="text-[11px] text-text-muted text-center max-w-[300px]">
-                  使用手机扫描二维码即可远程操作，二维码 60 秒有效，关闭后重新开启可刷新。
-                </p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Manual entry URL — always visible, includes token */}
-          {!showQr && (
-            <p className="text-[12px] text-text-muted font-mono text-center break-all max-w-[300px]">{qrUrl}</p>
-          )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleKick(s.session_id) }}
+                  className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/10 text-text-muted hover:text-red-500 transition-all cursor-pointer"
+                  title="踢出设备"
+                >
+                  <Trash size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
+
+      {/* QR code — toggled by clicking device IP area */}
+      <AnimatePresence>
+        {enabled && showQr && qrUrl && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="flex flex-col items-center gap-2 overflow-hidden"
+          >
+            <div className="bg-white p-3 rounded-xl shadow-sm">
+              <QRCodeSVG value={qrUrl} size={200} level="M" />
+            </div>
+            <p className="text-[11px] text-text-muted text-center max-w-[300px]">
+              二维码 5 分钟内有效，被使用后自动失效
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Empty state */}
       {!enabled && (
         <p className="text-[13px] text-text-muted text-center py-2">
-          开启后，同一局域网内的手机可扫描二维码远程操作本机 wx-assist
+          开启后，同一局域网内的手机可扫码远程操作
         </p>
       )}
 

@@ -1091,7 +1091,7 @@ class _Lanauth:
         self._lan_enabled = False
         self._pair_token = None
         self._pair_expiry = 0.0  # monotonic time
-        self._sessions = {}  # token -> expiry (monotonic time)
+        self._sessions = {}  # token -> {expiry, ip, connected_at}
 
     @property
     def lan_enabled(self):
@@ -1102,7 +1102,7 @@ class _Lanauth:
         with self._lock:
             self._lan_enabled = True
             self._pair_token = os.urandom(16).hex()  # 32 hex chars, URL-safe
-            self._pair_expiry = time.monotonic() + 60
+            self._pair_expiry = time.monotonic() + 300  # 5 minutes
             return self._pair_token, _get_lan_ip()
 
     def disable(self):
@@ -1112,7 +1112,7 @@ class _Lanauth:
             self._pair_token = None
             self._sessions.clear()
 
-    def validate_pair_token(self, token: str) -> str | None:
+    def validate_pair_token(self, token: str, client_ip: str = "") -> str | None:
         """Validate one-time pair token and create a session. Returns session token or None."""
         with self._lock:
             if not self._lan_enabled:
@@ -1124,19 +1124,31 @@ class _Lanauth:
                 return None
             self._pair_token = None  # single use
             session = sha1(os.urandom(32)).hexdigest()
-            self._sessions[session] = time.monotonic() + 86400  # 24h
+            self._sessions[session] = {
+                "expiry": time.monotonic() + 86400,  # 24h
+                "ip": client_ip,
+                "connected_at": time.strftime("%H:%M:%S"),
+            }
             return session
 
     def check_session(self, token: str) -> bool:
         """Check if session token is valid."""
         with self._lock:
-            expiry = self._sessions.get(token)
-            if expiry is None:
+            info = self._sessions.get(token)
+            if info is None:
                 return False
-            if time.monotonic() > expiry:
+            if time.monotonic() > info["expiry"]:
                 del self._sessions[token]
                 return False
             return True
+
+    def kick_session(self, token: str) -> bool:
+        """Remove a specific session by token. Returns True if found and removed."""
+        with self._lock:
+            if token in self._sessions:
+                del self._sessions[token]
+                return True
+            return False
 
     @property
     def status(self) -> dict:
@@ -1145,8 +1157,26 @@ class _Lanauth:
                 "lan_enabled": self._lan_enabled,
                 "lan_ip": _get_lan_ip() if self._lan_enabled else "",
                 "port": 17327,
+                "token": self._pair_token if self._lan_enabled and self._pair_token else "",
                 "active_sessions": len(self._sessions),
+                "sessions": [
+                    {
+                        "ip": info["ip"],
+                        "connected_at": info["connected_at"],
+                        "session_id": token[:8],  # short identifier for kick UI
+                    }
+                    for token, info in self._sessions.items()
+                ],
             }
+
+    def kick_by_id(self, session_id: str) -> bool:
+        """Remove a session by its first-8-chars identifier. Returns True if found."""
+        with self._lock:
+            for token in list(self._sessions):
+                if token.startswith(session_id):
+                    del self._sessions[token]
+                    return True
+            return False
 
 
 def _get_lan_ip() -> str:
@@ -1237,7 +1267,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
         post_path = self.path.split("?")[0] if "?" in self.path else self.path
 
         if post_path in ("/api/config", "/api/config/import", "/api/config/test-connection", "/api/start", "/api/stop",
-                         "/api/lan/enable", "/api/lan/disable",
+                         "/api/lan/enable", "/api/lan/disable", "/api/lan/kick",
                          "/api/nicknames",
                          "/api/onboarding/reset",
                          "/api/onboarding/step1", "/api/onboarding/step2",
@@ -1293,9 +1323,10 @@ class _UIHandler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/chat/") or self.path.startswith("/api/fav/"):
             logger.info("[REQ-TRACE] start %s %s thread=%s", self.command, self.path, threading.current_thread().name)
         # ── LAN pairing (one-time token from QR code) ──────────
+        client_ip = self.client_address[0]
         if self.path.startswith("/?lan=") and self.command == "GET":
             token = self.path.split("=", 1)[1]
-            session = _lan_auth.validate_pair_token(token)
+            session = _lan_auth.validate_pair_token(token, client_ip)
             if session:
                 self.send_response(302)
                 self.send_header(
@@ -1311,7 +1342,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
             return
 
         # ── LAN auth check (non-localhost requests) ─────────────
-        client_ip = self.client_address[0]
         if client_ip not in ("127.0.0.1", "::1"):
             if not _lan_auth.lan_enabled:
                 self.send_json({"error": "LAN access is disabled"}, 403)
@@ -1357,6 +1387,15 @@ class _UIHandler(SimpleHTTPRequestHandler):
         # ── LAN control API ────────────────────────────────────────────
         if self.path == "/api/lan/status":
             self.send_json(_lan_auth.status)
+            return
+        if self.path == "/api/lan/kick" and self.command == "POST":
+            length = min(int(self.headers.get("Content-Length", "0")), 1024)
+            body = json.loads(self.rfile.read(length)) if length else {}
+            session_id = body.get("session_id", "")
+            if _lan_auth.kick_by_id(session_id):
+                self.send_json({"ok": True})
+            else:
+                self.send_json({"ok": False, "error": "未找到该设备"})
             return
         if self.path == "/api/lan/enable" and self.command == "POST":
             if not _bot_control.is_running():

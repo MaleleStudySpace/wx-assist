@@ -871,7 +871,7 @@ export default function ChatTab() {
     <motion.div initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -12 }}>
       <div className="flex flex-col lg:flex-row gap-4 h-[calc(100dvh-140px)]">
         {/* ── Left Panel ── */}
-        <div className="w-full lg:w-72 lg:flex-shrink-0 flex flex-col border border-border-main rounded-xl bg-bg-card overflow-hidden">
+        <div className="w-full lg:w-72 lg:flex-shrink-0 flex flex-col border border-border-main rounded-xl bg-bg-card overflow-hidden max-h-[40vh] lg:max-h-none">
           <div className="p-3 border-b border-border-main">
             {foldedView ? (
               <div className="flex items-center gap-2">

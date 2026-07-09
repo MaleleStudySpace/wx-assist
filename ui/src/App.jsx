@@ -43,6 +43,7 @@ export default function App() {
   const [configSection, setConfigSection] = useState('ai')
   const [botStatus, setBotStatus] = useState(null)
   const [onboardingDone, setOnboardingDone] = useState(null) // null = loading
+  const [authError, setAuthError] = useState(false) // true = LAN unauthorized
   const [showGuide, setShowGuide] = useState(false) // FeatureGuide only shows right after onboarding
   const [wsConnected, setWsConnected] = useState(false)
   const [showTaskCenter, setShowTaskCenter] = useState(false)
@@ -91,6 +92,13 @@ export default function App() {
           fetch(`${API_BASE}/api/onboarding/status`),
           fetch(`${API_BASE}/api/load-config`)
         ])
+        // If API returns 401/403, show unauthorized page instead of onboarding
+        if (!statusRes.ok) {
+          if (statusRes.status === 401 || statusRes.status === 403) {
+            setAuthError(true)
+            return
+          }
+        }
         const d = await statusRes.json()
         const config = await configRes.json()
         setOnboardingDone(d.onboarding_done)
@@ -179,6 +187,26 @@ export default function App() {
         <div className="text-center">
           <Spinner size={32} weight="bold" className="animate-spin text-brand-green mx-auto mb-4" />
           <p className="text-sm text-text-muted font-mono">正在加载...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Unauthorized access (phone without LAN session)
+  if (authError) {
+    return (
+      <div className="min-h-[100dvh] bg-bg-main flex items-center justify-center p-8">
+        <div className="text-center max-w-md">
+          <div className="w-16 h-16 rounded-full bg-status-error/10 flex items-center justify-center mx-auto mb-5">
+            <span className="text-2xl">🔒</span>
+          </div>
+          <h1 className="text-xl font-bold text-text-main mb-2">无权访问</h1>
+          <p className="text-sm text-text-secondary leading-relaxed">
+            当前设备未通过局域网认证。请在桌面端开启「LAN 远程访问」后，使用手机扫描二维码连接。
+          </p>
+          <p className="text-xs text-text-muted mt-6">
+            wx-assist · LAN 远程访问
+          </p>
         </div>
       </div>
     )
@@ -338,22 +366,22 @@ export default function App() {
                   {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
                 </button>
 
-                <span className="text-xs text-text-muted font-mono bg-bg-main border border-border-main px-4 py-1.5 rounded-full">
+                <span className="hidden md:inline text-xs text-text-muted font-mono bg-bg-main border border-border-main px-4 py-1.5 rounded-full">
                   已处理 {(status.messages_processed ?? 0).toLocaleString()} 条消息
                 </span>
                 {!wsConnected ? (
-                  <div className="flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold bg-[#d45656]/10 text-[#d45656] border border-[#d45656]/20 animate-pulse">
+                  <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-semibold bg-[#d45656]/10 text-[#d45656] border border-[#d45656]/20 animate-pulse">
                     <div className="w-1.5 h-1.5 rounded-full bg-[#d45656]" />
-                    服务器离线
+                    <span className="hidden sm:inline">服务器离线</span>
                   </div>
                 ) : (
-                  <div className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold transition-all border ${
+                  <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-semibold transition-all border ${
                       status.running
                         ? 'bg-brand-green-light text-brand-green-hover dark:text-brand-green border-brand-green/20'
                         : 'bg-bg-raised text-text-muted border-border-main'
                     }`}>
                     <div className={`w-1.5 h-1.5 rounded-full ${status.running ? 'bg-brand-green animate-pulse' : 'bg-slate-500'}`} />
-                    {status.running ? '服务运行中' : '服务已停'}
+                    <span className="hidden sm:inline">{status.running ? '服务运行中' : '服务已停'}</span>
                   </div>
                 )}
               </div>
@@ -361,20 +389,39 @@ export default function App() {
 
             {/* Mobile tab strip */}
             <div className="lg:hidden overflow-x-auto border-b border-border-main bg-bg-main/60 backdrop-blur-md">
-              <div className="flex gap-1 px-3 py-2 min-w-max">
-                {TABS.map(({ id, label, icon: Icon }) => (
-                  <button
-                    key={id}
-                    onClick={() => setActiveTab(id)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
-                      activeTab === id
-                        ? 'bg-brand-green/15 text-brand-green'
-                        : 'text-text-muted hover:text-text-main hover:bg-bg-raised/50'
-                    }`}
-                  >
-                    <Icon size={14} weight={activeTab === id ? 'fill' : 'regular'} />
-                    {label}
-                  </button>
+              <div className="flex gap-1 px-2 py-1.5 min-w-max">
+                {TABS.map(({ id, label, icon: Icon, subs }) => (
+                  <div key={id} className="flex-shrink-0">
+                    <button
+                      onClick={() => { setActiveTab(id); if (subs) setConfigSection(subs[0].id) }}
+                      className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[12px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                        activeTab === id
+                          ? 'bg-brand-green/15 text-brand-green font-semibold'
+                          : 'text-text-muted hover:text-text-main hover:bg-bg-raised/50'
+                      }`}
+                    >
+                      <Icon size={13} weight={activeTab === id ? 'fill' : 'regular'} />
+                      {label}
+                    </button>
+                    {/* Config sub-tabs */}
+                    {activeTab === id && subs && (
+                      <div className="flex gap-0.5 mt-0.5 ml-0.5">
+                        {subs.map(sub => (
+                          <button
+                            key={sub.id}
+                            onClick={() => setConfigSection(sub.id)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                              configSection === sub.id
+                                ? 'bg-brand-green/20 text-brand-green'
+                                : 'text-text-muted/70 hover:text-text-main'
+                            }`}
+                          >
+                            {sub.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>
