@@ -9,6 +9,7 @@ Runs in a daemon thread — no impact on the main bot loop.
 import json
 import logging
 import os
+import socket
 import struct
 import threading
 import time
@@ -1080,6 +1081,116 @@ def _handle_ws_upgrade(headers, conn):
     return True
 
 
+# ── LAN Auth Manager ──────────────────────────────────────────────────
+
+class _Lanauth:
+    """Manages LAN pairing, session tokens, and access control."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._lan_enabled = False
+        self._pair_token = None
+        self._pair_expiry = 0.0  # monotonic time
+        self._sessions = {}  # token -> expiry (monotonic time)
+
+    @property
+    def lan_enabled(self):
+        return self._lan_enabled
+
+    def enable(self) -> tuple:
+        """Enable LAN mode, generate one-time pair token. Returns (token, lan_ip)."""
+        with self._lock:
+            self._lan_enabled = True
+            self._pair_token = os.urandom(16).hex()  # 32 hex chars, URL-safe
+            self._pair_expiry = time.monotonic() + 60
+            return self._pair_token, _get_lan_ip()
+
+    def disable(self):
+        """Disable LAN mode, revoke all sessions."""
+        with self._lock:
+            self._lan_enabled = False
+            self._pair_token = None
+            self._sessions.clear()
+
+    def validate_pair_token(self, token: str) -> str | None:
+        """Validate one-time pair token and create a session. Returns session token or None."""
+        with self._lock:
+            if not self._lan_enabled:
+                return None
+            if token != self._pair_token:
+                return None
+            if time.monotonic() > self._pair_expiry:
+                self._pair_token = None
+                return None
+            self._pair_token = None  # single use
+            session = sha1(os.urandom(32)).hexdigest()
+            self._sessions[session] = time.monotonic() + 86400  # 24h
+            return session
+
+    def check_session(self, token: str) -> bool:
+        """Check if session token is valid."""
+        with self._lock:
+            expiry = self._sessions.get(token)
+            if expiry is None:
+                return False
+            if time.monotonic() > expiry:
+                del self._sessions[token]
+                return False
+            return True
+
+    @property
+    def status(self) -> dict:
+        with self._lock:
+            return {
+                "lan_enabled": self._lan_enabled,
+                "lan_ip": _get_lan_ip() if self._lan_enabled else "",
+                "port": 17327,
+                "active_sessions": len(self._sessions),
+            }
+
+
+def _get_lan_ip() -> str:
+    """Detect primary LAN IP address via UDP trick (does not send data)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.1)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def _parse_cookie(cookie_str: str, name: str) -> str | None:
+    """Extract a named cookie from a Cookie header string."""
+    if not cookie_str:
+        return None
+    for part in cookie_str.split(";"):
+        part = part.strip()
+        if part.startswith(f"{name}="):
+            return part[len(name) + 1:]
+    return None
+
+
+def _is_lan_public(path: str, method: str) -> bool:
+    """Check if a path is accessible without LAN session auth."""
+    if method == "OPTIONS":
+        return True
+    if path in ("/", "/index.html"):
+        return True
+    if path.startswith("/assets/"):
+        return True
+    if path == "/api/lan/status":
+        return True
+    if path.startswith("/?lan="):
+        return True
+    return False
+
+
+_lan_auth = _Lanauth()
+
+
 class _UIHandler(SimpleHTTPRequestHandler):
     """HTTP handler: static files + WebSocket upgrade + API."""
 
@@ -1126,6 +1237,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
         post_path = self.path.split("?")[0] if "?" in self.path else self.path
 
         if post_path in ("/api/config", "/api/config/import", "/api/config/test-connection", "/api/start", "/api/stop",
+                         "/api/lan/enable", "/api/lan/disable",
                          "/api/nicknames",
                          "/api/onboarding/reset",
                          "/api/onboarding/step1", "/api/onboarding/step2",
@@ -1180,6 +1292,37 @@ class _UIHandler(SimpleHTTPRequestHandler):
         req_t0 = time.monotonic()
         if self.path.startswith("/api/chat/") or self.path.startswith("/api/fav/"):
             logger.info("[REQ-TRACE] start %s %s thread=%s", self.command, self.path, threading.current_thread().name)
+        # ── LAN pairing (one-time token from QR code) ──────────
+        if self.path.startswith("/?lan=") and self.command == "GET":
+            token = self.path.split("=", 1)[1]
+            session = _lan_auth.validate_pair_token(token)
+            if session:
+                self.send_response(302)
+                self.send_header(
+                    "Set-Cookie",
+                    f"lan_session={session}; HttpOnly; SameSite=Lax; Max-Age=86400; Path=/",
+                )
+                self.send_header("Location", "/")
+                self.end_headers()
+            else:
+                self.send_response(302)
+                self.send_header("Location", "/?lan_error=1")
+                self.end_headers()
+            return
+
+        # ── LAN auth check (non-localhost requests) ─────────────
+        client_ip = self.client_address[0]
+        if client_ip not in ("127.0.0.1", "::1"):
+            if not _lan_auth.lan_enabled:
+                self.send_json({"error": "LAN access is disabled"}, 403)
+                return
+            path_only = self.path.split("?")[0]
+            if not _is_lan_public(path_only, self.command):
+                session = _parse_cookie(self.headers.get("Cookie", ""), "lan_session")
+                if not session or not _lan_auth.check_session(session):
+                    self.send_json({"error": "unauthorized"}, 401)
+                    return
+
         # ── WebSocket upgrade ─────────────────────────────────────────
         if self.path == "/ws":
             connection_header = self.headers.get("Connection", "").lower()
@@ -1210,6 +1353,22 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     self.send_response(400)
                     self.end_headers()
                     return
+
+        # ── LAN control API ────────────────────────────────────────────
+        if self.path == "/api/lan/status":
+            self.send_json(_lan_auth.status)
+            return
+        if self.path == "/api/lan/enable" and self.command == "POST":
+            if not _bot_control.is_running():
+                self.send_json({"ok": False, "error": "请先启动 Bot"})
+                return
+            token, ip = _lan_auth.enable()
+            self.send_json({"ok": True, "token": token, "lan_ip": ip, "port": 17327})
+            return
+        if self.path == "/api/lan/disable" and self.command == "POST":
+            _lan_auth.disable()
+            self.send_json({"ok": True})
+            return
 
         # ── API: Start bot ────────────────────────────────────────────
         if self.path == "/api/start":
@@ -3452,7 +3611,7 @@ def _run_server(host, port):
     server.serve_forever()
 
 
-def start_web_server(host="127.0.0.1", port=17327):
+def start_web_server(host="0.0.0.0", port=17327):
     """Start the web UI in a daemon thread (idempotent)."""
     if not _server_guard.try_start():
         logger.debug("Web server already running, skipping duplicate start")
