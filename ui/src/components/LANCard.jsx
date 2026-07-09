@@ -171,7 +171,7 @@ export default function LANCard() {
               <QRCodeSVG value={qrUrl} size={200} level="M" />
             </div>
             <p className="text-[11px] text-text-muted text-center max-w-[300px]">
-              二维码 5 分钟内有效，被使用后自动失效
+              关闭远程访问前长期有效
             </p>
           </motion.div>
         )}
