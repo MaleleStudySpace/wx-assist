@@ -293,6 +293,11 @@ class OpenAICompatSummarizer(AbstractSummarizer):
 
         content = msg.content or ""
 
+        # If LLM called tools but left content empty, annotate so log is meaningful
+        if not content and tool_calls:
+            tool_names_str = ", ".join(tc["function"]["name"] for tc in tool_calls)
+            content = f"[调用工具: {tool_names_str}]"
+
         # Build user_prompt string from messages (for logging)
         user_lines = []
         for m in messages:
@@ -319,6 +324,7 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             token_in=token_in, token_out=token_out,
             extra={"tool_calls": len(tool_calls) if tool_calls else 0,
                    "tools": ",".join(tool_names),
+                   "tool_defs": tools,
                    "messages": len(messages)},
         )
 
