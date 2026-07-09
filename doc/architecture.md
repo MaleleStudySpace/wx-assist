@@ -16,6 +16,7 @@
 | 实时通信 | WebSocket（状态/事件推送）+ SSE（AI 流式输出） |
 | 调度 | 自定义 daemon 线程（群聊摘要 / 公众号摘要） |
 | 持久化 | SQLite（消息 / 通知队列）+ JSON（助手配置） |
+| 语义检索 | ChromaDB（向量库）+ fastembed / ONNX Runtime（本地向量化） |
 | 打包 | PyInstaller → `wx-assist.exe` |
 
 ## 目录结构
@@ -48,6 +49,12 @@ src/
 │   ├── oa_parser.py          # 文章解析
 │   ├── oa_reader.py          # 全文抓取
 │   ├── outbox.py             # SQLite 通知队列
+│   ├── rag/                  # RAG 语义检索子系统
+│   │   ├── engine.py         # 语义检索引擎（embed + rerank + retrieve）
+│   │   ├── embedder.py       # fastembed + ONNX Runtime 本地向量化
+│   │   ├── vector_store.py   # ChromaDB 向量存储封装
+│   │   ├── chunking.py       # 文本分块策略
+│   │   └── reranker.py       # 检索结果重排序
 │   └── task_center.py        # 任务中心 SQLite 持久化
 │
 ├── summarize/                # AI 后端
@@ -115,13 +122,21 @@ desktop.py
    - OAMonitorEngine（公众号即时提醒）
    - TaskCenter（任务中心）
    - Outbox（通知队列）
+   - ContentCache（OA/SNS/Fav 数据本地缓存）
 7. AI Agent：
    - ToolExecutor（注册 9 个工具 + confirm_action）
    - AgentEngine（ReAct Loop + 记忆系统）
    - MCP Server（端口 17328，标准 JSON-RPC 2.0）
    - 注入 Router（iLink DM → Agent）
-8. iLink Receiver 自动启动（绑定后轮询消息）
-9. backend.start(callback) — 阻塞式轮询群消息
+8. RAG 语义检索（如果 AI 可用）：
+   - FastEmbedder（本地 ONNX 模型，~182MB）
+   - VectorStore（ChromaDB 初始化，WAL 模式）
+   - RAG Engine（embed + retrieve + rerank）
+   - ContentCache 增量索引定时器（OA 60s / SNS 5min / Fav 10min）
+   - 首次启动自动全量 sync + 全量索引
+   - 重启时 cache 有数据则跳过 sync，增量索引仅处理新增内容
+9. iLink Receiver 自动启动（绑定后轮询消息）
+10. backend.start(callback) — 阻塞式轮询群消息
 ```
 
 ### 关键约束
@@ -184,6 +199,7 @@ ILinkPush.send_message(reply) → 用户微信收到回复
 | 工具名 | 类型 | 需确认 | 用途 |
 |--------|:----:|:------:|------|
 | `get_status` | 读 | ❌ | 查看机器人运行状态 |
+| `search_chat_history` | 读 | ❌ | RAG 语义搜索聊天记录、文章、朋友圈 |
 | `list_digests` | 读 | ❌ | 查看已配置的定时摘要 |
 | `list_alerts` | 读 | ❌ | 查看已配置的关键词预警 |
 | `list_oa_groups` | 读 | ❌ | 查看公众号监控分组 |
@@ -220,6 +236,95 @@ ILinkPush.send_message(reply) → 用户微信收到回复
 ### 欢迎语
 
 首条 DM 触发一次，工具列表从 ToolRegistry 动态生成，新增工具欢迎语自动更新。
+
+## RAG 语义检索
+
+RAG（Retrieval-Augmented Generation）对公众号文章、朋友圈、收藏内容自动建立语义索引，在 AI 对话和 Agent 检索中精准召回最相关内容，不再依赖关键词"猜"。
+
+### 架构
+
+```
+┌───────────────────────────────────────────────────────────┐
+│                   数据源 (ContentCache)                     │
+│  公众号文章 (oa_cache) · 朋友圈 (sns_cache) · 收藏 (fav_cache) │
+└───────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────┐
+│                     增量索引 (定时触发)                      │
+│  60s: OA 新文章 → 分块 → embed → ChromaDB                │
+│  5min: 朋友圈新内容 → 分块 → embed → ChromaDB              │
+│  10min: 收藏新内容 → 分块 → embed → ChromaDB               │
+│  游标持久化 (data/last_indexed.json) — 重启不重索引          │
+└───────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────┐
+│                    Vector Store (ChromaDB)                  │
+│  本地存储 · 无需联网 · WAL 模式 · HNSW 索引                 │
+└───────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────┐
+│                     RAG Engine                              │
+│  query(q, top_k=5) → embed → retrieve → rerank → return    │
+│  同时返回文档原文 + 源信息（来源/时间/链接）                  │
+└───────────────────────────────────────────────────────────┘
+                              │
+                  ┌───────────┴───────────┐
+                  ▼                       ▼
+┌──────────────────────┐  ┌──────────────────────┐
+│  AI Chat 上下文注入   │  │  Agent 工具调用      │
+│  AI 对话自动拉取      │  │  search_chat_history │
+│  相关文章增强回答     │  │  工具执行语义检索     │
+└──────────────────────┘  └──────────────────────┘
+```
+
+### 向量化
+
+| 组件 | 说明 |
+|------|------|
+| 模型 | BAAI/bge-small-zh-v1.5（中文优化，384 维） |
+| 推理 | ONNX Runtime（本地 CPU，无 GPU 需求） |
+| 内存 | 固定 512MB 内存池（`ORT_CPU_MEM_ARENA_SIZE_MB=512`） |
+| 模型文件 | 随包分发（`models/` 目录，~182MB），无需联网下载 |
+
+### 索引策略
+
+- **增量索引**：只处理 `cached_at > last_indexed_at` 的新数据，避免全量重复编码
+- **重启保护**：游标持久化到 `data/last_indexed.json`，原子写入防写半截崩溃
+- **防并发**：同一数据源的重索引请求排队，不会重复索引
+
+### 检索流程
+
+```
+用户提问 "xxx"
+    │
+    ▼
+RAG Engine.query(q, top_k=5)
+    │
+    ├─ 1. embed(query) → 向量
+    │      ONNX Runtime 本地推理，~50ms
+    │
+    ├─ 2. ChromaDB.similarity_search() → N 条候选
+    │      HNSW 近似检索，亚毫秒
+    │
+    ├─ 3. Reranker 重排序 → top_k 条
+    │      Cross-encoder 精排，提升准确率
+    │
+    └─ 4. 返回 {text, source_type, source_name, url, timestamp}
+    │
+    ▼
+AI Chat / Agent 使用上下文生成回答
+```
+
+### 数据源覆盖
+
+| 数据源 | 缓存表 | 覆盖内容 | 索引粒度 |
+|--------|--------|----------|----------|
+| 公众号文章 | `oa_cache` | 标题 + 摘要 + 全文 | 按文章（含分块） |
+| 朋友圈 | `sns_cache` | 正文 + 图片描述 | 按动态（含分块） |
+| 收藏 | `fav_cache` | 标题 + 链接摘要 | 按条目（含分块） |
 
 ## MCP Server (Model Context Protocol)
 
@@ -320,6 +425,7 @@ React 单页应用，左侧固定导航 + 右侧内容区：
 | WebSocket 广播 | snapshot-then-send | 广播前快照订阅者列表 |
 | .env 写入 | 原子写入 + 文件锁 | tmp + `os.replace()` |
 | Agent `_pending_confirm` | 实例级，无竞争 | 单 iLink 单用户，不会并发 |
+| RAG 增量索引 | `threading.Lock` 单锁 + `_pending` 防重入 | 同源串行，异源排队，`finally` 清锁 |
 
 ## 配置体系
 
@@ -329,7 +435,7 @@ React 单页应用，左侧固定导航 + 右侧内容区：
 
 ## 依赖关系
 
-后端核心依赖：`anthropic`、`openai`、`pydantic`、`pywin32`、`pywebview`、`zstandard`、`pycryptodome`、`Pillow`、`psutil`
+后端核心依赖：`anthropic`、`openai`、`pydantic`、`pywin32`、`pywebview`、`zstandard`、`pycryptodome`、`Pillow`、`psutil`、`chromadb`（向量库）、`fastembed`（本地嵌入）、`onnxruntime`（推理运行时）
 
 前端核心依赖：`react` 19、`framer-motion`、`@phosphor-icons/react`、`qrcode.react`、`tailwindcss` 4
 
@@ -345,4 +451,5 @@ React 单页应用，左侧固定导航 + 右侧内容区：
 | 调度器 | [modules/scheduler.md](modules/scheduler.md) | cron 约定与调度设计 |
 | 通知队列 | [modules/notification-outbox.md](modules/notification-outbox.md) | 统一通知模型 |
 | Agent 系统 | — | 本文档已涵盖 Agent 架构设计 |
+| RAG 语义检索 | — | 本文档已涵盖 RAG 架构设计 |
 | MCP Server | — | 本文档已涵盖 MCP 协议和端口 |
