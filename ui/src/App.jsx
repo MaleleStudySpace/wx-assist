@@ -194,8 +194,8 @@ export default function App() {
       {/* Ambient wave background */}
       <AmbientWaveBackground />
 
-      {/* Sidebar */}
-      <div className="fixed left-0 top-0 h-full w-56 bg-bg-main border-r border-border-main z-40">
+      {/* Sidebar — hidden on mobile, always visible on desktop */}
+      <div className="hidden lg:block fixed left-0 top-0 h-full w-56 bg-bg-main border-r border-border-main z-40">
         <div className="p-5 flex flex-col h-full justify-between">
           <div>
             <div className="flex items-center gap-3 mb-8">
@@ -291,7 +291,7 @@ export default function App() {
       </div>
 
       {/* Main content */}
-      <div className="ml-56">
+      <div className="lg:ml-56">
         {showGuide ? (
           /* Feature Guide — only shown once immediately after onboarding completes */
           <FeatureGuide
@@ -359,6 +359,26 @@ export default function App() {
               </div>
             </div>
 
+            {/* Mobile tab strip */}
+            <div className="lg:hidden overflow-x-auto border-b border-border-main bg-bg-main/60 backdrop-blur-md">
+              <div className="flex gap-1 px-3 py-2 min-w-max">
+                {TABS.map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => setActiveTab(id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                      activeTab === id
+                        ? 'bg-brand-green/15 text-brand-green'
+                        : 'text-text-muted hover:text-text-main hover:bg-bg-raised/50'
+                    }`}
+                  >
+                    <Icon size={14} weight={activeTab === id ? 'fill' : 'regular'} />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeTab}
@@ -366,7 +386,7 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.2 }}
-                className="p-8"
+                className="p-4 lg:p-8"
               >
                 {activeTab === 'dashboard' && <Dashboard status={status} onTabChange={setActiveTab} />}
                 {activeTab === 'config' && <ConfigPanel activeSection={configSection} onNavigate={setConfigSection} />}
