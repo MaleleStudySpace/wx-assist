@@ -2,7 +2,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle, Warning, FloppyDisk, Info, DownloadSimple, UploadSimple, CircleNotch, MagnifyingGlass, Lightning, PaperPlaneTilt, QrCode, SignOut, TestTube, ChatCircle, Trash, CaretDown, CaretRight, X } from '@phosphor-icons/react'
 import { QRCodeSVG } from 'qrcode.react'
-import { spring, Field, Toggle, Select, Input, API_BASE } from './SharedComponents'
+import { spring, Field, Toggle, Select, Input, API_BASE, getWsUrl } from './SharedComponents'
 import ChatDrawer from './ChatDrawer'
 
 const pageTransition = {
@@ -1352,7 +1352,7 @@ function PushHistory() {
     }
     let ws = window.__push_history_ws
     if (!ws || ws.readyState === WebSocket.CLOSED) {
-      ws = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      ws = new WebSocket(getWsUrl())
       window.__push_history_ws = ws
     }
     ws.addEventListener('message', handleMessage)

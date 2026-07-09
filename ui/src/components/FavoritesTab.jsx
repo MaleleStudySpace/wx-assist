@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Star, DownloadSimple, MagnifyingGlass, Clock, File, Image, Video, Link, FileText, Funnel, ArrowsDownUp, FolderOpen, Play, Pause, Microphone, ChatsCircle, CaretDown, ChatCircleDots, Tag } from '@phosphor-icons/react'
-import { Toggle, SectionHeader, API_BASE } from './SharedComponents'
+import { Toggle, SectionHeader, API_BASE, getWsUrl } from './SharedComponents'
 import ChatDrawer from './ChatDrawer'
 import AIChatPanel from './AIChatPanel'
 import AIChatConfig from './AIChatConfig'
@@ -644,7 +644,7 @@ export default function FavoritesTab() {
 
     let ws = window.__fav_ws
     if (!ws || ws.readyState === WebSocket.CLOSED) {
-      ws = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      ws = new WebSocket(getWsUrl())
       window.__fav_ws = ws
     }
     ws.addEventListener('message', handleMessage)

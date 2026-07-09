@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Eye, DownloadSimple, MagnifyingGlass, Clock, ShieldCheck, ShieldWarning, Heart, ChatCircle, CaretDown, Funnel, X, MapPin, FolderOpen, Sparkle } from '@phosphor-icons/react'
-import { ImageLightbox, API_BASE } from './SharedComponents'
+import { ImageLightbox, API_BASE, getWsUrl } from './SharedComponents'
 import SnsAiDrawer from './SnsAiDrawer'
 
 function SnsPostCard({ post, avatarCache }) {
@@ -342,7 +342,7 @@ export default function MomentsTab() {
     }
     let ws = window.__moments_ws
     if (!ws || ws.readyState === WebSocket.CLOSED) {
-      ws = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      ws = new WebSocket(getWsUrl())
       window.__moments_ws = ws
     }
     ws.addEventListener('message', handleMessage)

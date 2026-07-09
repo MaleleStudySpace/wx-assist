@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, ChatCircleDots, Newspaper, Clock, Spinner } from '@phosphor-icons/react'
-import { API_BASE } from './SharedComponents'
+import { API_BASE, getWsUrl } from './SharedComponents'
 
 const TASK_TYPES = {
   group_digest: { label: '群聊摘要', icon: ChatCircleDots, color: 'text-brand-green' },
@@ -94,7 +94,7 @@ export default function TaskCenter({ open, onClose }) {
     }
     let ws = window.__task_center_ws
     if (!ws || ws.readyState === WebSocket.CLOSED) {
-      ws = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      ws = new WebSocket(getWsUrl())
       window.__task_center_ws = ws
     }
     ws.addEventListener('message', handleMessage)

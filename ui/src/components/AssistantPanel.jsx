@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle, Warning, Spinner, MagnifyingGlass, Bell, Clock, ChatCircle, CaretDown, CaretRight, EnvelopeOpen, Archive, Lightning, Trash, X, Plus, Play } from '@phosphor-icons/react'
-import { Toggle, SectionHeader, TagInput, API_BASE } from './SharedComponents'
+import { Toggle, SectionHeader, TagInput, API_BASE, getWsUrl } from './SharedComponents'
 
 const pageTransition = {
   initial: { opacity: 0, x: 12 },
@@ -352,7 +352,7 @@ export default function AssistantPanel() {
     }
     let ws = window.__assistant_ws
     if (!ws || ws.readyState === WebSocket.CLOSED) {
-      ws = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      ws = new WebSocket(getWsUrl())
       window.__assistant_ws = ws
     }
     ws.addEventListener('message', handleMessage)

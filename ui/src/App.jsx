@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Gear, ChartLine, Scroll, Spinner, Sun, Moon, ChatCircleDots, Star, Eye, Newspaper, Chats, PaperPlaneTilt, Bell } from '@phosphor-icons/react'
-import { API_BASE } from './components/SharedComponents'
+import { API_BASE, getWsUrl } from './components/SharedComponents'
 import Dashboard from './components/Dashboard'
 import ConfigPanel from './components/ConfigPanel'
 import AssistantPanel from './components/AssistantPanel'
@@ -117,7 +117,7 @@ export default function App() {
     let socket = null
 
     function connectWS() {
-      socket = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      socket = new WebSocket(getWsUrl())
       socket.onopen = () => {
         setWsConnected(true)
       }

@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Chats, ChatsCircle, CaretDown, MagnifyingGlass, Clock, Download, ArrowsClockwise, Play, Pause, X, FileText, Image, VideoCamera, Microphone, Link, Eye, User, ArrowDown, Users, ChatCircleDots, ShieldCheck, ShieldWarning } from '@phosphor-icons/react'
-import { ImageLightbox, Avatar, API_BASE } from './SharedComponents'
+import { ImageLightbox, Avatar, API_BASE, getWsUrl } from './SharedComponents'
 import ChatDrawer from './ChatDrawer'
 import AIChatPanel from './AIChatPanel'
 import AIChatConfig from './AIChatConfig'
@@ -531,7 +531,7 @@ export default function ChatTab() {
     }
     let ws = window.__chat_ws
     if (!ws || ws.readyState === WebSocket.CLOSED) {
-      ws = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      ws = new WebSocket(getWsUrl())
       window.__chat_ws = ws
     }
     ws.addEventListener('message', handleMessage)

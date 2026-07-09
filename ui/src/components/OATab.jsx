@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Newspaper, MagnifyingGlass, Clock, Plus, Trash, Pencil, FileText, Play, Folder, X, Export, Globe, ArrowsClockwise, Sparkle, Info, CaretDown, CaretUp, NotePencil, CodeBlock, FilmStrip, ChartBar, NewspaperClipping, CaretDown as ChevronDown, CaretUp as ChevronUp, Bell, ToggleLeft } from '@phosphor-icons/react'
-import { Toggle, Input, API_BASE } from './SharedComponents'
+import { Toggle, Input, API_BASE, getWsUrl } from './SharedComponents'
 
 // ── Preset cron schedules for easy selection ──
 // Fixed rule: one trigger per line, minute/hour single int, day/month *, dow range/list/star
@@ -1070,7 +1070,7 @@ export default function OATab() {
     }
     let ws = window.__oa_ws
     if (!ws || ws.readyState === WebSocket.CLOSED) {
-      ws = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      ws = new WebSocket(getWsUrl())
       window.__oa_ws = ws
     }
     ws.addEventListener('message', handleMessage)
