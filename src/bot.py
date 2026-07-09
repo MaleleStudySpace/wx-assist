@@ -438,6 +438,8 @@ class Bot:
                 status_fn=get_status_snapshot,
                 task_center=task_center,
                 scheduler=assistant_scheduler,
+                content_cache=content_cache,
+                oa_monitor=oa_monitor,
             )
             agent_engine = AgentEngine(
                 summarizer=summarizer,

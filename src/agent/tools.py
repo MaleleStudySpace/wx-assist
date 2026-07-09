@@ -14,6 +14,8 @@ from src.assistant.config import (
     save_assistant_config,
     AlertGroup,
     DigestGroup,
+    OAGroup,
+    OAMonitorGroup,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,13 +37,15 @@ class ToolExecutor:
 
     def __init__(self, store, summarizer,
                  status_fn=None, task_center=None, scheduler=None,
-                 rag=None):
+                 rag=None, content_cache=None, oa_monitor=None):
         self._store = store
         self._summarizer = summarizer
         self._status_fn = status_fn
         self._task_center = task_center
         self._scheduler = scheduler
         self._rag = rag
+        self._content_cache = content_cache
+        self._oa_monitor = oa_monitor
 
         from .registry import ToolRegistry
         self.registry = ToolRegistry()
@@ -115,12 +119,12 @@ class ToolExecutor:
             handler=self._handle_list_tasks,
         )
 
-        # ── run_digest (写操作，需 confirm) ─────────────────────────
+        # ── run_digest (消耗 AI，直接执行) ────────────────────────────
         r.register(
             name="run_digest",
             description="为指定群聊手动生成近期消息摘要。"
                        "用户说'总结一下某某群'、'群里说了什么'时调用。"
-                       "这是写操作，会消耗 AI 配额。",
+                       "直接执行，不需用户二次确认。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -137,15 +141,14 @@ class ToolExecutor:
                 "required": ["group_name"],
             },
             handler=self._handle_run_digest,
-            requires_confirm=True,
         )
 
-        # ── run_oa_digest (写操作，需 confirm) ──────────────────────
+        # ── run_oa_digest (消耗 AI，直接执行) ─────────────────────────
         r.register(
             name="run_oa_digest",
             description="为指定公众号分组生成文章摘要。"
                        "用户说'总结某某公众号'、'公众号有什么新文章'时调用。"
-                       "这是写操作，会消耗 AI 配额。",
+                       "直接执行，不需用户二次确认。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -157,7 +160,26 @@ class ToolExecutor:
                 "required": ["group_name"],
             },
             handler=self._handle_run_oa_digest,
-            requires_confirm=True,
+        )
+
+        # ── search_oa_accounts (只读查询) ──────────────────────────
+        r.register(
+            name="search_oa_accounts",
+            description="【只读查询】根据公众号显示名称模糊搜索已关注的公众号账号。"
+                       "返回匹配的公众号名称和 gh_id。"
+                       "在调用 add_oa_monitor 之前，建议先调此工具确认公众号存在。"
+                       "用户说'帮我盯着某个公众号'、但不确定名称时调用。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "公众号名称关键词，例如'机器之心'、'AI'",
+                    },
+                },
+                "required": ["query"],
+            },
+            handler=self._handle_search_oa_accounts,
         )
 
         # ── add_alert (写操作，需 confirm) ──────────────────────────
@@ -189,16 +211,18 @@ class ToolExecutor:
         # ── add_digest (写操作，需 confirm) ─────────────────────────
         r.register(
             name="add_digest",
-            description="为指定群聊配置定时消息摘要。到设定时间，系统自动生成"
-                       "群聊消息摘要并可选推送到微信。"
-                       "用户说'每天早上9点给我发群摘要'时调用。"
-                       "这是写操作，会修改系统配置。",
+            description="【群聊定时摘要】为指定群聊配置定时消息摘要。"
+                       "配置后，每天在设定时间自动生成该群的聊天摘要并推送到微信。"
+                       "如果该群已存在定时摘要配置，则更新已有配置。"
+                       "用户说'每天早上9点给我发群摘要'、'帮我总结项目群的消息'时调用。"
+                       "这是写操作，会修改系统配置。"
+                       "调用前需明确：群聊名称、生成时间（HH:MM）。",
             parameters={
                 "type": "object",
                 "properties": {
                     "group_name": {
                         "type": "string",
-                        "description": "群聊名称",
+                        "description": "群聊名称，例如'项目群'、'技术交流群'",
                     },
                     "schedule": {
                         "type": "string",
@@ -210,10 +234,87 @@ class ToolExecutor:
                         "description": "回看最近多少小时的消息，默认 6",
                         "default": 6,
                     },
+                    "push_target": {
+                        "type": "string",
+                        "description": "推送方式：\"ilink\"=推送到微信，\"\"=不推送，默认 \"ilink\"",
+                        "default": "ilink",
+                    },
                 },
                 "required": ["group_name"],
             },
             handler=self._handle_add_digest,
+            requires_confirm=True,
+        )
+
+        # ── add_oa_scheduled_digest (写操作，需 confirm) ──────────────
+        r.register(
+            name="add_oa_scheduled_digest",
+            description="【公众号定时摘要】为指定公众号分组配置定时文章摘要。"
+                       "配置后，每天在设定时间自动总结该分组内所有公众号的最新文章并推送到微信。"
+                       "如果该分组已存在定时摘要配置，则更新已有配置。"
+                       "用户说'每天早上9点总结AI学习的文章'时调用。"
+                       "这是写操作，会修改系统配置。"
+                       "调用前需先调 list_oa_groups 确认分组存在。"
+                       "⚠️ 注意：group_name 是公众号分组名称（如'AI学习'），不是单个公众号名称。"
+                       "如果用户说的是单个公众号名（如'机器之心'），请先查它属于哪个分组。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "group_name": {
+                        "type": "string",
+                        "description": "公众号分组名称，如'AI学习'、'科技快讯'。"
+                                       "必须先调 list_oa_groups 确认存在。"
+                                       "注意：不是单个公众号名称！",
+                    },
+                    "schedule": {
+                        "type": "string",
+                        "description": "生成时间，24小时制 HH:MM 格式，默认 08:00",
+                        "default": "08:00",
+                    },
+                    "push_target": {
+                        "type": "string",
+                        "description": "推送方式：\"ilink\"=推送到微信，\"\"=不推送，默认 \"ilink\"",
+                        "default": "ilink",
+                    },
+                    "template": {
+                        "type": "string",
+                        "description": "摘要模板：\"default\"（默认）/\"tech\"/\"entertainment\"",
+                        "default": "default",
+                    },
+                },
+                "required": ["group_name"],
+            },
+            handler=self._handle_add_oa_scheduled_digest,
+            requires_confirm=True,
+        )
+
+        # ── add_oa_monitor (写操作，需 confirm) ───────────────────────
+        r.register(
+            name="add_oa_monitor",
+            description="【公众号文章更新提醒】为指定公众号开启文章更新推送。"
+                       "当该公众号发布新文章时，系统立即推送通知到微信。"
+                       "用户说'帮我盯着机器之心的文章更新'、'关注XX公众号的动态'时调用。"
+                       "这是写操作，会修改系统配置。"
+                       "调用前建议先调 search_oa_accounts 确认公众号名称正确。"
+                       "⚠️ 注意：account_name 是公众号显示名称（如'机器之心'），不是分组名。"
+                       "如果用户说的名称 search_oa_accounts 搜不到，请让用户确认名称。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "account_name": {
+                        "type": "string",
+                        "description": "公众号显示名称，如'机器之心'、'量子位'。"
+                                       "建议先调 search_oa_accounts 确认名称正确。",
+                    },
+                    "push_target": {
+                        "type": "string",
+                        "description": "推送方式：\"ilink\"=推送到微信，\"\"=不推送，默认 \"ilink\"",
+                        "default": "ilink",
+                    },
+                },
+                "required": ["account_name"],
+            },
+            handler=self._handle_add_oa_monitor,
             requires_confirm=True,
         )
 
@@ -618,7 +719,9 @@ class ToolExecutor:
 
     def _handle_add_digest(self, group_name: str,
                            schedule: str = "08:00",
-                           lookback_hours: int = 6) -> str:
+                           lookback_hours: int = 6,
+                           push_target: str = "ilink") -> str:
+        """【群聊定时摘要】配置或更新。"""
         if not group_name:
             return "请提供群聊名称"
         try:
@@ -632,10 +735,31 @@ class ToolExecutor:
             logger.warning("add_digest: load config failed: %s", e)
             return f"读取配置失败: {e}"
 
+        # Upsert: match by group_name (case-insensitive)
+        existing = [g for g in cfg.digest_groups
+                    if g.group_name.lower() == group_name.lower()]
+        if existing:
+            g = existing[0]
+            g.schedule = [schedule]
+            g.lookback_hours = lookback_hours
+            g.push_target = push_target
+            g.enabled = True
+            save_assistant_config(cfg)
+            if self._scheduler:
+                self._scheduler.update_config(cfg)
+            push_label = "推送到微信" if push_target == "ilink" else "不推送"
+            return (
+                f"✅ 已更新「{group_name}」的群聊定时摘要\n"
+                f"📅 时间: 每天 {schedule}\n"
+                f"⏱ 回看: 最近 {lookback_hours} 小时\n"
+                f"📮 推送: {push_label}"
+            )
+
         cfg.digest_groups.append(DigestGroup(
             group_name=group_name,
             schedule=[schedule],
             lookback_hours=lookback_hours,
+            push_target=push_target,
             enabled=True,
         ))
         try:
@@ -643,11 +767,191 @@ class ToolExecutor:
         except Exception as e:
             return f"保存配置失败: {e}"
 
+        if self._scheduler:
+            self._scheduler.update_config(cfg)
+        push_label = "推送到微信" if push_target == "ilink" else "不推送"
         return (
-            f"✅ 已为「{group_name}」配置定时摘要\n"
-            f"时间: 每天 {schedule}\n"
-            f"回看: 最近 {lookback_hours} 小时的消息"
+            f"✅ 已为「{group_name}」配置群聊定时摘要\n"
+            f"📅 时间: 每天 {schedule}\n"
+            f"⏱ 回看: 最近 {lookback_hours} 小时\n"
+            f"📮 推送: {push_label}"
         )
+
+    # ── add_oa_scheduled_digest (写操作) ────────────────────────────
+
+    def _handle_add_oa_scheduled_digest(self, group_name: str,
+                                         schedule: str = "08:00",
+                                         push_target: str = "ilink",
+                                         template: str = "default") -> str:
+        """【公众号定时摘要】配置或更新。"""
+        if not group_name:
+            return "请提供公众号分组名称"
+        try:
+            dt = datetime.strptime(schedule, "%H:%M")
+        except ValueError:
+            return f"时间格式错误，请使用 HH:MM（如 09:00），收到: {schedule}"
+
+        # HH:MM → 5-field cron: "09:00" → "0 9 * * *"
+        cron_expr = f"{dt.minute} {dt.hour} * * *"
+
+        try:
+            cfg = load_assistant_config()
+        except Exception as e:
+            logger.warning("add_oa_scheduled_digest: load config failed: %s", e)
+            return f"读取配置失败: {e}"
+
+        # Upsert: match by OAGroup.name (case-insensitive)
+        existing = [g for g in cfg.oa_groups
+                    if g.name.lower() == group_name.lower()]
+        if existing:
+            g = existing[0]
+            g.cron_expr = cron_expr
+            g.push_target = push_target
+            g.digest_template = template
+            g.enabled = True
+            save_assistant_config(cfg)
+            if self._scheduler:
+                self._scheduler.update_config(cfg)
+            push_label = "推送到微信" if push_target == "ilink" else "不推送"
+            return (
+                f"✅ 已更新「{group_name}」的公众号定时摘要\n"
+                f"📅 时间: 每天 {schedule}\n"
+                f"📮 推送: {push_label}\n"
+                f"📝 模板: {template}"
+            )
+
+        # Create new OAGroup
+        new_id = f"grp_{int(time.time())}"
+        cfg.oa_groups.append(OAGroup(
+            id=new_id,
+            name=group_name,
+            accounts=[],
+            cron_expr=cron_expr,
+            digest_template=template,
+            push_target=push_target,
+            lookback_hours=24,
+            lookback_mode="auto",
+            enabled=True,
+        ))
+        try:
+            save_assistant_config(cfg)
+        except Exception as e:
+            return f"保存配置失败: {e}"
+
+        if self._scheduler:
+            self._scheduler.update_config(cfg)
+        push_label = "推送到微信" if push_target == "ilink" else "不推送"
+        return (
+            f"✅ 已为「{group_name}」配置公众号定时摘要\n"
+            f"📅 时间: 每天 {schedule}\n"
+            f"📮 推送: {push_label}\n"
+            f"📝 模板: {template}\n"
+            f"💡 如需添加公众号到该分组，请到网页端操作"
+        )
+
+    # ── add_oa_monitor (写操作) ────────────────────────────────────
+
+    def _handle_add_oa_monitor(self, account_name: str,
+                                push_target: str = "ilink") -> str:
+        """【公众号文章提醒】按公众号名称添加更新提醒。"""
+        if not account_name:
+            return "请提供公众号名称"
+
+        if not self._content_cache:
+            return "内容缓存未就绪，无法查询公众号信息。"
+
+        # Search OA accounts by display_name (fuzzy)
+        try:
+            rows = self._content_cache.query(
+                "SELECT gh_id, display_name FROM oa_accounts WHERE display_name LIKE ?",
+                [f"%{account_name}%"],
+            )
+        except Exception as e:
+            logger.warning("add_oa_monitor: query failed: %s", e)
+            return f"查询公众号信息失败: {e}"
+
+        if not rows:
+            return (
+                f"未找到匹配的公众号「{account_name}」。\n"
+                f"请先调 search_oa_accounts 搜索确认该公众号是否已缓存，"
+                f"或到网页端查看已关注的公众号列表。"
+            )
+
+        if len(rows) > 1:
+            names = "、".join(f"「{r['display_name']}」" for r in rows[:5])
+            extra = f"等 {len(rows)} 个" if len(rows) > 5 else ""
+            return (
+                f"找到多个匹配的公众号：{names}{extra}。\n"
+                f"请指定更精确的名称，或先调 search_oa_accounts 搜索确认。"
+            )
+
+        gh_id = rows[0]["gh_id"]
+        display_name = rows[0]["display_name"]
+
+        try:
+            cfg = load_assistant_config()
+        except Exception as e:
+            logger.warning("add_oa_monitor: load config failed: %s", e)
+            return f"读取配置失败: {e}"
+
+        # Upsert OAMonitorGroup by name
+        existing = [g for g in cfg.oa_monitor_groups
+                    if g.name.lower() == display_name.lower()]
+        if existing:
+            g = existing[0]
+            g.enabled = True
+            g.push_target = push_target
+            if gh_id not in g.accounts:
+                g.accounts.append(gh_id)
+        else:
+            new_id = f"oam_{int(time.time())}"
+            cfg.oa_monitor_groups.append(OAMonitorGroup(
+                id=new_id,
+                name=display_name,
+                accounts=[gh_id],
+                enabled=True,
+                push_target=push_target,
+            ))
+
+        try:
+            save_assistant_config(cfg)
+        except Exception as e:
+            return f"保存配置失败: {e}"
+
+        if self._oa_monitor:
+            self._oa_monitor.update_config(cfg)
+
+        push_label = "推送到微信" if push_target == "ilink" else "不推送"
+        return (
+            f"✅ 已为「{display_name}」开启文章更新提醒\n"
+            f"📮 推送: {push_label}"
+        )
+
+    # ── search_oa_accounts (只读查询) ──────────────────────────────
+
+    def _handle_search_oa_accounts(self, query: str) -> str:
+        """搜索已缓存的公众号账号。"""
+        if not query:
+            return "请提供搜索关键词。"
+        if not self._content_cache:
+            return "内容缓存未就绪。"
+
+        try:
+            rows = self._content_cache.query(
+                "SELECT gh_id, display_name FROM oa_accounts WHERE display_name LIKE ?",
+                [f"%{query}%"],
+            )
+        except Exception as e:
+            logger.warning("search_oa_accounts failed: %s", e)
+            return f"搜索失败: {e}"
+
+        if not rows:
+            return f"未找到与「{query}」匹配的公众号。"
+
+        lines = [f"🔍 找到 {len(rows)} 个匹配的公众号："]
+        for i, r in enumerate(rows, 1):
+            lines.append(f"{i}. {r['display_name']} ({r['gh_id']})")
+        return "\n".join(lines)
 
     # ── Internal helpers ──────────────────────────────────────────────
 

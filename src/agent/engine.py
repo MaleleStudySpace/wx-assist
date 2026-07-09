@@ -136,9 +136,6 @@ class AgentEngine:
     def _react_loop(self, system: str,
                     messages: list[dict]) -> str:
         """The main ReAct reasoning + acting loop."""
-        # Reset bypass flag at the start of each round
-        self._bypass_confirm = False
-
         for step in range(1, self._max_steps + 1):
             logger.info("[Agent] Step %d/%d — messages=%d",
                         step, self._max_steps, len(messages))
