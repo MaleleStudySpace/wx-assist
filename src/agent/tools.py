@@ -92,10 +92,22 @@ class ToolExecutor:
         # ── list_oa_groups ─────────────────────────────────────────
         r.register(
             name="list_oa_groups",
-            description="查看已配置的公众号监控分组列表。"
-                       "用户问'我在盯着哪些公众号'、'有哪些公众号分组'时调用。",
+            description="查看已配置的公众号定时摘要分组列表（非文章实时推送）。"
+                       "用户问'有哪些公众号分组'、'配置了哪些公众号摘要'时调用。"
+                       "⚠️ 如果要查已开启文章实时推送（新文章即推）的公众号，请调 list_oa_monitors。",
             parameters={"type": "object", "properties": {}},
             handler=self._handle_list_oa_groups,
+        )
+
+        # ── list_oa_monitors ────────────────────────────────────────
+        r.register(
+            name="list_oa_monitors",
+            description="查看已开启文章实时推送（新文章发布即推）的公众号列表。"
+                       "用户问'我在盯着哪些公众号的动态'、'有哪些实时推送'、"
+                       "'哪些公众号开了文章提醒'时调用。"
+                       "⚠️ 注意：此工具显示的是文章实时推送配置，不是定时摘要配置。",
+            parameters={"type": "object", "properties": {}},
+            handler=self._handle_list_oa_monitors,
         )
 
         # ── list_tasks ──────────────────────────────────────────────
@@ -510,7 +522,7 @@ class ToolExecutor:
     # ── list_oa_groups ───────────────────────────────────────────────
 
     def _handle_list_oa_groups(self) -> str:
-        """查看已配置的公众号监控分组。"""
+        """查看已配置的公众号定时摘要分组。"""
         try:
             cfg = load_assistant_config()
         except Exception as e:
@@ -519,9 +531,9 @@ class ToolExecutor:
 
         groups = [g for g in cfg.oa_groups if g.enabled]
         if not groups:
-            return "当前没有已配置的公众号分组。"
+            return "当前没有已配置的公众号摘要分组。"
 
-        lines = [f"共 {len(groups)} 个公众号分组："]
+        lines = [f"共 {len(groups)} 个公众号摘要分组："]
         for i, g in enumerate(groups, 1):
             accts = ', '.join(g.accounts[:3])
             if len(g.accounts) > 3:
@@ -529,6 +541,31 @@ class ToolExecutor:
             elif not g.accounts:
                 accts = "未配置公众号"
             lines.append(f"{i}. {g.name} — {accts}")
+        return "\n".join(lines)
+
+    # ── list_oa_monitors ──────────────────────────────────────────────
+
+    def _handle_list_oa_monitors(self) -> str:
+        """查看已开启文章实时推送的公众号。"""
+        try:
+            cfg = load_assistant_config()
+        except Exception as e:
+            logger.warning("list_oa_monitors failed: %s", e)
+            return f"读取配置失败: {e}"
+
+        groups = [g for g in cfg.oa_monitor_groups if g.enabled]
+        if not groups:
+            return "当前没有已开启文章实时推送的公众号。"
+
+        lines = [f"共 {len(groups)} 个公众号开启了实时推送："]
+        for i, g in enumerate(groups, 1):
+            accts = ', '.join(g.accounts[:3])
+            if len(g.accounts) > 3:
+                accts += f" 等 {len(g.accounts)} 个公众号"
+            elif not g.accounts:
+                accts = "未绑定具体公众号"
+            push_icon = "📮 推送到微信" if g.push_target == "ilink" else ""
+            lines.append(f"{i}. {g.name} — {accts} {push_icon}".strip())
         return "\n".join(lines)
 
     # ── list_tasks ─────────────────────────────────────────────────
