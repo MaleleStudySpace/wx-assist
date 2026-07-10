@@ -170,7 +170,7 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         def _fix_user_agent(request):
             request.headers["user-agent"] = "wx-assist/1.0"
         http_client = httpx.Client(
-            timeout=httpx.Timeout(30.0, connect=10.0),
+            timeout=httpx.Timeout(60.0, connect=10.0),
             event_hooks={"request": [_fix_user_agent]},
         )
         self.client = OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)

@@ -418,7 +418,24 @@ class OADigestService:
                 len(new_articles), len(full_prompt),
                 "custom_prompt" if group.custom_prompt else (group.digest_template or "default"),
             )
-            digest_text = call_llm(full_prompt, system_prompt, summarizer=self._summarizer)
+            # Wrap with 70s Python timeout (httpx 60s + 10s buffer for long summaries)
+            import concurrent.futures
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _exe:
+                    _fut = _exe.submit(
+                        call_llm, full_prompt, system_prompt, summarizer=self._summarizer,
+                    )
+                    try:
+                        digest_text = _fut.result(timeout=70)
+                    except concurrent.futures.TimeoutError:
+                        logger.warning(
+                            "[OA-DIGEST] Direct LLM 超时（70s），文章数=%d, prompt=%d chars",
+                            len(new_articles), len(full_prompt),
+                        )
+                        digest_text = ""
+            except Exception as e:
+                logger.error("[OA-DIGEST] Direct LLM call failed: %s", e)
+                digest_text = ""
         else:
             # 文章数多，Map-Reduce 分块并行
             logger.info(
@@ -448,8 +465,15 @@ class OADigestService:
 
     @staticmethod
     def _build_article_text(articles, max_content_chars: int, scrape_full: bool) -> str:
-        """Build prompt text for a list of articles (shared by direct + map-reduce paths)."""
-        articles_text = []
+        """Build prompt text for a list of articles (shared by direct + map-reduce paths).
+
+        Fetches article HTML in parallel (8 workers) to reduce wall-clock time
+        from 8×15s=120s sequential to ~15s.
+        """
+        import concurrent.futures
+
+        # Pre-build headers for each article (no I/O)
+        article_meta = []
         for art in articles:
             pub_time_str = ""
             ts = art.pub_time or art.timestamp
@@ -459,35 +483,49 @@ class OADigestService:
                     pub_time_str = _dt.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')
                 except Exception:
                     pub_time_str = ""
-            article_text = f"### {art.title}\n来源: {art.source_name}\n发布时间: {pub_time_str}\n"
+            article_meta.append({
+                "art": art,
+                "header": f"### {art.title}\n来源: {art.source_name}\n发布时间: {pub_time_str}\n",
+            })
 
-            if scrape_full and art.url and "mp.weixin.qq.com" in art.url:
-                try:
-                    content = fetch_article_content(art.url)
-                    if content:
-                        if len(content) > max_content_chars:
-                            content = content[:max_content_chars] + f"\n...(原文{len(content)}字，已截断)"
-                        article_text += f"\n{content}\n"
-                        logger.debug(
-                            "[OA-DIGEST] Article '%s': scraped OK, content_len=%d, url=%s",
-                            art.title[:30], len(content), art.url[:80],
-                        )
-                    else:
-                        article_text += f"\n摘要: {art.digest}\n"
-                        logger.warning(
-                            "[OA-DIGEST] Article '%s': scraped empty (url=%s), using digest fallback",
-                            art.title[:30], art.url[:80],
-                        )
-                except Exception as e:
-                    logger.warning("[OA-DIGEST] Article '%s': scrape failed (%s, url=%s), using digest", art.title[:30], e, art.url[:80])
-                    article_text += f"\n摘要: {art.digest}\n"
-            else:
+        def _fetch_one(art):
+            if not scrape_full or not art.url or "mp.weixin.qq.com" not in art.url:
+                return art, "", "skip"
+            try:
+                content = fetch_article_content(art.url, timeout=15)
+                return art, content, "ok" if content else "empty"
+            except Exception as e:
+                return art, "", f"error: {e}"
+
+        # Parallel fetch (8 workers)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(_fetch_one, [m["art"] for m in article_meta]))
+
+        # Build text
+        articles_text = []
+        for meta, (art, content, status) in zip(article_meta, results):
+            article_text = meta["header"]
+            if content:
+                if len(content) > max_content_chars:
+                    article_text += f"\n{content[:max_content_chars]}\n...(原文{len(content)}字，已截断)\n"
+                else:
+                    article_text += f"\n{content}\n"
                 logger.debug(
-                    "[OA-DIGEST] Article '%s': using digest (url=%s)",
-                    art.title[:30], (art.url or "none")[:80],
+                    "[OA-DIGEST] Article '%s': scraped OK, content_len=%d, url=%s",
+                    art.title[:30], len(content), art.url[:80],
                 )
-                article_text += f"\n摘要: {art.digest}\n"
-
+            else:
+                article_text += f"\n摘要: {art.digest or ''}\n"
+                if status not in ("skip", "ok", "empty"):
+                    logger.warning(
+                        "[OA-DIGEST] Article '%s': %s, url=%s",
+                        art.title[:30], status, art.url[:80],
+                    )
+                else:
+                    logger.debug(
+                        "[OA-DIGEST] Article '%s': %s, using digest fallback (url=%s)",
+                        art.title[:30], status, art.url[:80],
+                    )
             article_text += f"\n链接: {art.url}\n"
             articles_text.append(article_text)
 
@@ -513,8 +551,11 @@ class OADigestService:
             for future in concurrent.futures.as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 try:
-                    chunk_summaries[idx] = future.result()
+                    chunk_summaries[idx] = future.result(timeout=70)
                     logger.debug("[OA-DIGEST] Map chunk %d/%d completed", idx + 1, len(chunks))
+                except concurrent.futures.TimeoutError:
+                    logger.error("[OA-DIGEST] Map chunk %d 超时（70s）", idx)
+                    chunk_summaries[idx] = ""
                 except Exception as e:
                     logger.error("[OA-DIGEST] Map chunk %d failed: %s", idx, e)
                     chunk_summaries[idx] = ""

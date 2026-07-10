@@ -180,68 +180,189 @@ class OAMonitorEngine:
             source = art.source_name or gh_id
             title = art.title or "(无标题)"
 
-            # ── AI 摘要：后台线程 + 5s 超时，防止慢 LLM 阻塞 OA Monitor 轮询 ──
+            # ── AI 摘要：4 层内容获取链路 + 后台线程 + 35s 超时 ──
+            # Layer 1: 本地 oa_cache.full_content
+            # Layer 2: HTTP 抓取（oa_reader）— 第一次尝试
+            # Layer 3: WCDB 重查 URL + HTTP 重试
+            # Layer 4: WCDB des（公众号内置短导语，兜底）
             digest = ""
             llm_summary_text = ""
             llm_ok = 0
+            article_text = ""
+            content_source = ""
+
             try:
                 from src.config import load_config
                 from src.summarize import create_summarizer
+                from src.assistant.oa_reader import fetch_article_content
                 cfg = load_config()
                 smrz = create_summarizer(cfg)
-                input_text = (art.digest or art.title or "无摘要")[:500]
-                prompt = "请用1-2句话总结以下文章的核心内容:\n" + input_text
-                _t0 = _time.monotonic()
 
-                # 后台线程执行 LLM 调用，硬超时 5 秒
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _exe:
-                    _fut = _exe.submit(
-                        smrz.chat,
-                        message=prompt,
-                        context_messages=[],
-                        requester_name="system",
-                        group_name=source,
-                    )
+                # ── Layer 1: 本地 oa_cache.full_content ──
+                if self._content_cache:
                     try:
-                        ai_digest = _fut.result(timeout=5)
-                    except concurrent.futures.TimeoutError:
-                        logger.warning("OAMonitor: LLM 超时（5s），使用原标题: %s", title[:20])
-                        ai_digest = ""
-                    except Exception as e:
-                        logger.debug("OAMonitor: LLM 调用失败: %s", e)
-                        ai_digest = ""
+                        row = self._content_cache.query_one(
+                            "SELECT full_content, content_status FROM oa_cache WHERE url=?",
+                            [art.url],
+                        )
+                        if row and row["full_content"]:
+                            article_text = row["full_content"]
+                            content_source = "cache"
+                            logger.debug(
+                                "OAMonitor: cache hit '%s' (%d chars, status=%d)",
+                                title[:30], len(article_text), row["content_status"],
+                            )
+                    except Exception:
+                        pass
 
-                _latency = (_time.monotonic() - _t0) * 1000
-                _resp = (ai_digest or "").strip()
-                log_llm_interaction(
-                    backend="oa_monitor", call_type="oa_article_summary",
-                    model=getattr(smrz, 'model', 'unknown'),
-                    system_prompt="", user_prompt=prompt,
-                    response=_resp[:200], latency_ms=_latency,
-                    extra={"title": title[:50], "url": art.url, "gh_id": gh_id, "timed_out": _resp=="" and _latency>=4900},
-                )
-                if _resp:
-                    digest = _resp[:80]
-                    llm_summary_text = _resp[:500]
-                    llm_ok = 1
-                    logger.info("OAMonitor AI digest for '%s': %s", title[:20], digest[:40])
+                # ── Layer 2: HTTP 抓取（15s timeout）──
+                if not article_text and art.url and "mp.weixin.qq.com" in art.url:
+                    try:
+                        fetched = fetch_article_content(art.url, timeout=15)
+                        if fetched:
+                            article_text = fetched
+                            content_source = "http"
+                            if self._content_cache:
+                                try:
+                                    self._content_cache.update("oa_cache", {
+                                        "full_content": fetched,
+                                        "content_status": 2,
+                                        "cached_at": int(_time.time()),
+                                    }, {"url": art.url})
+                                except Exception:
+                                    pass
+                            logger.debug(
+                                "OAMonitor: HTTP fetched %d chars for '%s'",
+                                len(article_text), title[:30],
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "OAMonitor: HTTP fetch failed (Layer 2) for '%s': %s",
+                            title[:30], e,
+                        )
+
+                # ── Layer 3: WCDB 重查 URL + HTTP 重试 ──
+                if not article_text and art.gh_id:
+                    try:
+                        from src.assistant.oa_parser import decode_content, parse_oa_article
+                        wcdb_client = self._get_wcdb_client()
+                        if wcdb_client:
+                            msgs = wcdb_client.get_messages(
+                                talker=art.gh_id, limit=50,
+                            )
+                            for m in (msgs or []):
+                                xml = decode_content(m.get("message_content", ""))
+                                if "<appmsg" not in xml:
+                                    continue
+                                parsed = parse_oa_article(xml)
+                                wcdb_url = parsed.get("url", "")
+                                if wcdb_url and (wcdb_url == art.url or wcdb_url.endswith(art.url[-32:])):
+                                    # URL 匹配（含短码尾段比对），用 WCDB 最新 URL 重抓
+                                    fetched = fetch_article_content(wcdb_url, timeout=15)
+                                    if fetched:
+                                        article_text = fetched
+                                        content_source = "wcdb_retry"
+                                        if self._content_cache:
+                                            try:
+                                                self._content_cache.update("oa_cache", {
+                                                    "full_content": fetched,
+                                                    "content_status": 2,
+                                                    "cached_at": int(_time.time()),
+                                                }, {"url": wcdb_url})
+                                            except Exception:
+                                                pass
+                                        logger.debug(
+                                            "OAMonitor: WCDB retry fetched %d chars for '%s'",
+                                            len(article_text), title[:30],
+                                        )
+                                    break
+                    except Exception as e:
+                        logger.warning(
+                            "OAMonitor: WCDB retry (Layer 3) failed for '%s': %s",
+                            title[:30], e,
+                        )
+
+                # ── Layer 4: WCDB des（兜底短导语）──
+                if not article_text:
+                    article_text = art.digest or ""
+                    if article_text:
+                        content_source = "wcdb_des"
+                        logger.debug(
+                            "OAMonitor: fallback to WCDB des for '%s' (%d chars)",
+                            title[:30], len(article_text),
+                        )
+
+                # 没有任何内容 → 跳过 AI 摘要
+                if not article_text:
+                    logger.info(
+                        "OAMonitor: no article content for '%s', skip AI summary",
+                        title[:30],
+                    )
                 else:
-                    logger.info("OAMonitor AI digest returned empty for '%s', use title", title[:20])
+                    prompt = "请用1-2句话总结以下公众号文章的核心内容:\n\n" + article_text
+                    _t0 = _time.monotonic()
+
+                    # 后台线程执行 LLM 调用，硬超时 35 秒（httpx 60s + 安全余量）
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _exe:
+                        _fut = _exe.submit(
+                            smrz.chat,
+                            message=prompt,
+                            context_messages=[],
+                            requester_name="system",
+                            group_name=source,
+                        )
+                        try:
+                            ai_digest = _fut.result(timeout=35)
+                        except concurrent.futures.TimeoutError:
+                            logger.warning(
+                                "OAMonitor: LLM 超时（35s）: %s", title[:20],
+                            )
+                            ai_digest = ""
+                        except Exception as e:
+                            logger.debug("OAMonitor: LLM 调用失败: %s", e)
+                            ai_digest = ""
+
+                    _latency = (_time.monotonic() - _t0) * 1000
+                    _resp = (ai_digest or "").strip()
+                    log_llm_interaction(
+                        backend="oa_monitor", call_type="oa_article_summary",
+                        model=getattr(smrz, 'model', 'unknown'),
+                        system_prompt="", user_prompt=prompt[:500],
+                        response=_resp[:200], latency_ms=_latency,
+                        extra={
+                            "title": title[:50], "url": art.url, "gh_id": gh_id,
+                            "timed_out": _resp == "" and _latency >= 34500,
+                            "content_source": content_source,
+                            "content_chars": len(article_text),
+                        },
+                    )
+                    if _resp:
+                        digest = _resp
+                        llm_summary_text = _resp
+                        llm_ok = 1
+                        logger.info(
+                            "OAMonitor AI digest for '%s' (source=%s, %d chars): %s",
+                            title[:20], content_source, len(article_text), digest[:40],
+                        )
+                    else:
+                        logger.info(
+                            "OAMonitor AI digest empty for '%s' (source=%s)",
+                            title[:20], content_source,
+                        )
             except Exception as e:
                 logger.warning("OAMonitor AI digest failed for '%s': %s", title[:20], e)
-                # log failure (latency = 0 since we don't have it on exception path here)
                 log_llm_interaction(
                     backend="oa_monitor", call_type="oa_article_summary",
                     model="unknown", system_prompt="",
-                    user_prompt=(art.digest or art.title or "无摘要")[:200],
+                    user_prompt=(art.digest or "")[:200],
                     response=f"[Error: {e}]", latency_ms=0,
                     extra={"title": title[:50], "url": art.url, "error": str(e)[:200]},
                 )
 
-            # 最终展示用的 digest：AI摘要 > 原文摘要 > 标题
+            # 最终展示用的 digest：AI 摘要 > WCDB des 兜底
             if not digest:
-                digest = (art.digest or "")[:50] or title[:50]
+                digest = art.digest or ""
 
             # ── 保存 LLM 摘要到 oa_cache ──
             if llm_ok and llm_summary_text and self._content_cache:
