@@ -573,6 +573,7 @@ class Bot:
                                      name="fav-sync-timer").start()
 
                     # ── OA 60s 增量定时器（TaskCenter 追踪） ──
+                    _oa_tick = [0]
                     def _oa_timer():
                         while True:
                             _t.sleep(60)
@@ -581,6 +582,10 @@ class Bot:
                                 _c = get_wcdb_client()
                                 if _c:
                                     _n = content_cache.sync_oa_incremental(_c, task_center)
+                                    _oa_tick[0] += 1
+                                    if _oa_tick[0] % 10 == 0:
+                                        logger.debug("[CACHE] OA 增量同步活检查: tick=%d, last_n=%d",
+                                                     _oa_tick[0], _n)
                                     if _n > 0 and rag_engine:
                                         content_cache.index_to_rag(rag_engine, "oa")
                             except Exception:
