@@ -553,8 +553,8 @@ class Bot:
                                     _n = content_cache.sync_sns_incremental(_c, task_center)
                                     if _n > 0 and rag_engine:
                                         content_cache.index_to_rag(rag_engine, "sns")
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.warning('[CACHE] OA 增量同步异常: %s', e)
                     threading.Thread(target=_sns_timer, daemon=True,
                                      name="sns-sync-timer").start()
 
@@ -568,8 +568,8 @@ class Bot:
                                     _n = content_cache.sync_fav_incremental(_c, task_center)
                                     if _n > 0 and rag_engine:
                                         content_cache.index_to_rag(rag_engine, "fav")
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.warning('[CACHE] OA 增量同步异常: %s', e)
                     threading.Thread(target=_fav_timer, daemon=True,
                                      name="fav-sync-timer").start()
 
@@ -590,8 +590,8 @@ class Bot:
                                                      _oa_tick[0], _n)
                                     if _n > 0 and rag_engine:
                                         content_cache.index_to_rag(rag_engine, "oa")
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.warning('[CACHE] OA 增量同步异常: %s', e)
                     threading.Thread(target=_oa_timer, daemon=True,
                                      name="oa-sync-timer").start()
 
@@ -604,8 +604,8 @@ class Bot:
                                 _c = get_wcdb_client()
                                 if _c:
                                     content_cache.sync_oa_accounts(_c, task_center)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.warning('[CACHE] OA 增量同步异常: %s', e)
                     threading.Thread(target=_oa_accounts_timer, daemon=True,
                                      name="oa-accounts-timer").start()
 
