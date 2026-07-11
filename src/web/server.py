@@ -3533,7 +3533,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             self.path.startswith("/api/tasks/") or self.path.startswith("/api/tasks?") or self.path == "/api/tasks" or
             self.path == "/api/scheduled-tasks"):
             try:
-                    logger.info("[REQ-TRACE] entering api_handlers for %s thread=%s", self.path, threading.current_thread().name)
+                    logger.debug("[REQ-TRACE] entering api_handlers for %s thread=%s", self.path, threading.current_thread().name)
                     from src.web.api_handlers import handle_api_request
                     from src.assistant.config import load_assistant_config as _load_cfg
 
