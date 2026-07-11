@@ -544,6 +544,7 @@ class Bot:
 
                     # 定时增量同步（SNS 5min / Fav 10min）
                     def _sns_timer():
+                        import time as _t
                         while True:
                             _t.sleep(300)
                             try:
@@ -555,10 +556,14 @@ class Bot:
                                         content_cache.index_to_rag(rag_engine, "sns")
                             except Exception as e:
                                 logger.warning('[CACHE] OA 增量同步异常: %s', e)
+                            except BaseException as be:
+                                logger.critical('[CACHE] OA 增量同步线程崩溃: %s', be)
+                                raise
                     threading.Thread(target=_sns_timer, daemon=True,
                                      name="sns-sync-timer").start()
 
                     def _fav_timer():
+                        import time as _t
                         while True:
                             _t.sleep(600)
                             try:
@@ -570,12 +575,16 @@ class Bot:
                                         content_cache.index_to_rag(rag_engine, "fav")
                             except Exception as e:
                                 logger.warning('[CACHE] OA 增量同步异常: %s', e)
+                            except BaseException as be:
+                                logger.critical('[CACHE] OA 增量同步线程崩溃: %s', be)
+                                raise
                     threading.Thread(target=_fav_timer, daemon=True,
                                      name="fav-sync-timer").start()
 
                     # ── OA 60s 增量定时器（TaskCenter 追踪） ──
                     _oa_tick = [0]
                     def _oa_timer():
+                        import time as _t
                         logger.info("[CACHE] OA 增量同步定时器已启动")
                         while True:
                             _t.sleep(60)
@@ -590,13 +599,18 @@ class Bot:
                                                      _oa_tick[0], _n)
                                     if _n > 0 and rag_engine:
                                         content_cache.index_to_rag(rag_engine, "oa")
+                                else:
+                                    logger.warning("[CACHE] OA 增量同步: get_wcdb_client 返回 None")
                             except Exception as e:
                                 logger.warning('[CACHE] OA 增量同步异常: %s', e)
+                            except BaseException as be:
+                                logger.critical('[CACHE] OA 增量同步线程崩溃(BaseException): %s', be)
                     threading.Thread(target=_oa_timer, daemon=True,
                                      name="oa-sync-timer").start()
 
                     # ── OA 账号 30min 刷新定时器 ──
                     def _oa_accounts_timer():
+                        import time as _t
                         while True:
                             _t.sleep(1800)
                             try:
@@ -606,6 +620,9 @@ class Bot:
                                     content_cache.sync_oa_accounts(_c, task_center)
                             except Exception as e:
                                 logger.warning('[CACHE] OA 增量同步异常: %s', e)
+                            except BaseException as be:
+                                logger.critical('[CACHE] OA 增量同步线程崩溃: %s', be)
+                                raise
                     threading.Thread(target=_oa_accounts_timer, daemon=True,
                                      name="oa-accounts-timer").start()
 
