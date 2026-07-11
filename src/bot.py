@@ -594,7 +594,7 @@ class Bot:
                                 if _c:
                                     _n = content_cache.sync_oa_incremental(_c, task_center)
                                     _oa_tick[0] += 1
-                                    if _oa_tick[0] % 10 == 0:
+                                    if _oa_tick[0] % 60 == 0:
                                         logger.info("[CACHE] OA 增量同步活检查: tick=%d, last_n=%d",
                                                      _oa_tick[0], _n)
                                     if _n > 0 and rag_engine:

@@ -443,8 +443,8 @@ class ContentCache:
         accounts = self.query("SELECT gh_id FROM oa_accounts")
         if not accounts:
             return 0
-        tid = _create_task(task_center, "cache_oa_incremental", "", "OA增量同步")
         total = 0
+        tid = None
         try:
             existing = self._get_existing_oa_urls()
             for row in accounts:
@@ -466,10 +466,12 @@ class ContentCache:
                     logger.warning("[CACHE] OA 增量 %s 失败: %s", gh_id, e)
             if total:
                 logger.info("[CACHE] OA 增量合并: 新增 %d 篇文章", total)
-            _complete_task(task_center, tid, f"OA 增量: 新增 {total} 篇")
+                tid = _create_task(task_center, "cache_oa_incremental", "", "OA增量同步")
+                _complete_task(task_center, tid, f"OA 增量: 新增 {total} 篇")
         except Exception as e:
             logger.warning("[CACHE] OA 增量合并失败: %s", e)
-            _fail_task(task_center, tid, str(e))
+            if tid:
+                _fail_task(task_center, tid, str(e))
         return total
 
     # ══════════════════════════════════════════════════════════════
@@ -596,11 +598,10 @@ class ContentCache:
         if client is None:
             logger.warning("[CACHE] WCDB 不可用, SNS 增量同步跳过")
             return 0
-        tid = _create_task(task_center, "cache_sns_incremental", "", "朋友圈增量")
+        tid = None
         try:
             posts = client.get_sns_timeline(limit=20, offset=0)
             if not posts:
-                _complete_task(task_center, tid, "朋友圈增量: 0 条")
                 return 0
             existing = self._get_existing_sns_ids()
             new = []
@@ -613,11 +614,13 @@ class ContentCache:
                     new.append(cleaned)
             if new:
                 self.batch_upsert("sns_cache", new)
-            logger.info("[CACHE] 朋友圈增量合并: 新增 %d 条", len(new))
-            _complete_task(task_center, tid, f"朋友圈增量: {len(new)} 条")
+                logger.info("[CACHE] 朋友圈增量合并: 新增 %d 条", len(new))
+                tid = _create_task(task_center, "cache_sns_incremental", "", "朋友圈增量")
+                _complete_task(task_center, tid, f"朋友圈增量: {len(new)} 条")
         except Exception as e:
             logger.warning("[CACHE] 朋友圈增量合并失败: %s", e)
-            _fail_task(task_center, tid, str(e))
+            if tid:
+                _fail_task(task_center, tid, str(e))
             return 0
         return len(new)
 
@@ -747,7 +750,7 @@ class ContentCache:
         """
         if self._is_full_syncing("fav"):
             return 0
-        tid = _create_task(task_center, "cache_fav_incremental", "", "收藏增量")
+        tid = None
         new_count = 0
         try:
             from src.wechat.wcdb_fav_reader import WcdbFavReader
@@ -762,7 +765,6 @@ class ContentCache:
                     meta_sql = "SELECT local_id, type, update_time, fromusr FROM fav_db_item ORDER BY update_time DESC LIMIT 200"
                     rows = reader._exec(meta_sql) or []
                 except Exception:
-                    _complete_task(task_center, tid, "收藏增量: 0 条")
                     return 0
                 items = []
                 for r in rows:
@@ -782,7 +784,6 @@ class ContentCache:
                     except Exception:
                         pass
             if not items:
-                _complete_task(task_center, tid, "收藏增量: 0 条")
                 return 0
             max_cached = self._get_max_fav_id()
             new = []
@@ -798,12 +799,14 @@ class ContentCache:
                         new.append(cleaned)
             if new:
                 self.batch_upsert("fav_cache", new)
-            new_count = len(new)
-            logger.info("[CACHE] 收藏增量合并: 新增 %d 条", new_count)
-            _complete_task(task_center, tid, f"收藏增量: {new_count} 条")
+                new_count = len(new)
+                logger.info("[CACHE] 收藏增量合并: 新增 %d 条", new_count)
+                tid = _create_task(task_center, "cache_fav_incremental", "", "收藏增量")
+                _complete_task(task_center, tid, f"收藏增量: {new_count} 条")
         except Exception as e:
             logger.warning("[CACHE] 收藏增量合并失败: %s", e)
-            _fail_task(task_center, tid, str(e))
+            if tid:
+                _fail_task(task_center, tid, str(e))
             return 0
         return new_count
 
