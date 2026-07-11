@@ -37,7 +37,8 @@ class ToolExecutor:
 
     def __init__(self, store, summarizer,
                  status_fn=None, task_center=None, scheduler=None,
-                 rag=None, content_cache=None, oa_monitor=None):
+                 rag=None, content_cache=None, oa_monitor=None,
+                 alert_engine=None):
         self._store = store
         self._summarizer = summarizer
         self._status_fn = status_fn
@@ -46,6 +47,7 @@ class ToolExecutor:
         self._rag = rag
         self._content_cache = content_cache
         self._oa_monitor = oa_monitor
+        self._alert_engine = alert_engine
 
         from .registry import ToolRegistry
         self.registry = ToolRegistry()
@@ -732,6 +734,8 @@ class ToolExecutor:
                 save_assistant_config(cfg)
             except Exception as e:
                 return f"保存配置失败: {e}"
+            if self._alert_engine:
+                self._alert_engine.update_config(cfg)
             return (
                 f"✅ 已更新「{group_name}」的关键词预警\n"
                 f"新增 {added} 个关键词，当前共 {new_count} 个关键词"
@@ -746,6 +750,8 @@ class ToolExecutor:
             save_assistant_config(cfg)
         except Exception as e:
             return f"保存配置失败: {e}"
+        if self._alert_engine:
+            self._alert_engine.update_config(cfg)
 
         return (
             f"✅ 已为「{group_name}」添加关键词预警\n"

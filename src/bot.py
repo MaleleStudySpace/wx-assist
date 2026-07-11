@@ -440,6 +440,7 @@ class Bot:
                 scheduler=assistant_scheduler,
                 content_cache=content_cache,
                 oa_monitor=oa_monitor,
+                alert_engine=assistant_alert,
             )
             agent_engine = AgentEngine(
                 summarizer=summarizer,
@@ -575,6 +576,7 @@ class Bot:
                     # ── OA 60s 增量定时器（TaskCenter 追踪） ──
                     _oa_tick = [0]
                     def _oa_timer():
+                        logger.info("[CACHE] OA 增量同步定时器已启动")
                         while True:
                             _t.sleep(60)
                             try:
