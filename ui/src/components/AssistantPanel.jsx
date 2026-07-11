@@ -825,7 +825,7 @@ export default function AssistantPanel() {
             {!config.alert_groups?.length && !showAlertEditor && (
               <div className="py-10 text-center">
                 <Lightning size={32} className="text-text-muted/30 mx-auto mb-3" />
-                <p className="text-sm text-text-muted">添加群聊以配置关键词提醒</p>
+                <p className="text-sm text-text-muted">添加联系人以配置关键词提醒</p>
                 <button
                   onClick={() => { setShowAlertEditor(true); setAlertDraft({ chat_id: '', group_name: '', keywords: [], enabled: true, push_target: '' }); setEditorError('') }}
                   className="mt-4 text-sm text-brand-green-hover hover:underline cursor-pointer font-medium"
@@ -850,7 +850,7 @@ export default function AssistantPanel() {
                     error={editorError}
                     onDraftChange={setAlertDraft}
                     onSave={() => {
-                      if (!alertDraft.chat_id) { setEditorError('请先选择群聊'); return }
+                      if (!alertDraft.chat_id) { setEditorError('请先选择联系人'); return }
                       const selected = findGroup(alertDraft.chat_id)
                       const groups = config.alert_groups || []
 
@@ -1032,7 +1032,7 @@ export default function AssistantPanel() {
             {!config.digest_groups?.length && !showDigestEditor && (
               <div className="py-10 text-center">
                 <Clock size={32} className="text-text-muted/30 mx-auto mb-3" />
-                <p className="text-sm text-text-muted">添加群聊以配置定时摘要</p>
+                <p className="text-sm text-text-muted">添加联系人以配置定时摘要</p>
                 <button
                   onClick={() => { setShowDigestEditor(true); setDigestDraft({ chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true, unread_only: false, push_target: '', profile: { summary: '', focus: [], ignore: [], style: '' } }); setEditorError('') }}
                   className="mt-4 text-sm text-brand-green-hover hover:underline cursor-pointer font-medium"
@@ -1059,7 +1059,7 @@ export default function AssistantPanel() {
                     stylePresets={config.style_presets || {}}
                     onDraftChange={setDigestDraft}
                     onSave={() => {
-                      if (!digestDraft.chat_id) { setEditorError('请先选择群聊'); return }
+                      if (!digestDraft.chat_id) { setEditorError('请先选择联系人'); return }
                       const cron_expr = digestDraft.cron_expr || '0 9 * * *'
                       const cronErr = validateCronExpr(cron_expr)
                       if (cronErr) { setEditorError(cronErr); return }
@@ -1193,7 +1193,7 @@ export default function AssistantPanel() {
                         groups={groups}
                         value={filters.chat_id}
                         onChange={chatId => setFilters(prev => ({ ...prev, chat_id: chatId }))}
-                        placeholder="全部群聊"
+                        placeholder="全部联系人"
                         allowClear
                       />
                       <select value={filters.type} onChange={e => setFilters(prev => ({ ...prev, type: e.target.value }))} className="bg-bg-raised border border-border-main rounded-lg px-3 py-2.5 text-sm text-text-main focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all">
@@ -1295,12 +1295,12 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
           >
             <div ref={bodyRef} className="px-4 pb-4 space-y-3 border-t border-border-main/50 pt-4 mx-4">
               <div>
-                <label className="text-xs text-text-muted block mb-1.5">选择群聊</label>
+                <label className="text-xs text-text-muted block mb-1.5">选择联系人</label>
                 <SearchableGroupSelect
                   groups={groups}
                   value={values.chat_id || ''}
                   onChange={onSelectGroup}
-                  placeholder="搜索群聊..."
+                  placeholder="搜索联系人..."
                 />
                 {!values.chat_id && values.group_name && (
                   <p className="text-xs text-status-warn mt-1">历史群名：{values.group_name}，请从下拉重新绑定</p>
@@ -1643,12 +1643,12 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
             <div ref={bodyRef} className="px-4 pb-4 space-y-4 border-t border-border-main/50 pt-4 mx-4">
               {/* Group select */}
               <div>
-                <label className="text-xs text-text-muted block mb-1.5">选择群聊</label>
+                <label className="text-xs text-text-muted block mb-1.5">选择联系人</label>
                 <SearchableGroupSelect
                   groups={groups}
                   value={values.chat_id || ''}
                   onChange={onSelectGroup}
-                  placeholder="搜索群聊..."
+                  placeholder="搜索联系人..."
                 />
                 {!values.chat_id && values.group_name && (
                   <p className="text-xs text-status-warn mt-1">历史群名：{values.group_name}，请从下拉重新绑定</p>
@@ -1856,7 +1856,7 @@ function AlertGroupEditor({ draft, groups, error, onDraftChange, onSave, onCance
       <p className="text-sm text-brand-green font-semibold mb-1">新增提醒群</p>
       {error && <p className="text-xs text-status-error">{error}</p>}
       <div>
-        <label className="text-xs text-text-muted block mb-1.5">选择群聊 <span className="text-status-error">*</span></label>
+        <label className="text-xs text-text-muted block mb-1.5">选择联系人 <span className="text-status-error">*</span></label>
         <SearchableGroupSelect
           groups={groups}
           value={draft.chat_id || ''}
@@ -1864,7 +1864,7 @@ function AlertGroupEditor({ draft, groups, error, onDraftChange, onSave, onCance
             const selected = groups.find(g => g.chat_id === chatId)
             onDraftChange({ ...draft, chat_id: chatId, group_name: selected?.group_name || '' })
           }}
-          placeholder="搜索群聊..."
+          placeholder="搜索联系人..."
         />
       </div>
       <div>
@@ -1904,7 +1904,7 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
       <p className="text-sm text-brand-green font-semibold mb-1">新增摘要群</p>
       {error && <p className="text-xs text-status-error">{error}</p>}
       <div>
-        <label className="text-xs text-text-muted block mb-1.5">选择群聊 <span className="text-status-error">*</span></label>
+        <label className="text-xs text-text-muted block mb-1.5">选择联系人 <span className="text-status-error">*</span></label>
         <SearchableGroupSelect
           groups={groups}
           value={draft.chat_id || ''}
@@ -1912,7 +1912,7 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
             const selected = groups.find(g => g.chat_id === chatId)
             onDraftChange({ ...draft, chat_id: chatId, group_name: selected?.group_name || '' })
           }}
-          placeholder="搜索群聊..."
+          placeholder="搜索联系人..."
         />
       </div>
       {/* Schedule config */}
@@ -2141,7 +2141,7 @@ function NotificationCard({ notification, onAck, onIgnore }) {
             <span className="text-xs text-text-muted">{notification.created_at}</span>
           </div>
           <p className="text-sm text-text-main font-medium truncate">{notification.title || '无标题'}</p>
-          <p className="text-xs text-text-muted mt-0.5">{notification.group_name || notification.chat_id || '未知群聊'}</p>
+          <p className="text-xs text-text-muted mt-0.5">{notification.group_name || notification.chat_id || '未知联系人'}</p>
           <pre className="whitespace-pre-wrap text-sm text-text-main/75 mt-3 font-sans leading-relaxed">{displayContent}</pre>
           {isLong && (
             <button onClick={() => setExpanded(!expanded)} className="mt-1 text-xs text-brand-green hover:underline cursor-pointer font-medium">
@@ -2164,6 +2164,7 @@ function SearchableGroupSelect({ groups, value, onChange, placeholder, allowClea
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const ref = useRef(null)
+  const inputRef = useRef(null)
 
   useEffect(() => {
     function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
@@ -2173,8 +2174,12 @@ function SearchableGroupSelect({ groups, value, onChange, placeholder, allowClea
 
   const selected = groups.find(g => g.chat_id === value)
   const filtered = query
-    ? groups.filter(g => g.group_name.toLowerCase().includes(query.toLowerCase()))
+    ? groups.filter(g => g.group_name.toLowerCase().includes(query.toLowerCase()) || g.chat_id.toLowerCase().includes(query.toLowerCase()))
     : groups
+
+  // 按类型分组：群聊在前，个人好友在后
+  const chatrooms = filtered.filter(g => g.type === 'chatroom' || g.chat_id.endsWith('@chatroom'))
+  const contacts = filtered.filter(g => g.type !== 'chatroom' && !g.chat_id.endsWith('@chatroom'))
 
   const displayText = open ? query : (selected ? selected.group_name : '')
 
@@ -2183,9 +2188,10 @@ function SearchableGroupSelect({ groups, value, onChange, placeholder, allowClea
       <div className="relative">
         <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
         <input
+          ref={inputRef}
           type="text"
           value={displayText}
-          placeholder={placeholder || '搜索群聊...'}
+          placeholder={placeholder || '搜索联系人...'}
           onFocus={() => { setOpen(true); setQuery('') }}
           onChange={e => { setQuery(e.target.value); setOpen(true) }}
           className="w-full bg-bg-raised border border-border-main rounded-lg pl-9 pr-4 py-2 text-[14px] text-text-main placeholder:text-text-muted/65 focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
@@ -2197,24 +2203,51 @@ function SearchableGroupSelect({ groups, value, onChange, placeholder, allowClea
             <button
               type="button"
               className="w-full text-left px-4 py-2.5 text-sm text-text-muted hover:bg-bg-raised transition-colors border-b border-border-main/50"
+              onMouseDown={e => e.preventDefault()}
               onClick={() => { onChange(''); setQuery(''); setOpen(false) }}
-            >全部群聊</button>
+            >全部联系人</button>
           )}
           {filtered.length === 0 ? (
-            <p className="px-4 py-3 text-xs text-text-muted text-center">无匹配群聊</p>
+            <p className="px-4 py-3 text-xs text-text-muted text-center">无匹配联系人</p>
           ) : (
-            filtered.map(g => (
-              <button
-                key={g.chat_id}
-                type="button"
-                className={`w-full text-left px-4 py-2.5 text-sm hover:bg-bg-raised transition-colors flex items-center justify-between gap-2 ${
-                  g.chat_id === value ? 'bg-brand-green/10 text-brand-green-hover' : 'text-text-main'
-                }`}
-                onClick={() => { onChange(g.chat_id); setQuery(''); setOpen(false) }}
-              >
-                <span className="truncate">{g.group_name}</span>
-              </button>
-            ))
+            <>
+              {chatrooms.length > 0 && (
+                <>
+                  <div className="px-4 py-1.5 text-[11px] text-text-muted/60 font-semibold uppercase tracking-wider sticky top-0 bg-bg-card border-b border-border-main/30">👥 群聊</div>
+                  {chatrooms.map(g => (
+                    <button
+                      key={g.chat_id}
+                      type="button"
+                      className={`w-full text-left px-4 py-2.5 text-sm hover:bg-bg-raised transition-colors flex items-center gap-2 ${
+                        g.chat_id === value ? 'bg-brand-green/10 text-brand-green-hover' : 'text-text-main'
+                      }`}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => { onChange(g.chat_id); setQuery(''); setOpen(false) }}
+                    >
+                      <span className="truncate">{g.group_name}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+              {contacts.length > 0 && (
+                <>
+                  <div className="px-4 py-1.5 text-[11px] text-text-muted/60 font-semibold uppercase tracking-wider sticky top-0 bg-bg-card border-b border-border-main/30">👤 好友</div>
+                  {contacts.map(g => (
+                    <button
+                      key={g.chat_id}
+                      type="button"
+                      className={`w-full text-left px-4 py-2.5 text-sm hover:bg-bg-raised transition-colors flex items-center gap-2 ${
+                        g.chat_id === value ? 'bg-brand-green/10 text-brand-green-hover' : 'text-text-main'
+                      }`}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => { onChange(g.chat_id); setQuery(''); setOpen(false) }}
+                    >
+                      <span className="truncate">{g.group_name}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+            </>
           )}
         </div>
       )}

@@ -1742,45 +1742,46 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     self.send_json({"ok": True, "groups": groups})
                     return
                 if groups_raw == "*" or not groups_raw:
-                    # All groups: just get distinct chat_ids, no member count needed.
+                    # All contacts: chatrooms + individual friends (exclude gh_*)
                     rows = conn.execute(
                         """
                         SELECT DISTINCT chat_id
                         FROM messages
-                        WHERE chat_id LIKE '%@chatroom%'
+                        WHERE chat_id NOT LIKE 'gh_%'
                         ORDER BY chat_id
                         """
                     ).fetchall()
                     for row in rows:
                         chat_id = row["chat_id"]
+                        is_chatroom = chat_id.endswith("@chatroom")
                         groups.append({
                             "chat_id": chat_id,
                             "group_name": group_names.get(chat_id, chat_id),
+                            "type": "chatroom" if is_chatroom else "contact",
                         })
                 else:
                     # Specific group names — match against known chat_ids
                     wanted = [g.strip() for g in groups_raw.split(",") if g.strip()]
-                    # Get all chatroom IDs from messages in one query
                     all_chats = conn.execute(
                         """
                         SELECT DISTINCT chat_id
                         FROM messages
-                        WHERE chat_id LIKE '%@chatroom%'
+                        WHERE chat_id NOT LIKE 'gh_%'
                         """
                     ).fetchall()
                     all_ids = [r["chat_id"] for r in all_chats]
                     for name in wanted:
-                        # Try exact match first, then substring
                         chat_id = name
                         for cid in all_ids:
                             if name.lower() in cid.lower():
                                 chat_id = cid
                                 break
-                        # Resolve display name from persisted mapping, fallback to configured name
                         display_name = group_names.get(chat_id) or name
+                        is_chatroom = chat_id.endswith("@chatroom")
                         groups.append({
                             "chat_id": chat_id,
                             "group_name": display_name,
+                            "type": "chatroom" if is_chatroom else "contact",
                         })
 
                 conn.close()
