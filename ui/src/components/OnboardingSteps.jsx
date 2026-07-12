@@ -1176,70 +1176,60 @@ export function Step2DataDir({ data, updateData, onDone }) {
   )
 }
 
-// ── Step 3: AI Backend ────────────────────────────────────────────────
+// ── Step 3: AI Backend (3-step wizard for beginners) ───────────────────
 
 export function Step3AIConfig({ data, updateData, onDone }) {
+  const [substep, setSubstep] = useState(0) // 0=choose-provider, 1=guide, 2=fill-detect
+  const [selectedProvider, setSelectedProvider] = useState(null) // 'deepseek' | 'custom' | null
   const [detecting, setDetecting] = useState(false)
   const [detectResult, setDetectResult] = useState(null)
-  const [showAdvanced, setShowAdvanced] = useState(false)
-  const [fullUrlMode, setFullUrlMode] = useState(false)
+  const [apiKey, setApiKey] = useState(data.ai_provider_api_key || '')
+  const [customBaseUrl, setCustomBaseUrl] = useState(data.ai_provider_base_url || '')
+  const [selectedModel, setSelectedModel] = useState(data.ai_provider_model || '')
 
-  // When toggling fullUrlMode, also update provider_type to custom
-  function toggleFullUrlMode(val) {
-    setFullUrlMode(val)
-    if (val) {
-      updateData({ ai_provider_type: 'custom' })
-    } else {
-      if (data.ai_provider_type === 'custom') {
-        updateData({ ai_provider_type: 'openai' })
-      }
-    }
-    setDetectResult(null)
-  }
+  const isCustom = selectedProvider === 'custom'
+  const DEEPSEEK_URL = 'https://api.deepseek.com'
+  const DEEPSEEK_MODEL = 'deepseek-chat'
+
+  const STEP_LABELS = ['选择平台', '获取 Key', '填写并检测']
 
   async function handleDetect() {
-    if (!data.ai_provider_base_url || !data.ai_provider_api_key) return
+    const url = isCustom ? customBaseUrl.trim() : DEEPSEEK_URL
+    const key = apiKey.trim()
+    if (!key || (isCustom && !url)) return
+
     setDetecting(true)
     setDetectResult(null)
-    // If fullUrlMode is on, don't detect — user provided complete URL
-    if (fullUrlMode) {
-      setDetectResult({ provider_type: 'custom', available_models: [], error: '' })
-      setDetecting(false)
-      return
-    }
     try {
       const res = await fetch(`${API}/api/assistant/ai/detect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          base_url: data.ai_provider_base_url,
-          api_key: data.ai_provider_api_key,
-          provider_type: data.ai_provider_type || 'openai',
-        }),
+        body: JSON.stringify({ base_url: url, api_key: key, provider_type: 'openai' }),
       })
       const result = await res.json()
       setDetectResult(result)
       if (result.provider_type) {
-        updateData({ ai_provider_type: result.provider_type })
-        if (result.available_models?.length > 0 && !data.ai_provider_model) {
-          updateData({ ai_provider_model: result.available_models[0] })
-        }
+        updateData({
+          ai_provider_base_url: url,
+          ai_provider_api_key: key,
+          ai_provider_type: result.provider_type,
+        })
       }
     } catch {
-      setDetectResult({ error: '网络请求失败，请检查站点 URL' })
-    } finally {
-      setDetecting(false)
+      setDetectResult({ error: '网络请求失败，请检查站点 URL 和 Key' })
     }
+    setDetecting(false)
   }
 
-  async function handleNext() {
+  async function handleFinish() {
     setDetecting(true)
     try {
+      const url = isCustom ? customBaseUrl.trim() : DEEPSEEK_URL
       await fetch(`${API}/api/onboarding/step3`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ai_provider_base_url: data.ai_provider_base_url || '',
-          ai_provider_api_key: data.ai_provider_api_key || '',
+          ai_provider_base_url: url || '',
+          ai_provider_api_key: apiKey.trim() || '',
           ai_provider_type: data.ai_provider_type || 'openai',
           ai_provider_model: data.ai_provider_model || '',
           ai_provider_extra_body: data.ai_provider_extra_body || '',
@@ -1254,17 +1244,9 @@ export function Step3AIConfig({ data, updateData, onDone }) {
     onDone()
   }
 
-  const providerLabel = { openai: 'OpenAI 兼容', anthropic: 'Anthropic 兼容', custom: '自定义端点' }
-  const providerBadgeColor = { openai: 'bg-emerald-50 border-emerald-200 text-emerald-700', anthropic: 'bg-purple-50 border-purple-200 text-purple-700', custom: 'bg-amber-50 border-amber-200 text-amber-700' }
-  const models = detectResult?.available_models?.length
-    ? detectResult.available_models
-    : (data.ai_provider_model ? [data.ai_provider_model] : [])
-  const hasKey = (data.ai_provider_base_url || '').trim() && (data.ai_provider_api_key || '').trim()
-
-  const apiFormatOptions = [
-    { value: 'openai', desc: 'OpenAI Chat Completions 格式' },
-    { value: 'anthropic', desc: 'Anthropic 格式' },
-  ]
+  const detectSuccess = detectResult?.provider_type && !detectResult?.error
+  const hasModels = detectResult?.available_models?.length > 0
+  const canFinish = detectSuccess && !detecting && (!hasModels || selectedModel)
 
   return (
     <div>
@@ -1274,155 +1256,319 @@ export function Step3AIConfig({ data, updateData, onDone }) {
         <span className="text-xs text-text-muted ml-1">可跳过，稍后在系统配置中设置</span>
       </div>
 
-      <div className="space-y-6 mt-4">
-        <Field label="AI 站点 URL" hint={fullUrlMode
-          ? '请填写完整请求 URL，将直接使用此 URL，不拼接路径'
-          : '输入 API 根地址，不要以斜杠结尾，例如 https://api.deepseek.com'}>
-          <div className="flex items-center gap-2">
-            <div className="flex-1">
-              <Input
-                value={data.ai_provider_base_url || ''}
-                onChange={v => { updateData({ ai_provider_base_url: v }); setDetectResult(null) }}
-                placeholder={fullUrlMode ? 'https://api.example.com/v2/chat/completions' : 'https://api.deepseek.com'}
-              />
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-xs text-text-muted whitespace-nowrap">完整 URL</span>
-              <Toggle
-                enabled={fullUrlMode}
-                onChange={toggleFullUrlMode}
-              />
-            </div>
-          </div>
-        </Field>
-
-        <Field label="API Key" hint="该站点的 API Key / Token">
-          <Input
-            type="password"
-            value={data.ai_provider_api_key || ''}
-            onChange={v => { updateData({ ai_provider_api_key: v }); setDetectResult(null) }}
-            placeholder="sk-xxxxxxxxxxxxxxxx"
-          />
-        </Field>
-
-        {/* Detect + Test buttons side by side */}
-        <div className="flex items-center gap-3 mb-5">
-          <motion.button
-            type="button"
-            whileTap={{ scale: 0.97 }}
-            whileHover={{ scale: 1.02 }}
-            onClick={handleDetect}
-            disabled={detecting || !hasKey}
-            className={`flex-1 py-2.5 rounded-full text-[14px] font-semibold tracking-wide shadow-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer
-              ${detecting || !hasKey
-                ? 'bg-bg-raised border border-border-main text-text-muted cursor-not-allowed'
-                : 'bg-brand-green-light border border-brand-green/20 text-brand-green-hover hover:shadow-md'}`}
-          >
-            {detecting ? (
-              <><CircleNotch size={16} className="animate-spin" />检测中...</>
-            ) : (
-              <><MagnifyingGlass size={16} />检测模型</>
-            )}
-          </motion.button>
-        </div>
-
-        {/* Detection result */}
-        {detectResult && (
-          <div style={{ marginBottom: 20 }}>
-            {detectResult.provider_type ? (
-              <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border ${providerBadgeColor[detectResult.provider_type] || 'bg-bg-raised border-border-main text-text-main'}`}>
-                <Lightning size={14} weight="fill" />
-                检测成功：{providerLabel[detectResult.provider_type] || detectResult.provider_type}
-              </div>
-            ) : detectResult.error ? (
-              <p className="text-xs text-status-error flex items-center gap-1">
-                <Warning size={12} />{detectResult.error}
-              </p>
-            ) : null}
-          </div>
-        )}
-
-        {/* Model selection — always Input, detected models as clickable chips */}
-        <Field label="模型" hint={models.length > 1
-          ? '点击下方模型标签选择，也可直接输入任意模型 ID'
-          : '输入模型 ID，如 deepseek-chat、gpt-4o、mimo-v2.5'}>
-          <Input
-            value={data.ai_provider_model || ''}
-            onChange={v => updateData({ ai_provider_model: v })}
-            placeholder="输入或选择模型 ID"
-          />
-          {models.length > 1 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              <span className="text-[10px] text-text-muted">检测到：</span>
-              {models.map(m => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => updateData({ ai_provider_model: m })}
-                  className={`px-2 py-0.5 rounded-full text-[11px] font-mono cursor-pointer transition-colors border ${
-                    data.ai_provider_model === m
-                      ? 'bg-brand-green-light text-brand-green border-brand-green/20 font-semibold'
-                      : 'bg-bg-raised text-text-muted border-border-main hover:border-text-muted/30'
-                  }`}
-                >{m}</button>
-              ))}
-            </div>
-          )}
-        </Field>
-
-        {/* Advanced options — collapsed by default */}
-        <button
-          type="button"
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-main transition-colors mt-5 mb-3 cursor-pointer"
-        >
-          {showAdvanced ? <CaretDown size={12} /> : <CaretRight size={12} />}
-          高级选项
-        </button>
-
-        {showAdvanced && (
-          <div className="space-y-4 pl-1">
-            <Field label="API 格式">
-              <Select
-                value={data.ai_provider_type === 'custom' ? 'openai' : (data.ai_provider_type || 'openai')}
-                onChange={v => updateData({ ai_provider_type: v })}
-                options={apiFormatOptions}
-              />
-            </Field>
-
-            <Field label="附加参数 (JSON)" hint='合并到请求体，覆盖默认值。如 {"temperature": 0.8, "top_p": 0.9}。常用: temperature, top_p, max_tokens, stop, presence_penalty, frequency_penalty'>
-              <Input
-                value={data.ai_provider_extra_body || ''}
-                onChange={v => updateData({ ai_provider_extra_body: v })}
-                placeholder='{"thinking":{"type":"disabled"}}'
-              />
-            </Field>
-          </div>
-        )}
-
-        <div className="flex items-center gap-3">
-          <motion.button
-            whileTap={{ scale: 0.97 }} whileHover={{ scale: 1.02 }}
-            onClick={handleNext}
-            disabled={!hasKey || detecting}
-            className={`w-48 py-2.5 rounded-full text-[14px] font-semibold tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 ${
-              hasKey
-                ? 'bg-brand-green-hover text-white hover:opacity-90'
-                : 'bg-bg-raised text-text-muted border border-border-main cursor-not-allowed'
+      {/* ── Substeps progress bar ── */}
+      <div className="flex items-center gap-2 mb-6 px-1">
+        {[0, 1, 2].map(i => (
+          <div
+            key={i}
+            className={`h-1 rounded-full transition-all duration-400 ${
+              i === substep ? 'w-10 bg-brand-green' : i < substep ? 'w-6 bg-brand-green/40' : 'w-6 bg-border-strong'
             }`}
-          >
-            {detecting ? <CircleNotch size={18} className="animate-spin" /> : <><ArrowRight size={18} /> 下一步</>}
-          </motion.button>
-
-          <motion.button
-            whileTap={{ scale: 0.97 }} whileHover={{ scale: 1.02 }}
-            onClick={handleSkip}
-            className="px-5 py-2.5 rounded-full text-[14px] font-medium text-text-muted hover:text-text-main transition-colors cursor-pointer"
-          >
-            跳过，稍后配置
-          </motion.button>
-        </div>
+          />
+        ))}
+        <span className="text-[11px] text-text-muted font-medium ml-auto">
+          步骤 {substep + 1}/3 · {STEP_LABELS[substep]}
+        </span>
       </div>
+
+      <motion.div
+        key={`substep-${substep}`}
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+      >
+        {/* ═══ Step 0: Choose Provider ═══ */}
+        {substep === 0 && (
+          <div className="space-y-5">
+            <p className="text-[14px] text-text-muted leading-relaxed">
+              选一个 AI 平台，摘星就能调用 AI 能力（群摘要、AI 对话、朋友圈分析等）。
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {/* ── DeepSeek ── */}
+              <button
+                onClick={() => setSelectedProvider('deepseek')}
+                className={`flex items-center gap-4 p-4 rounded-2xl border-2 transition-all cursor-pointer text-left ${
+                  selectedProvider === 'deepseek'
+                    ? 'border-brand-green bg-bg-raised'
+                    : 'border-border-main bg-bg-card hover:border-border-strong hover:bg-bg-raised'
+                }`}
+              >
+                <div className="w-11 h-11 rounded-xl bg-brand-green-light border border-brand-green/20 flex items-center justify-center text-lg font-bold shrink-0 text-brand-green">
+                  D
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-text-main flex items-center gap-2">
+                    DeepSeek
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-brand-green-light border border-brand-green/20 text-brand-green">推荐</span>
+                  </div>
+                  <div className="text-[12px] text-text-muted mt-0.5 leading-relaxed">
+                    中文最强 · 价格最低 · 注册简单<br />
+                    新用户送 500 万 tokens
+                  </div>
+                </div>
+                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
+                  selectedProvider === 'deepseek' ? 'bg-brand-green border-brand-green' : 'border-border-strong'
+                }`}>
+                  {selectedProvider === 'deepseek' && <span className="text-[10px] text-white font-bold">✓</span>}
+                </div>
+              </button>
+
+              {/* ── Other compatible ── */}
+              <button
+                onClick={() => setSelectedProvider('custom')}
+                className={`flex items-center gap-4 p-4 rounded-2xl border-2 transition-all cursor-pointer text-left ${
+                  selectedProvider === 'custom'
+                    ? 'border-brand-green bg-bg-raised'
+                    : 'border-border-main bg-bg-card hover:border-border-strong hover:bg-bg-raised'
+                }`}
+              >
+                <div className="w-11 h-11 rounded-xl bg-status-info-soft border border-status-info/20 flex items-center justify-center text-lg font-bold shrink-0 text-status-info">
+                  +
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-text-main">其他 OpenAI 兼容平台</div>
+                  <div className="text-[12px] text-text-muted mt-0.5 leading-relaxed">
+                    硅基流动、月之暗面、通义千问等<br />
+                    只要兼容 OpenAI 格式即可
+                  </div>
+                </div>
+                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
+                  selectedProvider === 'custom' ? 'bg-brand-green border-brand-green' : 'border-border-strong'
+                }`}>
+                  {selectedProvider === 'custom' && <span className="text-[10px] text-white font-bold">✓</span>}
+                </div>
+              </button>
+            </div>
+
+            {/* Cost note */}
+            <div className="flex items-start gap-3 p-4 bg-status-warn-soft border border-status-warn/15 rounded-xl">
+              <span className="text-base shrink-0">💰</span>
+              <div className="text-[12px] text-text-muted leading-relaxed">
+                <b className="text-text-main">费用说明</b>：摘星完全免费。AI 平台按用量计费——生成一次群摘要约 <b className="text-text-main">0.01 元</b>，每月通常不超 <b className="text-text-main">3 元</b>。DeepSeek 赠送的免费额度足够用几个月。
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center gap-3 pt-2">
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                onClick={() => setSubstep(1)}
+                disabled={!selectedProvider}
+                className={`py-2.5 px-8 rounded-full text-[14px] font-semibold transition-all cursor-pointer ${
+                  selectedProvider
+                    ? 'bg-brand-green-hover text-white hover:opacity-90'
+                    : 'bg-bg-raised text-text-muted border border-border-main cursor-not-allowed'
+                }`}
+              >
+                选好了，下一步 <span className="inline-block ml-0.5">→</span>
+              </motion.button>
+              <button onClick={handleSkip} className="text-xs text-text-muted hover:text-text-main transition-colors cursor-pointer">
+                跳过，稍后配置
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ═══ Step 1: Guide ═══ */}
+        {substep === 1 && (
+          <div className="space-y-5">
+            <h4 className="text-sm font-semibold text-text-main">
+              {isCustom ? '在其他平台获取 API Key' : '去 DeepSeek 拿你的钥匙'}
+            </h4>
+            <p className="text-[13px] text-text-muted leading-relaxed">
+              API Key 就像一串密码，告诉 AI 平台「我是合法用户」。跟着下面步骤走，1 分钟拿到。
+            </p>
+
+            {/* ── DeepSeek guide panel ── */}
+            {!isCustom && (
+              <div className="bg-bg-card border border-border-main rounded-2xl overflow-hidden">
+                <div className="px-5 py-3.5 border-b border-border-main flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-brand-green-light border border-brand-green/20 flex items-center justify-center text-xs font-bold shrink-0 text-brand-green">D</div>
+                  <span className="text-sm font-semibold text-text-main">DeepSeek 注册 + 获取 Key</span>
+                </div>
+                <div className="px-5 py-2 divide-y divide-border-main/40">
+                  {[
+                    { num: '1', html: '打开 <b class="text-text-main">platform.deepseek.com</b>，点击右上角「注册」。用手机号注册即可。' },
+                    { num: '2', html: '登录后，进入左侧菜单 <b class="text-text-main">「API Keys」</b>，点击「创建 API Key」，复制生成的 <code class="bg-bg-raised px-1.5 py-0.5 rounded text-[12px] font-mono text-brand-green">sk-xxxxxxxx</code>。' },
+                    { num: '3', html: '把复制的 Key 粘贴到下一步的输入框中。<b class="text-text-main">只粘贴一次，后面不会再看</b>。' },
+                  ].map(({ num, html }) => (
+                    <div key={num} className="flex items-start gap-3 py-3.5">
+                      <div className="w-7 h-7 rounded-full bg-brand-green-light border border-brand-green/20 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 text-brand-green">{num}</div>
+                      <div className="text-[13px] text-text-muted leading-relaxed" dangerouslySetInnerHTML={{ __html: html }} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Custom platform guide ── */}
+            {isCustom && (
+              <div className="bg-bg-card border border-border-main rounded-2xl overflow-hidden">
+                <div className="px-5 py-3.5 border-b border-border-main flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-status-info-soft border border-status-info/20 flex items-center justify-center text-xs font-bold shrink-0 text-status-info">+</div>
+                  <span className="text-sm font-semibold text-text-main">其他兼容平台</span>
+                </div>
+                <div className="px-5 py-2 divide-y divide-border-main/40">
+                  {[
+                    { num: '1', html: '在你使用的 AI 平台上注册并获取 <b class="text-text-main">API Key</b>。平台需支持 OpenAI 兼容的 Chat Completions 接口。' },
+                    { num: '2', html: '记录两个信息：<b class="text-text-main">API 站点地址</b>和 <b class="text-text-main">API Key</b>。站点地址格式如 <code class="bg-bg-raised px-1.5 py-0.5 rounded text-[12px] font-mono text-brand-green">https://api.example.com</code>。' },
+                    { num: '3', html: '在下一步中分别填入站点地址和 Key，然后点击「检测连通」。' },
+                  ].map(({ num, html }) => (
+                    <div key={num} className="flex items-start gap-3 py-3.5">
+                      <div className="w-7 h-7 rounded-full bg-status-info-soft border border-status-info/20 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 text-status-info">{num}</div>
+                      <div className="text-[13px] text-text-muted leading-relaxed" dangerouslySetInnerHTML={{ __html: html }} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+
+            {/* Actions */}
+            <div className="flex items-center gap-3">
+              <button onClick={() => setSubstep(0)} className="py-2.5 px-6 rounded-full text-[13px] font-medium text-text-muted border border-border-main hover:text-text-main transition-colors cursor-pointer">
+                ← 返回
+              </button>
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                onClick={() => setSubstep(2)}
+                className="py-2.5 px-8 rounded-full text-[14px] font-semibold bg-brand-green-hover text-white hover:opacity-90 transition-all cursor-pointer"
+              >
+                拿到 Key 了，下一步 <span className="inline-block ml-0.5">→</span>
+              </motion.button>
+            </div>
+            <button onClick={handleSkip} className="text-xs text-text-muted hover:text-text-main transition-colors cursor-pointer">
+              跳过，稍后配置
+            </button>
+          </div>
+        )}
+
+        {/* ═══ Step 2: Fill & Detect ═══ */}
+        {substep === 2 && (
+          <div className="space-y-5">
+            <h4 className="text-sm font-semibold text-text-main">把 Key 粘贴进来，我们帮你验证</h4>
+            <p className="text-[13px] text-text-muted leading-relaxed">
+              填入刚才复制的 API Key，点击「检测连通」——成功就代表 AI 已经准备好了。
+            </p>
+
+            <div className="bg-bg-card border border-border-main rounded-2xl p-5 space-y-4">
+              {/* Base URL for custom */}
+              {isCustom && (
+                <Field label="API 站点地址" hint="填写平台提供的 API 地址，不要以斜杠结尾">
+                  <Input
+                    value={customBaseUrl}
+                    onChange={v => { setCustomBaseUrl(v); setDetectResult(null) }}
+                    placeholder="https://api.example.com"
+                  />
+                </Field>
+              )}
+
+              {/* API Key */}
+              <Field label="API Key" hint="以 sk- 开头的一串字符，粘贴即可">
+                <Input
+                  type="password"
+                  value={apiKey}
+                  onChange={v => { setApiKey(v); setDetectResult(null) }}
+                  placeholder="sk-xxxxxxxxxxxxxxxx"
+                />
+              </Field>
+
+              {/* Detect button */}
+              <div className="flex items-center">
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={handleDetect}
+                  disabled={detecting || !apiKey.trim() || (isCustom && !customBaseUrl.trim())}
+                  className={`py-2.5 px-6 rounded-full text-[14px] font-semibold transition-all cursor-pointer flex items-center gap-2 border ${
+                    detecting || !apiKey.trim() || (isCustom && !customBaseUrl.trim())
+                      ? 'bg-bg-raised text-text-muted border-border-main cursor-not-allowed'
+                      : 'bg-brand-green-light border-brand-green/20 text-brand-green hover:bg-brand-green/15'
+                  }`}
+                >
+                  {detecting ? (
+                    <><CircleNotch size={16} className="animate-spin" /> 检测中...</>
+                  ) : (
+                    <><MagnifyingGlass size={16} /> 检测连通</>
+                  )}
+                </motion.button>
+              </div>
+
+              {/* Detect result */}
+              {detectResult && (
+                <div className={`p-4 rounded-xl border ${
+                  detectSuccess
+                    ? 'bg-brand-green-light border-brand-green/20'
+                    : 'bg-status-error-soft border-status-error/20'
+                }`}>
+                  {detectSuccess ? (
+                    <div className="flex items-start gap-2.5">
+                      <CheckCircle size={18} weight="fill" className="text-brand-green shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="font-semibold text-brand-green">✓ 连通成功！</p>
+                        {hasModels && (
+                          <div className="mt-2">
+                            <p className="text-[12px] text-text-muted mb-1.5">选择模型：</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {detectResult.available_models.map(m => (
+                                <button
+                                  key={m}
+                                  onClick={() => { setSelectedModel(m); updateData({ ai_provider_model: m }) }}
+                                  className={`px-3 py-1 rounded-full text-[12px] font-mono cursor-pointer transition-colors border ${
+                                    selectedModel === m
+                                      ? 'bg-brand-green-light text-brand-green border-brand-green/20 font-semibold'
+                                      : 'bg-bg-raised text-text-muted border-border-main hover:border-text-muted/30'
+                                  }`}
+                                >
+                                  {m}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-2.5">
+                      <Warning size={18} weight="fill" className="text-status-error shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-semibold text-status-error">连通失败</p>
+                        <p className="text-[13px] text-text-muted mt-1">{detectResult.error || '请检查 Key 和站点地址是否正确'}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center gap-3">
+              <button onClick={() => setSubstep(1)} className="py-2.5 px-6 rounded-full text-[13px] font-medium text-text-muted border border-border-main hover:text-text-main transition-colors cursor-pointer">
+                ← 返回
+              </button>
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                onClick={handleFinish}
+                disabled={!canFinish}
+                className={`py-2.5 px-8 rounded-full text-[14px] font-semibold transition-all cursor-pointer flex items-center gap-2 ${
+                  canFinish
+                    ? 'bg-brand-green-hover text-white hover:opacity-90'
+                    : 'bg-bg-raised text-text-muted border border-border-main cursor-not-allowed'
+                }`}
+              >
+                {detecting ? (
+                  <Spinner size={18} weight="bold" className="animate-spin" />
+                ) : (
+                  <><CheckCircle size={18} /> 完成配置</>
+                )}
+              </motion.button>
+            </div>
+            <button onClick={handleSkip} className="text-xs text-text-muted hover:text-text-main transition-colors cursor-pointer">
+              跳过，稍后配置
+            </button>
+          </div>
+        )}
+      </motion.div>
     </div>
   )
 }

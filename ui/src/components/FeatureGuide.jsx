@@ -55,7 +55,7 @@ const GUIDE_STEPS_DEF = [
   },
   {
     tabId: 'assistant',
-    cardPos: { bottom: '40px', left: '260px', transform: 'none' },
+    cardPos: { bottom: '40px', right: '40px', transform: 'none' },
     icon: ChatCircleDots,
     title: '群聊智能助手',
     desc: '关键词关注提醒 + 定时 AI 摘要 + 公众号即时提醒。每个群独立配置，可推送通知。',
