@@ -168,6 +168,7 @@ export default function App() {
     avatar_url: '',
     wx_name: '',
     restricted_features_enabled: false,
+    rag_ok: false,
   }
 
   // Loading state

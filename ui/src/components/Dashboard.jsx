@@ -457,11 +457,13 @@ export default function Dashboard({ status, onTabChange }) {
           </button>
         </div>
 
-        <div className="px-6 pb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="px-6 pb-4 grid grid-cols-2 md:grid-cols-5 gap-3">
           <StatusTile icon={Database} label="数据库" ok={status.db_ok} okText="正常" errText="异常" />
           <StatusTile icon={WechatLogo} label="微信推送" ok={status.wechat_online} okText="已连接" errText="未连接" />
           <StatusTile icon={Brain} label="AI 后端" ok={status.ai_ok} okText="可达" errText="未响应"
             detail={status.ai_ok ? (status.model_name || '') : '未检测或未成功调用'} />
+          <StatusTile icon={Cube} label="语义搜索" ok={status.rag_ok} okText="已就绪" errText="未安装"
+            detail={status.rag_ok ? '支持聊天/公众号/朋友圈语义检索' : '下载完整版启用'} />
           <StatusTile icon={Robot} label="助手服务" ok={status.running} okText="运行" errText="停止"
             detail={status.running ? `已运行 ${uptimeStr}` : ''} />
         </div>

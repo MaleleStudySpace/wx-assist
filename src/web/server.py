@@ -563,7 +563,7 @@ class _ServerStatus:
         "wechat_online", "ai_ok", "ai_verified", "model_name", "group_count",
         "last_api_call_sec_ago", "last_api_call_time",
         "timestamp", "error", "avatar_url", "wx_name",
-        "restricted_features_enabled",
+        "restricted_features_enabled", "rag_ok",
     )
 
     def __init__(self):
@@ -585,6 +585,7 @@ class _ServerStatus:
         self.avatar_url = ""
         self.wx_name = ""
         self.restricted_features_enabled = False
+        self.rag_ok = False
         self._clients: list = []
         self._clients_lock = threading.Lock()
 
@@ -780,6 +781,7 @@ def register_rag_engine(re):
     """Register the RAGEngine so components can trigger re-indexing."""
     global _rag_engine
     _rag_engine = re
+    update_status(rag_ok=re is not None)
 
 def get_rag_engine():
     """Get the registered RAGEngine instance, or None if not available."""

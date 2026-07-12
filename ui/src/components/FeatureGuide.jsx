@@ -170,7 +170,7 @@ function DashboardPage() {
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-4 gap-4 mt-4">
+      <div className="grid grid-cols-5 gap-4 mt-4">
         <div id="hl-health-db" className="bg-bg-raised border border-border-main rounded-2xl p-4">
           <div className="text-[11px] text-text-muted font-semibold">数据库</div>
           <div className="text-sm font-bold text-brand-green">✓ 已连接</div>
@@ -182,6 +182,13 @@ function DashboardPage() {
         <div id="hl-health-ai" className="bg-bg-raised border border-border-main rounded-2xl p-4">
           <div className="text-[11px] text-text-muted font-semibold">AI 后端</div>
           <div className="text-sm font-bold text-brand-green">✓ 连通</div>
+        </div>
+        <div className="bg-bg-raised border border-border-main rounded-2xl p-4">
+          <div className="text-[11px] text-text-muted font-semibold">语义搜索</div>
+          <div className="text-sm font-bold text-amber-500 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+            按需安装
+          </div>
         </div>
         <div className="bg-bg-raised border border-border-main rounded-2xl p-4">
           <div className="text-[11px] text-text-muted font-semibold">助手服务</div>
