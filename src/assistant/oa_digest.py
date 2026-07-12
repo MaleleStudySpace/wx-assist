@@ -446,6 +446,20 @@ class OADigestService:
                 new_articles, system_prompt, max_content_chars, scrape_full,
             )
 
+        # LLM 返回空/短内容视为失败（deepseek_backend 在 content 为空时返回 "..."）
+        if len(digest_text.strip()) <= 10:
+            logger.warning(
+                "[OA-DIGEST] LLM 返回内容过短(%d chars)，视为生成失败: group='%s', articles=%d, content='%s'",
+                len(digest_text), group.name, len(new_articles), digest_text[:50],
+            )
+            return {
+                "success": False,
+                "group_id": group_id,
+                "articles_count": len(new_articles),
+                "digest_text": "",
+                "errors": ["LLM 返回内容过短，摘要生成失败"],
+            }
+
         # Mark as digested
         for art in new_articles:
             self._history.mark_digested(art.url)
