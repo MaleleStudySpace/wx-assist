@@ -418,7 +418,7 @@ class OADigestService:
                 len(new_articles), len(full_prompt),
                 "custom_prompt" if group.custom_prompt else (group.digest_template or "default"),
             )
-            # Wrap with 70s Python timeout (httpx 60s + 10s buffer for long summaries)
+            # Wrap with 90s Python timeout (httpx 60s + 30s buffer for long summaries)
             import concurrent.futures
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _exe:
@@ -426,10 +426,10 @@ class OADigestService:
                         call_llm, full_prompt, system_prompt, summarizer=self._summarizer,
                     )
                     try:
-                        digest_text = _fut.result(timeout=70)
+                        digest_text = _fut.result(timeout=90)
                     except concurrent.futures.TimeoutError:
                         logger.warning(
-                            "[OA-DIGEST] Direct LLM 超时（70s），文章数=%d, prompt=%d chars",
+                            "[OA-DIGEST] Direct LLM 超时（90s），文章数=%d, prompt=%d chars",
                             len(new_articles), len(full_prompt),
                         )
                         digest_text = ""
@@ -565,7 +565,7 @@ class OADigestService:
             for future in concurrent.futures.as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 try:
-                    chunk_summaries[idx] = future.result(timeout=70)
+                    chunk_summaries[idx] = future.result(timeout=90)
                     logger.debug("[OA-DIGEST] Map chunk %d/%d completed", idx + 1, len(chunks))
                 except concurrent.futures.TimeoutError:
                     logger.error("[OA-DIGEST] Map chunk %d 超时（70s）", idx)

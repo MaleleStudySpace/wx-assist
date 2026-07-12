@@ -796,11 +796,23 @@ class DigestScheduler:
         service = OADigestService(self._config, client, summarizer=self._summarizer)
         result = service.generate_digest(oa.id)
 
+        # 失败自动重试一次
         if not result.get("success", False):
-            logger.error("[OA-DIGEST] Digest generation failed for '%s': %s",
-                         oa.name, result.get("error", "unknown"))
-            self._tc_fail(task_id, error=result.get("error", "摘要生成失败"))
-            self._broadcast_task_update(task_id, 'oa_digest', 'failed', '', oa.name, error=result.get("error", ""))
+            error_msg = result.get("error", "unknown")
+            logger.warning("[OA-DIGEST] '%s' 首次生成失败(%s)，30s 后重试...", oa.name, error_msg)
+            self._tc_update(task_id, progress='首次失败，30s 后重试')
+            self._broadcast_task_update(task_id, 'oa_digest', 'running', '重试中', oa.name)
+            import time as _rt
+            _rt.sleep(30)
+            result = service.generate_digest(oa.id, force=True)
+
+        if not result.get("success", False):
+            error_msg = result.get("error", "摘要生成失败")
+            logger.error("[OA-DIGEST] '%s' 重试仍失败: %s", oa.name, error_msg)
+            self._tc_fail(task_id, error=error_msg)
+            self._broadcast_task_update(task_id, 'oa_digest', 'failed', '', oa.name, error=error_msg)
+            # 推送失败通知到 ilink
+            self._notify_oa_digest_failure(oa, error_msg)
             return
 
         digest_text = result.get("digest_text", "")
@@ -965,3 +977,35 @@ class DigestScheduler:
             broadcast_event("task_update", payload)
         except Exception:
             pass
+
+    def _notify_oa_digest_failure(self, oa, error_msg: str) -> None:
+        """推送 OA 摘要生成失败通知到 ilink + outbox。Never raises."""
+        try:
+            title = f"⚠️ 公众号摘要失败 · {oa.name}"
+            display = f"⚠️ **摘要生成失败**\n📰 **公众号:** {oa.name}\n❌ **原因:** {error_msg}\n\n请稍后手动重试。"
+            # 记录到 outbox
+            self._outbox.add(
+                notif_type="oa_digest",
+                chat_id=oa.id,
+                group_name=oa.name,
+                title=title,
+                content=json.dumps({
+                    "group": oa.name,
+                    "error": error_msg,
+                    "display": display,
+                }, ensure_ascii=False),
+                priority="high",
+            )
+            # 推送到 ilink
+            if oa.push_target == "ilink":
+                try:
+                    from src.wechat.ilink_push import get_ilink_push, format_for_wechat
+                    ilink = get_ilink_push()
+                    if ilink.is_available():
+                        msg = format_for_wechat(title, display)
+                        ilink.send_message(msg)
+                        logger.info("[OA-DIGEST] 失败通知已推送: '%s'", oa.name)
+                except Exception as e:
+                    logger.warning("[OA-DIGEST] 失败通知推送失败: %s", e)
+        except Exception as e:
+            logger.warning("[OA-DIGEST] _notify_oa_digest_failure 异常: %s", e)
