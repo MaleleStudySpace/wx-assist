@@ -114,7 +114,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='wx-assist',
+    name='wx-assist_no_rag',
     debug=False,
     bootloader_ignore_signals=False,
     strip=True,
