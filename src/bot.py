@@ -494,11 +494,6 @@ class Bot:
                 rag_engine = None
 
             # ── Cache sync: 后台全量同步 + 定时增量循环（独立于 RAG）──
-            except Exception as rag_e:
-                logger.warning("[RAG] RAGEngine init failed (continuing without): %s", rag_e)
-                rag_engine = None
-
-            # ── Cache sync: 后台全量同步 + 定时增量循环（独立于 RAG）──
             if content_cache:
                 def _cache_init_task():
                     """初始化缓存：全量同步 + RAG 索引 + 定时增量循环。"""
