@@ -449,7 +449,12 @@ class Bot:
             # ── RAG Engine (optional, zero impact on failure) ──
             rag_engine = None
             try:
-                from .assistant.rag import RAGEngine, FastEmbedder, ChromaStore, SlidingWindowChunker
+                import importlib
+                _rag_mod = importlib.import_module('src.assistant.rag')
+                RAGEngine = _rag_mod.RAGEngine
+                FastEmbedder = _rag_mod.FastEmbedder
+                ChromaStore = _rag_mod.ChromaStore
+                SlidingWindowChunker = _rag_mod.SlidingWindowChunker
 
                 embedder = FastEmbedder()
                 vec_store = ChromaStore(path="data/chroma")

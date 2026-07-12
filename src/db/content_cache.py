@@ -977,8 +977,7 @@ class ContentCache:
                 "SELECT url, title, digest, full_content, source_name, pub_time, cached_at "
                 "FROM oa_cache WHERE title != ''"
             )
-        from src.assistant.rag.models import Chunk
-        import numpy as np
+        from src.assistant.rag_types import Chunk
         chunks = []
         max_cached_at = _cutoff
         for r in rows:
@@ -1017,7 +1016,7 @@ class ContentCache:
                 "SELECT post_id, clean_content, nickname, create_time, cached_at "
                 "FROM sns_cache WHERE clean_content != ''"
             )
-        from src.assistant.rag.models import Chunk
+        from src.assistant.rag_types import Chunk
         chunks = []
         max_cached_at = _cutoff
         for r in rows:
@@ -1053,7 +1052,7 @@ class ContentCache:
                 "SELECT fav_id, clean_text, type_name, update_time, cached_at "
                 "FROM fav_cache WHERE clean_text != ''"
             )
-        from src.assistant.rag.models import Chunk
+        from src.assistant.rag_types import Chunk
         chunks = []
         max_cached_at = _cutoff
         for r in rows:

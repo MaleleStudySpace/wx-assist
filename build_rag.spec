@@ -54,6 +54,8 @@ a = Analysis(
         ('ui/dist', 'ui/dist'),
         ('lib/wasm', 'lib/wasm'),
         ('.env.example', '.'),
+        # RAG embedding model (~182MB, needed for semantic search)
+        (str(PROJECT_ROOT / 'models'), 'models'),
         # data/ is runtime-generated — do NOT bundle into read-only _MEIPASS
     ],
     hiddenimports=[
@@ -65,6 +67,10 @@ a = Analysis(
         'src.assistant.oa_digest', 'src.assistant.oa_groups',
         'src.assistant.oa_parser', 'src.assistant.oa_reader',
         'src.assistant.task_center',
+        'src.assistant.rag', 'src.assistant.rag.engine',
+        'src.assistant.rag.embedder', 'src.assistant.rag.vector_store',
+        'src.assistant.rag.chunking', 'src.assistant.rag.models',
+        'src.assistant.rag.reranker',
         'src.agent', 'src.agent.engine', 'src.agent.tools',
         'src.agent.registry', 'src.agent.mcp_server',
         'src.summarize', 'src.summarize.base', 'src.summarize.claude_backend',
@@ -93,12 +99,25 @@ a = Analysis(
         'requests', 'urllib3',
         'APScheduler', 'apscheduler.schedulers.background', 'apscheduler.triggers.cron',
         'zstandard', 'Crypto',
+        # RAG dependencies
+        'numpy', 'chromadb', 'fastembed',
+        # ChromaDB submodules not statically imported (loaded via Settings
+        # dynamic import) — bundle explicitly to avoid No module named errors
+        # in the frozen EXE.
+        'chromadb.telemetry',
+        'chromadb.telemetry.product',
+        'chromadb.telemetry.product.posthog',
+        'chromadb.telemetry.product.events',
+        'chromadb.telemetry.opentelemetry',
+        'overrides',
+        # ChromaDB native Rust bindings (compiled .pyd, not auto-detected)
+        'chromadb_rust_bindings',
+        'chromadb.api.rust',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib', 'scipy', 'jedi', 'IPython',
-              'numpy', 'chromadb', 'fastembed', 'onnxruntime'],
+    excludes=['tkinter', 'matplotlib', 'scipy', 'jedi', 'IPython'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=None,
