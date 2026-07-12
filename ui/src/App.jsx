@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Gear, ChartLine, Scroll, Spinner, Sun, Moon, ChatCircleDots, Star, Eye, Newspaper, Chats, PaperPlaneTilt, Bell } from '@phosphor-icons/react'
-import { API_BASE } from './components/SharedComponents'
+import { Gear, ChartLine, Scroll, Spinner, Sun, Moon, ChatCircleDots, Star, Eye, Newspaper, Chats, PaperPlaneTilt, Bell, QrCode, X } from '@phosphor-icons/react'
+import { API_BASE, getWsUrl } from './components/SharedComponents'
 import Dashboard from './components/Dashboard'
 import ConfigPanel from './components/ConfigPanel'
 import AssistantPanel from './components/AssistantPanel'
@@ -13,6 +13,7 @@ import OATab from './components/OATab'
 import ChatTab from './components/ChatTab'
 import FeatureGuide from './components/FeatureGuide'
 import TaskCenter from './components/TaskCenter'
+import LANCard from './components/LANCard'
 import { AmbientWaveBackground } from './components/AmbientBackground'
 
 const iconVariants = {
@@ -42,9 +43,11 @@ export default function App() {
   const [configSection, setConfigSection] = useState('ai')
   const [botStatus, setBotStatus] = useState(null)
   const [onboardingDone, setOnboardingDone] = useState(null) // null = loading
+  const [authError, setAuthError] = useState(false) // true = LAN unauthorized
   const [showGuide, setShowGuide] = useState(false) // FeatureGuide only shows right after onboarding
   const [wsConnected, setWsConnected] = useState(false)
   const [showTaskCenter, setShowTaskCenter] = useState(false)
+  const [showLAN, setShowLAN] = useState(false)
   const [runningTaskCount, setRunningTaskCount] = useState(0)
 
   // Listen for open-task-center custom events from other components
@@ -89,6 +92,13 @@ export default function App() {
           fetch(`${API_BASE}/api/onboarding/status`),
           fetch(`${API_BASE}/api/load-config`)
         ])
+        // If API returns 401/403, show unauthorized page instead of onboarding
+        if (!statusRes.ok) {
+          if (statusRes.status === 401 || statusRes.status === 403) {
+            setAuthError(true)
+            return
+          }
+        }
         const d = await statusRes.json()
         const config = await configRes.json()
         setOnboardingDone(d.onboarding_done)
@@ -117,7 +127,7 @@ export default function App() {
     let socket = null
 
     function connectWS() {
-      socket = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      socket = new WebSocket(getWsUrl())
       socket.onopen = () => {
         setWsConnected(true)
       }
@@ -171,6 +181,27 @@ export default function App() {
     rag_ok: false,
   }
 
+  // Unauthorized access (phone without LAN session) — check BEFORE loading
+  // because authError can be set while onboardingDone is still null
+  if (authError) {
+    return (
+      <div className="min-h-[100dvh] bg-bg-main flex items-center justify-center p-8">
+        <div className="text-center max-w-md">
+          <div className="w-16 h-16 rounded-full bg-status-error/10 flex items-center justify-center mx-auto mb-5">
+            <span className="text-2xl">🔒</span>
+          </div>
+          <h1 className="text-xl font-bold text-text-main mb-2">无权访问</h1>
+          <p className="text-sm text-text-secondary leading-relaxed">
+            当前设备未通过局域网认证。请在桌面端开启「LAN 远程访问」后，使用手机扫描二维码连接。
+          </p>
+          <p className="text-xs text-text-muted mt-6">
+            wx-assist · LAN 远程访问
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   // Loading state
   if (onboardingDone === null) {
     return (
@@ -193,8 +224,8 @@ export default function App() {
       {/* Ambient wave background */}
       <AmbientWaveBackground />
 
-      {/* Sidebar */}
-      <div className="fixed left-0 top-0 h-full w-56 bg-bg-main border-r border-border-main z-40">
+      {/* Sidebar — hidden on mobile, always visible on desktop */}
+      <div className="hidden lg:block fixed left-0 top-0 h-full w-56 bg-bg-main border-r border-border-main z-40">
         <div className="p-5 flex flex-col h-full justify-between">
           <div>
             <div className="flex items-center gap-3 mb-8">
@@ -290,7 +321,7 @@ export default function App() {
       </div>
 
       {/* Main content */}
-      <div className="ml-56">
+      <div className="lg:ml-56">
         {showGuide ? (
           /* Feature Guide — only shown once immediately after onboarding completes */
           <FeatureGuide
@@ -305,7 +336,7 @@ export default function App() {
                 {TABS.find(t => t.id === activeTab)?.label}
               </h2>
               <div className="flex items-center gap-3">
-                {/* Task Center bell icon */}
+                {/* Task Center bell icon with numeric badge */}
                 <button
                   onClick={() => setShowTaskCenter(true)}
                   className="p-2 rounded-full bg-bg-main border border-border-main text-text-muted hover:text-text-main hover:border-text-muted/30 transition-colors cursor-pointer relative"
@@ -313,8 +344,19 @@ export default function App() {
                 >
                   <Bell size={18} />
                   {runningTaskCount > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-brand-green animate-pulse" />
+                    <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-brand-green text-[10px] text-white font-bold flex items-center justify-center leading-none">
+                      {runningTaskCount > 99 ? '99+' : runningTaskCount}
+                    </span>
                   )}
+                </button>
+
+                {/* LAN remote access */}
+                <button
+                  onClick={() => setShowLAN(true)}
+                  className="p-2 rounded-full bg-bg-main border border-border-main text-text-muted hover:text-text-main hover:border-text-muted/30 transition-colors cursor-pointer"
+                  title="LAN 远程访问"
+                >
+                  <QrCode size={18} />
                 </button>
 
                 {/* Theme switcher toggle button */}
@@ -326,24 +368,63 @@ export default function App() {
                   {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
                 </button>
 
-                <span className="text-xs text-text-muted font-mono bg-bg-main border border-border-main px-4 py-1.5 rounded-full">
+                <span className="hidden md:inline text-xs text-text-muted font-mono bg-bg-main border border-border-main px-4 py-1.5 rounded-full">
                   已处理 {(status.messages_processed ?? 0).toLocaleString()} 条消息
                 </span>
                 {!wsConnected ? (
-                  <div className="flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold bg-[#d45656]/10 text-[#d45656] border border-[#d45656]/20 animate-pulse">
+                  <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-semibold bg-[#d45656]/10 text-[#d45656] border border-[#d45656]/20 animate-pulse">
                     <div className="w-1.5 h-1.5 rounded-full bg-[#d45656]" />
-                    服务器离线
+                    <span className="hidden sm:inline">服务器离线</span>
                   </div>
                 ) : (
-                  <div className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold transition-all border ${
+                  <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-semibold transition-all border ${
                       status.running
                         ? 'bg-brand-green-light text-brand-green-hover dark:text-brand-green border-brand-green/20'
                         : 'bg-bg-raised text-text-muted border-border-main'
                     }`}>
                     <div className={`w-1.5 h-1.5 rounded-full ${status.running ? 'bg-brand-green animate-pulse' : 'bg-slate-500'}`} />
-                    {status.running ? '服务运行中' : '服务已停'}
+                    <span className="hidden sm:inline">{status.running ? '服务运行中' : '服务已停'}</span>
                   </div>
                 )}
+              </div>
+            </div>
+
+            {/* Mobile tab strip */}
+            <div className="lg:hidden overflow-x-auto border-b border-border-main bg-bg-main/60 backdrop-blur-md">
+              <div className="flex gap-1 px-2 py-1.5 min-w-max">
+                {TABS.map(({ id, label, icon: Icon, subs }) => (
+                  <div key={id} className="flex-shrink-0">
+                    <button
+                      onClick={() => { setActiveTab(id); if (subs) setConfigSection(subs[0].id) }}
+                      className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[12px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                        activeTab === id
+                          ? 'bg-brand-green/15 text-brand-green font-semibold'
+                          : 'text-text-muted hover:text-text-main hover:bg-bg-raised/50'
+                      }`}
+                    >
+                      <Icon size={13} weight={activeTab === id ? 'fill' : 'regular'} />
+                      {label}
+                    </button>
+                    {/* Config sub-tabs (mobile: only AI + Push) */}
+                    {activeTab === id && subs && (
+                      <div className="flex gap-0.5 mt-0.5 ml-0.5">
+                        {subs.filter(sub => sub.id === 'ai' || sub.id === 'push').map(sub => (
+                          <button
+                            key={sub.id}
+                            onClick={() => setConfigSection(sub.id)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                              configSection === sub.id
+                                ? 'bg-brand-green/20 text-brand-green'
+                                : 'text-text-muted/70 hover:text-text-main'
+                            }`}
+                          >
+                            {sub.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -354,7 +435,7 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.2 }}
-                className="p-8"
+                className="p-4 lg:p-8"
               >
                 {activeTab === 'dashboard' && <Dashboard status={status} onTabChange={setActiveTab} />}
                 {activeTab === 'config' && <ConfigPanel activeSection={configSection} onNavigate={setConfigSection} />}
@@ -372,6 +453,44 @@ export default function App() {
 
       {/* Task Center Drawer */}
       <TaskCenter open={showTaskCenter} onClose={() => setShowTaskCenter(false)} />
+
+      {/* LAN Modal */}
+      <AnimatePresence>
+        {showLAN && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          >
+            <div className="absolute inset-0 bg-black/40" onClick={() => setShowLAN(false)} />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.15 }}
+              className="relative bg-bg-card border border-border-main rounded-xl shadow-xl max-w-sm w-full max-h-[85vh] overflow-y-auto"
+            >
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border-main">
+                <div className="flex items-center gap-2">
+                  <QrCode size={18} className="text-text-secondary" />
+                  <span className="text-[14px] font-semibold text-text-main">LAN 远程访问</span>
+                </div>
+                <button
+                  onClick={() => setShowLAN(false)}
+                  className="p-1.5 rounded-full hover:bg-bg-raised text-text-muted hover:text-text-main transition-colors cursor-pointer"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="p-5">
+                <LANCard />
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

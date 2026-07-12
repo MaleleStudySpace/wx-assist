@@ -131,7 +131,9 @@ class ClaudeSummarizer(AbstractSummarizer):
         if tools:
             request_kwargs["tools"] = [_to_anthropic_tool(t) for t in tools]
 
+        start = time.monotonic()
         response = self.client.messages.create(**request_kwargs)
+        latency = (time.monotonic() - start) * 1000
 
         content_parts: list[str] = []
         tool_calls: list[dict] = []
@@ -150,6 +152,43 @@ class ClaudeSummarizer(AbstractSummarizer):
                 })
 
         content = "".join(content_parts) if content_parts else None
+
+        # If LLM called tools but left content empty, annotate so log is meaningful
+        log_content = content or ""
+        if not log_content and tool_calls:
+            tool_names_str = ", ".join(tc["function"]["name"] for tc in tool_calls)
+            log_content = f"[调用工具: {tool_names_str}]"
+
+        # Build user_prompt string from messages (for logging)
+        user_lines = []
+        for m in messages:
+            role = m.get("role", "unknown")
+            text = m.get("content", "")
+            user_lines.append(f"[{role}]: {text}")
+        user_prompt = "\n".join(user_lines)
+
+        # Tool descriptions for logging
+        tool_names = [t.get("function", {}).get("name", "?") for t in tools]
+
+        try:
+            usage = response.usage
+            token_in = usage.input_tokens if usage else 0
+            token_out = usage.output_tokens if usage else 0
+        except Exception:
+            token_in = token_out = 0
+
+        log_llm_interaction(
+            backend="claude", call_type="agent_chat",
+            model=self.model, system_prompt=system_prompt,
+            user_prompt=user_prompt, response=log_content,
+            latency_ms=latency,
+            token_in=token_in, token_out=token_out,
+            extra={"tool_calls": len(tool_calls) if tool_calls else 0,
+                   "tools": ",".join(tool_names),
+                   "tool_defs": tools,
+                   "messages": len(messages)},
+        )
+
         return content or "", tool_calls or None
 
     # ── Direct summarization ──────────────────────────────────────

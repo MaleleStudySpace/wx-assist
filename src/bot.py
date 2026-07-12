@@ -438,6 +438,9 @@ class Bot:
                 status_fn=get_status_snapshot,
                 task_center=task_center,
                 scheduler=assistant_scheduler,
+                content_cache=content_cache,
+                oa_monitor=oa_monitor,
+                alert_engine=assistant_alert,
             )
             agent_engine = AgentEngine(
                 summarizer=summarizer,
@@ -486,6 +489,11 @@ class Bot:
                 threading.Thread(target=_cold_start_task, daemon=True,
                                  name="rag-cold-start").start()
 
+            except Exception as rag_e:
+                logger.warning("[RAG] RAGEngine init failed (continuing without): %s", rag_e)
+                rag_engine = None
+
+            # ── Cache sync: 后台全量同步 + 定时增量循环（独立于 RAG）──
             except Exception as rag_e:
                 logger.warning("[RAG] RAGEngine init failed (continuing without): %s", rag_e)
                 rag_engine = None
@@ -554,8 +562,11 @@ class Bot:
                                 _n = content_cache.sync_sns_incremental(_c, task_center)
                                 if _n > 0 and rag_engine:
                                     content_cache.index_to_rag(rag_engine, "sns")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning('[CACHE] SNS 增量同步异常: %s', e)
+                        except BaseException as be:
+                            logger.critical('[CACHE] SNS 增量同步线程崩溃: %s', be)
+                            raise
                 threading.Thread(target=_sns_timer, daemon=True,
                                  name="sns-sync-timer").start()
 
@@ -570,14 +581,19 @@ class Bot:
                                 _n = content_cache.sync_fav_incremental(_c, task_center)
                                 if _n > 0 and rag_engine:
                                     content_cache.index_to_rag(rag_engine, "fav")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning('[CACHE] Fav 增量同步异常: %s', e)
+                        except BaseException as be:
+                            logger.critical('[CACHE] Fav 增量同步线程崩溃: %s', be)
+                            raise
                 threading.Thread(target=_fav_timer, daemon=True,
                                  name="fav-sync-timer").start()
 
                 # ── OA 60s 增量定时器（TaskCenter 追踪） ──
+                _oa_tick = [0]
                 def _oa_timer():
                     import time as _t
+                    logger.info("[CACHE] OA 增量同步定时器已启动")
                     while True:
                         _t.sleep(60)
                         try:
@@ -585,10 +601,18 @@ class Bot:
                             _c = get_wcdb_client()
                             if _c:
                                 _n = content_cache.sync_oa_incremental(_c, task_center)
+                                _oa_tick[0] += 1
+                                if _oa_tick[0] % 60 == 0:
+                                    logger.info("[CACHE] OA 增量同步活检查: tick=%d, last_n=%d",
+                                                 _oa_tick[0], _n)
                                 if _n > 0 and rag_engine:
                                     content_cache.index_to_rag(rag_engine, "oa")
-                        except Exception:
-                            pass
+                            else:
+                                logger.warning("[CACHE] OA 增量同步: get_wcdb_client 返回 None")
+                        except Exception as e:
+                            logger.warning('[CACHE] OA 增量同步异常: %s', e)
+                        except BaseException as be:
+                            logger.critical('[CACHE] OA 增量同步线程崩溃(BaseException): %s', be)
                 threading.Thread(target=_oa_timer, daemon=True,
                                  name="oa-sync-timer").start()
 
@@ -602,8 +626,11 @@ class Bot:
                             _c = get_wcdb_client()
                             if _c:
                                 content_cache.sync_oa_accounts(_c, task_center)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning('[CACHE] OA 账号刷新异常: %s', e)
+                        except BaseException as be:
+                            logger.critical('[CACHE] OA 账号刷新线程崩溃: %s', be)
+                            raise
                 threading.Thread(target=_oa_accounts_timer, daemon=True,
                                  name="oa-accounts-timer").start()
 

@@ -5266,7 +5266,7 @@ def handle_scheduler_update(params, config: AssistantConfig):
 
 def handle_api_request(path: str, params: dict, config: AssistantConfig, body: dict = None):
     """Main API router for new endpoints."""
-    logger.info("[API-ROUTER] handle_api_request called: path=%s thread=%s", path, threading.current_thread().name)
+    logger.debug("[API-ROUTER] handle_api_request called: path=%s thread=%s", path, threading.current_thread().name)
     # Add body to params for POST handlers
     if body:
         params["_body"] = body

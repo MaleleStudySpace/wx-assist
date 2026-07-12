@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Eye, DownloadSimple, MagnifyingGlass, Clock, ShieldCheck, ShieldWarning, Heart, ChatCircle, CaretDown, Funnel, X, MapPin, FolderOpen, Sparkle } from '@phosphor-icons/react'
-import { ImageLightbox, API_BASE } from './SharedComponents'
+import { ImageLightbox, API_BASE, getWsUrl } from './SharedComponents'
 import SnsAiDrawer from './SnsAiDrawer'
 
 function SnsPostCard({ post, avatarCache }) {
@@ -342,7 +342,7 @@ export default function MomentsTab() {
     }
     let ws = window.__moments_ws
     if (!ws || ws.readyState === WebSocket.CLOSED) {
-      ws = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      ws = new WebSocket(getWsUrl())
       window.__moments_ws = ws
     }
     ws.addEventListener('message', handleMessage)
@@ -586,7 +586,7 @@ export default function MomentsTab() {
             </button>
             <button
               onClick={openExportFolder}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-medium bg-bg-raised border border-border-main text-text-muted hover:text-text-main hover:border-text-muted/30 transition-all cursor-pointer"
+              className="hidden lg:flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-medium bg-bg-raised border border-border-main text-text-muted hover:text-text-main hover:border-text-muted/30 transition-all cursor-pointer"
               title="打开导出文件夹"
             >
               <FolderOpen size={14} />
@@ -595,7 +595,7 @@ export default function MomentsTab() {
             <button
               onClick={handleExport}
               disabled={exporting}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer
+              className={`hidden lg:flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer
                 ${exporting
                   ? 'bg-bg-raised text-text-muted cursor-wait'
                   : 'bg-brand-green-hover text-white hover:bg-brand-green-hover'

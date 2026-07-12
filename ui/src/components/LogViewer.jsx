@@ -232,6 +232,17 @@ function LLMLogEntry({ log, expanded, onToggle }) {
                 )}
               </div>
 
+              {/* Tool definitions (collapsible) */}
+              {detail.extra?.tool_defs && detail.extra.tool_defs.length > 0 && (
+                <div className="mt-2 mb-1">
+                  <LLMSection
+                    label={`Tool Definitions (${detail.extra.tool_defs.length})`}
+                    content={JSON.stringify(detail.extra.tool_defs, null, 2)}
+                    defaultCollapsed={true}
+                  />
+                </div>
+              )}
+
               {/* Prompt & Response sections */}
               <LLMSection label="System Prompt" content={detail.system_prompt} defaultCollapsed={true} />
               <LLMSection label="User Prompt" content={detail.user_prompt} defaultCollapsed={true} />

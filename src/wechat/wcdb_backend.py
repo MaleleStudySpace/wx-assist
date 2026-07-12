@@ -270,11 +270,11 @@ class WcdbBackend(AbstractWeChatBackend):
         """
         sessions = self._client.get_sessions()
 
-        # Build a map of all @chatroom entries: username -> best display name
-        all_chatrooms: dict[str, str] = {}
+        # Build a map of all sessions: username -> best display name
+        all_talkers: dict[str, str] = {}
         for s in sessions:
             username = str(s.get("username", "") or "")
-            if not username.endswith("@chatroom"):
+            if not username:
                 continue
 
             # Try session-level display name fields (rarely populated)
@@ -293,11 +293,11 @@ class WcdbBackend(AbstractWeChatBackend):
                 if not display or display == username:
                     display = username  # fallback
 
-            all_chatrooms[username] = display
+            all_talkers[username] = display
 
-        if not all_chatrooms:
+        if not all_talkers:
             logger.error(
-                "No @chatroom sessions found in WCDB (total sessions: %d). "
+                "No talkable sessions found in WCDB (total sessions: %d). "
                 "Make sure WeChat is logged in and session.db is accessible.",
                 len(sessions),
             )
@@ -309,11 +309,13 @@ class WcdbBackend(AbstractWeChatBackend):
         )
 
         if auto_discover:
-            for username, display in all_chatrooms.items():
+            for username, display in all_talkers.items():
                 self._talker_ids[display] = username
+            chatroom_count = sum(1 for u in all_talkers if u.endswith("@chatroom"))
+            contact_count = len(all_talkers) - chatroom_count
             logger.info(
-                "Auto-discovered %d group chats: %s",
-                len(self._talker_ids), list(self._talker_ids.keys()),
+                "Auto-discovered %d talkers: %d chatrooms + %d contacts",
+                len(self._talker_ids), chatroom_count, contact_count,
             )
             self._groups = list(self._talker_ids.keys())
 
@@ -321,43 +323,41 @@ class WcdbBackend(AbstractWeChatBackend):
             # Manual mode: match configured names against resolved display names
             for group_name in self._groups:
                 found = None
-                for username, display in all_chatrooms.items():
+                for username, display in all_talkers.items():
                     if group_name.lower() in display.lower() or display.lower() in group_name.lower():
                         found = username
                         break
                 if found:
                     self._talker_ids[group_name] = found
-                    logger.info("Resolved '%s' -> %s (display='%s')", group_name, found, all_chatrooms.get(found, ""))
+                    logger.info("Resolved '%s' -> %s (display='%s')", group_name, found, all_talkers.get(found, ""))
                 else:
-                    # Direct lookup: maybe group_name IS a username like 20968749111@chatroom
-                    if group_name in all_chatrooms:
+                    if group_name in all_talkers:
                         self._talker_ids[group_name] = group_name
                         logger.info("Resolved '%s' as direct username", group_name)
                     else:
                         logger.warning(
                             "Could not resolve group '%s'. Available: %s",
-                            group_name, list(all_chatrooms.keys()),
+                            group_name, list(all_talkers.keys()),
                         )
 
         # Persist chat_id -> display_name so the web UI can show
-        # human-readable group names in the nickname dropdown.
-        if all_chatrooms:
-            self._save_group_names(all_chatrooms)
+        if all_talkers:
+            self._save_group_names(all_talkers)
 
     @staticmethod
-    def _save_group_names(chatrooms: dict[str, str]) -> None:
+    def _save_group_names(talkers: dict[str, str]) -> None:
         """Persist chat_id -> display_name to data/group_names.json atomically."""
         import os as _os
         path = Path("data/group_names.json")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = path.with_suffix(".tmp")
-            data = json.dumps(chatrooms, ensure_ascii=False, indent=2)
+            data = json.dumps(talkers, ensure_ascii=False, indent=2)
             tmp_path.write_text(data, encoding="utf-8")
             _os.replace(tmp_path, path)
             logger.info(
                 "Saved %d group-name mappings to %s",
-                len(chatrooms), path,
+                len(talkers), path,
             )
         except Exception as e:
             logger.warning("Failed to persist group_names.json: %s", e)

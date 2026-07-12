@@ -114,7 +114,6 @@ class AlertEngine:
         Returns outbox notification ID if a keyword was matched, else None.
         """
         if not self._config.assistant_enabled:
-            logger.info("Alert: assistant disabled, skipping")
             return None
 
         chat_id = msg.get("chat_id", "")

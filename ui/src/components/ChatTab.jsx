@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Chats, ChatsCircle, CaretDown, MagnifyingGlass, Clock, Download, ArrowsClockwise, Play, Pause, X, FileText, Image, VideoCamera, Microphone, Link, Eye, User, ArrowDown, Users, ChatCircleDots, ShieldCheck, ShieldWarning } from '@phosphor-icons/react'
-import { ImageLightbox, Avatar, API_BASE } from './SharedComponents'
+import { ImageLightbox, Avatar, API_BASE, getWsUrl } from './SharedComponents'
 import ChatDrawer from './ChatDrawer'
 import AIChatPanel from './AIChatPanel'
 import AIChatConfig from './AIChatConfig'
@@ -531,7 +531,7 @@ export default function ChatTab() {
     }
     let ws = window.__chat_ws
     if (!ws || ws.readyState === WebSocket.CLOSED) {
-      ws = new WebSocket(`ws://${API_BASE.replace(/^https?:\/\//, '')}/ws`)
+      ws = new WebSocket(getWsUrl())
       window.__chat_ws = ws
     }
     ws.addEventListener('message', handleMessage)
@@ -869,9 +869,9 @@ export default function ChatTab() {
 
   return (
     <motion.div initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -12 }}>
-      <div className="flex gap-4 h-[calc(100dvh-140px)]">
+      <div className="flex flex-col lg:flex-row gap-4 h-[calc(100dvh-140px)]">
         {/* ── Left Panel ── */}
-        <div className="w-72 flex-shrink-0 flex flex-col border border-border-main rounded-xl bg-bg-card overflow-hidden">
+        <div className="w-full lg:w-72 lg:flex-shrink-0 flex flex-col border border-border-main rounded-xl bg-bg-card overflow-hidden max-h-[25vh] lg:max-h-none">
           <div className="p-3 border-b border-border-main">
             {foldedView ? (
               <div className="flex items-center gap-2">
@@ -1057,7 +1057,7 @@ export default function ChatTab() {
                     <ArrowsClockwise size={14} />
                   </button>
                   <button onClick={() => setShowExportPanel(!showExportPanel)} disabled={exporting}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer
+                    className={`hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer
                       ${exporting ? 'bg-brand-green-light/20 text-brand-green cursor-wait' : showExportPanel ? 'bg-brand-green-light/20 border border-brand-green/30 text-brand-green' : 'bg-brand-green-hover text-white hover:bg-[#0d8c5c]'}`}>
                     <Download size={12} />{exporting ? '导出中...' : '导出'}
                   </button>
@@ -1108,7 +1108,7 @@ export default function ChatTab() {
                       {/* Confirm button */}
                       <div className="flex items-center gap-3">
                         <button onClick={handleExport} disabled={exporting}
-                          className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer
+                          className={`hidden lg:inline-flex px-4 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer
                             ${exporting ? 'bg-brand-green-light/20 text-brand-green cursor-wait' : 'bg-brand-green-hover text-white hover:bg-[#0d8c5c]'}`}>
                           {exporting ? '导出中...' : '确认导出'}
                         </button>

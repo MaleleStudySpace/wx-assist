@@ -3,7 +3,12 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Warning, Eye, EyeSlash, X } from '@phosphor-icons/react'
 
 // ── Shared constants ──────────────────────────────────────────────
-export const API_BASE = 'http://127.0.0.1:17327'
+export const API_BASE = ''
+
+/** Build a WebSocket URL for the current origin (works in dev, desktop, and LAN). */
+export function getWsUrl(path = '/ws') {
+  return `ws://${window.location.host}${path}`
+}
 
 export const spring = { type: 'spring', stiffness: 200, damping: 25 }
 
