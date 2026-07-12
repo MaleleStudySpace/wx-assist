@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ChartLine, Gear, ChatCircleDots, Chats, Star, Eye, Newspaper, Scroll,
-  X, ArrowLeft, ArrowRight, Sparkle, CircleDashed, ShieldCheck, Phone
+  X, ArrowLeft, ArrowRight, Sparkle, CircleDashed, ShieldCheck, Phone, Lightning
 } from '@phosphor-icons/react'
 
 /* ───────────────────────────────────────────────
@@ -61,6 +61,16 @@ const GUIDE_STEPS_DEF = [
     desc: '关键词关注提醒 + 定时 AI 摘要 + 公众号即时提醒。每个群独立配置，可推送通知。',
     features: () => ['关键词提醒', '定时 AI 摘要', '消息推送'],
     highlights: ['hl-kw', 'hl-digest'],
+    drawer: null,
+  },
+  {
+    tabId: 'agent',
+    cardPos: { bottom: '40px', right: '40px', transform: 'none' },
+    icon: Lightning,
+    title: 'AI Agent',
+    desc: '一句话查状态、配摘要、搜记忆——在微信里直接跟 Agent 对话，自动拆解执行。',
+    features: () => ['信息查询', '自动执行', '语义检索 RAG'],
+    highlights: [],
     drawer: null,
   },
   {
@@ -591,6 +601,186 @@ function LogsPage() {
   )
 }
 
+/* ── AgentPage ─────────────────────────────────── */
+function AgentPage() {
+  const [msgs, setMsgs] = useState([])
+  const [typing, setTyping] = useState(false)
+  const [used, setUsed] = useState(new Set())
+  const chatRef = useRef(null)
+
+  useEffect(() => { chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' }) }, [msgs, typing])
+
+  const COMMANDS = [
+    { id: 'digest', icon: '\u{1F4DD}', text: '帮我总结一下工作群今天都说了什么', badge: '多步执行' },
+    { id: 'alert', icon: '\u{1F514}', text: '帮我设置 36氪 的文章实时提醒', badge: '即时生效' },
+    { id: 'rag', icon: '\u{1F50D}', text: '我记得之前群里有人讨论过用 Redis 做缓存...', badge: '语义检索' },
+  ]
+
+  function addMsg(type, content) {
+    setMsgs(prev => [...prev, { type, content, id: Date.now() }])
+  }
+
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+  async function handleCmd(id) {
+    if (used.has(id)) return
+    setUsed(prev => new Set([...prev, id]))
+    const cmd = COMMANDS.find(c => c.id === id)
+    if (!cmd) return
+
+    addMsg('user', cmd.text)
+    await sleep(400)
+    setTyping(true)
+    await sleep(id === 'rag' ? 1400 : 700)
+    setTyping(false)
+
+    if (id === 'digest') {
+      addMsg('agent', '\u{1F4DD} 好的，马上帮你整理！')
+      await sleep(250)
+      addMsg('digest-card', '')
+    } else if (id === 'alert') {
+      addMsg('agent', '\u{1F514} 搞定！已为你配置：<br><br>公众号：<strong style="color:#07c160;">36氪</strong><br>触发：有新文章发布时<br>动作：即时推送 AI 速读摘要到微信<br><br>下次 36氪 发文，你会第一时间收到通知 ✨')
+    } else if (id === 'rag') {
+      addMsg('agent', '\u{1F50D} 帮你翻了一下记忆——<br><br>在「项目核心群」<span style="color:var(--text-muted)">3月12日</span>找到了：<br><br>'
+        + '<span style="font-weight:600">张三</span> <span style="color:var(--text-muted)">14:32</span>：<br>'
+        + '<span style="border-left:2px solid var(--glass-border);padding-left:8px;color:var(--text-muted);display:block;margin:2px 0">"Redis 做缓存确实快，但咱们写多读少，命中率太低"</span>'
+        + '<span style="font-weight:600">李芳</span> <span style="color:var(--text-muted)">15:10</span>：<br>'
+        + '<span style="border-left:2px solid var(--glass-border);padding-left:8px;color:var(--text-muted);display:block;margin:2px 0">"换成本地缓存？内存映射文件就行，部署也简单"</span><br><br>'
+        + '\u{1F4CC} 结论：最终采用了本地缓存方案<br><br>'
+        + '不用翻聊天记录，跟我说个大概意思，我就能帮你找到 \u{1F440}')
+    }
+  }
+
+  return (
+    <div className="animate-[pageIn_0.4s_cubic-bezier(0.16,1,0.3,1)_forwards] flex flex-col lg:flex-row gap-6 items-start justify-center">
+      {/* 左侧工具面板 */}
+      <div className="w-full lg:w-[240px] shrink-0 bg-bg-card border border-border-main rounded-2xl p-5">
+        <div className="text-sm font-bold mb-4 flex items-center gap-2">
+          <Lightning size={16} className="text-brand-green" weight="fill" />
+          Agent 能力
+          <span className="text-[10px] text-text-muted font-normal ml-auto">3类·12项</span>
+        </div>
+        <div className="space-y-4">
+          {[
+            { label: '\u{1F4D6} 问一问 · 信息查询', items: ['系统状态','搜索会话','群聊记忆','文章搜索','推送历史'], color: '#0a84ff' },
+            { label: '\u{1F6E0}️ 一句话 · 自动执行', items: ['生成摘要','配置预警','推送通知','确认执行'], color: '#f59e0b' },
+            { label: '\u{1F50D} 懂你意 · 语义检索 RAG', items: ['向量索引','语义匹配','跨源关联'], color: '#8b5cf6' },
+          ].map(group => (
+            <div key={group.label}>
+              <div className="text-[11px] font-semibold text-text-muted mb-2 tracking-wide">{group.label}</div>
+              <div className="flex flex-wrap gap-1.5 pl-2">
+                {group.items.map(t => (
+                  <span key={t} className="px-2 py-0.5 rounded text-[10px] font-medium" style={{background:`${group.color}18`,color:group.color,border:`0.5px solid ${group.color}1e`}}>{t}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 中间手机 */}
+      <div className="w-full max-w-[400px] shrink-0 mx-auto lg:mx-0">
+        <div className="bg-black rounded-[44px] border-[5px] border-[#1a1a1a] overflow-hidden" style={{boxShadow:'0 30px 70px -10px rgba(0,0,0,0.35)'}}>
+          <div className="relative h-7 flex justify-center">
+            <div className="absolute top-1.5 w-[120px] h-[28px] bg-black rounded-[16px] z-10" />
+          </div>
+          <div className="h-10 px-7 flex justify-between text-white text-[14px] font-semibold">
+            <span>10:15</span>
+            <span className="flex items-center gap-1 text-[11px] font-semibold">
+              <span>5G</span>
+              <svg width="16" height="11" viewBox="0 0 20 11"><rect x="0.5" y="1" width="15" height="8.5" rx="2" fill="none" stroke="#fff" strokeWidth="0.8"/><rect x="2" y="2.5" width="12" height="5.5" rx="1" fill="#fff"/><path d="M16.5 3.5 L18.5 3.5 L18.5 7.5 L16.5 7.5" fill="none" stroke="#fff" strokeWidth="0.8"/></svg>
+            </span>
+          </div>
+          <div className="h-[50px] flex items-center justify-between px-4 border-b border-white/[0.06] bg-black">
+            <span className="text-[24px] text-[#0a84ff] font-light leading-none">{'‹'}</span>
+            <span className="text-[16px] font-semibold text-white flex items-center gap-1.5">
+              摘星 Agent
+              <span className="text-[9px] font-bold bg-white/10 text-white/60 px-1.5 py-0.5 rounded">AI</span>
+            </span>
+            <span className="flex gap-1"><i className="w-1 h-1 rounded-full bg-white/30" /><i className="w-1 h-1 rounded-full bg-white/30" /><i className="w-1 h-1 rounded-full bg-white/30" /></span>
+          </div>
+          <div ref={chatRef} className="h-[480px] overflow-y-auto p-4 flex flex-col gap-3 bg-black" style={{scrollbarWidth:'none'}}>
+            <div className="text-center text-[10px] text-white/20 my-1">今天 10:15</div>
+            <div className="flex gap-2 items-start">
+              <div className="w-[36px] h-[36px] rounded-lg bg-[#ef4545] shrink-0 flex items-center justify-center gap-1"><span className="w-[7px] h-[7px] rounded-full bg-white" /><span className="w-[7px] h-[7px] rounded-full bg-white" /></div>
+              <div className="bg-[#2c2c2c] text-[#e5e5e5] text-[14px] p-[10px_13px] rounded-[10px] rounded-bl-[3px] leading-[1.55] max-w-[80%]">
+                {'\u{1F44B}'} 你好呀～我是摘星，你的微信智能助手！<br/><br/>
+                我能帮你做这些事：<br/>
+                {'\u{1F4DD}'} 一句话生成群聊摘要、配置定时推送<br/>
+                {'\u{1F514}'} 设置关键词提醒、公众号文章实时通知<br/>
+                {'\u{1F50D}'} 语义搜索聊天记录和收藏——不用记原话，说个大概就行<br/><br/>
+                试试点一下面命令👇
+              </div>
+            </div>
+
+            {msgs.map(m => (
+              <div key={m.id} className={'flex gap-2 items-start ' + (m.type === 'user' ? 'flex-row-reverse' : '')}
+                style={{animation:'fadeSlideIn 0.35s ease-out'}}>
+                {m.type === 'user' ? (
+                  <img className="w-[36px] h-[36px] rounded-lg shrink-0 object-cover" src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80" />
+                ) : (
+                  <div className="w-[36px] h-[36px] rounded-lg bg-[#ef4545] shrink-0 flex items-center justify-center gap-1"><span className="w-[7px] h-[7px] rounded-full bg-white" /><span className="w-[7px] h-[7px] rounded-full bg-white" /></div>
+                )}
+                {m.type === 'digest-card' ? (
+                  <div className="bg-transparent border border-white/10 rounded-[10px] overflow-hidden max-w-[80%] p-3 text-[14px] leading-[1.55]">
+                    <div className="font-bold mb-1" style={{fontSize:'14px',color:'#07c160'}}>{'\u{1F4C4}'} 工作群 · 今日简报</div>
+                    <div className="text-[10px] pb-1.5 mb-2" style={{color:'rgba(255,255,255,0.3)',borderBottom:'0.5px solid rgba(255,255,255,0.06)'}}>AI 从 186 条消息中提炼</div>
+                    <div className="text-[11px] font-semibold mt-1.5 mb-1" style={{color:'rgba(255,255,255,0.45)'}}>{'\u{1F6A8}'} 紧急事项</div>
+                    <div style={{fontSize:'12px',color:'#f43f5e',lineHeight:1.5}}>老吴：数据库死锁！所有人停止合代码！</div>
+                    <div style={{fontSize:'12px',color:'#f43f5e',lineHeight:1.5}}>赵敏：报销通道今晚 24 点关闭</div>
+                    <div className="text-[11px] font-semibold mt-1.5 mb-1" style={{color:'rgba(255,255,255,0.45)'}}>{'\u{1F4C5}'} 核心决定</div>
+                    <div style={{fontSize:'12px',color:'rgba(255,255,255,0.7)',lineHeight:1.5}}>发布会提前至这周五，今晚全员对齐方案</div>
+                    <div style={{fontSize:'12px',color:'rgba(255,255,255,0.7)',lineHeight:1.5}}>Q2 方向锁定数据分析模块</div>
+                    <div className="text-[11px] font-semibold mt-1.5 mb-1" style={{color:'rgba(255,255,255,0.45)'}}>{'\u{1F4CE}'} 文件归档</div>
+                    <div style={{fontSize:'12px',color:'rgba(255,255,255,0.7)',lineHeight:1.5}}>王姐发了《预算分配最终版.pdf》</div>
+                    <div style={{fontSize:'11px',color:'#576b95',textAlign:'center',borderTop:'0.5px dashed rgba(255,255,255,0.08)',marginTop:'6px',paddingTop:'6px'}}>已折叠 43 条闲聊</div>
+                  </div>
+                ) : (
+                  <div className={'max-w-[80%] p-[10px_13px] text-[14px] leading-[1.55] ' + (m.type === 'user' ? 'bg-[#07c160] text-white rounded-[10px] rounded-br-[3px]' : 'bg-[#2c2c2c] text-[#e5e5e5] rounded-[10px] rounded-bl-[3px]')}
+                    dangerouslySetInnerHTML={{__html: m.content}} />
+                )}
+              </div>
+            ))}
+
+            {typing && (
+              <div className="flex gap-2 items-start">
+                <div className="w-[36px] h-[36px] rounded-lg bg-[#ef4545] shrink-0 flex items-center justify-center gap-1"><span className="w-[7px] h-[7px] rounded-full bg-white" /><span className="w-[7px] h-[7px] rounded-full bg-white" /></div>
+                <div className="bg-[#2c2c2c] rounded-[10px] rounded-bl-[3px] p-[10px_13px]">
+                  <div className="flex gap-1 items-center">
+                    <span className="w-[6px] h-[6px] rounded-full bg-white/30 animate-bounce" />
+                    <span className="w-[6px] h-[6px] rounded-full bg-white/30 animate-bounce" style={{animationDelay:'0.15s'}} />
+                    <span className="w-[6px] h-[6px] rounded-full bg-white/30 animate-bounce" style={{animationDelay:'0.3s'}} />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {used.size < 3 && (
+              <div className="flex flex-col gap-2 mt-1">
+                {COMMANDS.filter(c => !used.has(c.id)).map(cmd => (
+                  <button key={cmd.id} onClick={() => handleCmd(cmd.id)}
+                    className="flex items-center gap-2 w-full p-[9px_11px] bg-white/[0.04] border border-white/[0.06] rounded-[10px] text-[13px] text-white/70 cursor-pointer hover:bg-white/10 hover:border-brand-green/30 hover:text-white transition-all text-left leading-[1.45] font-inherit active:scale-[0.98]">
+                    <span className="text-[16px] shrink-0">{cmd.icon}</span>
+                    <span className="flex-1">{cmd.text}</span>
+                    <span className="text-[9px] font-semibold text-brand-green bg-brand-green/10 px-1.5 py-0.5 rounded shrink-0">{cmd.badge}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="h-[50px] flex items-center px-3 gap-2 border-t border-white/[0.06] bg-black">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="rgba(255,255,255,0.3)" strokeWidth="1.8" fill="none"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" /></svg>
+            <div className="flex-1 h-[34px] bg-[#1c1c1e] rounded-lg border border-white/[0.06] flex items-center px-3 text-[13px] text-white/25">点上面试试...</div>
+            <span style={{fontSize:'18px',opacity:0.3}}>{'☺'}</span>
+            <div className="w-[26px] h-[26px] rounded-full border-[1.5px] border-white/20 flex items-center justify-center text-white/30 text-[15px] font-bold shrink-0">＋</div>
+          </div>
+          <div className="flex justify-center py-0.5 bg-black"><div className="w-[130px] h-[4px] bg-white/15 rounded-full" /></div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* Map tabId to mock page component (pages that need restrictedEnabled use wrapper) */
 function getMockPage(tabId, restrictedEnabled) {
   const pages = {
@@ -599,6 +789,7 @@ function getMockPage(tabId, restrictedEnabled) {
     config: ConfigPage,
     push: PushPage,
     assistant: AssistantPage,
+    agent: AgentPage,
     chats: () => <ChatsPage restrictedEnabled={restrictedEnabled} />,
     favorites: FavoritesPage,
     moments: () => <MomentsPage restrictedEnabled={restrictedEnabled} />,
@@ -610,6 +801,7 @@ function getMockPage(tabId, restrictedEnabled) {
 
 const TAB_LABELS = {
   welcome: '欢迎', dashboard: '运行状态', config: '系统配置', push: '消息推送', assistant: '群聊助手',
+  agent: 'AI Agent',
   chats: '会话管理', favorites: '收藏助手', moments: '朋友圈助手', oa: '公众号助手', logs: '运行日志',
 }
 
