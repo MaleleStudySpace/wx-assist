@@ -601,180 +601,281 @@ function LogsPage() {
   )
 }
 
-/* ── AgentPage ─────────────────────────────────── */
+/* ── AgentPage: interactive iPhone mockup (ported from wx-assist-demo) ── */
 function AgentPage() {
-  const [msgs, setMsgs] = useState([])
+  const [scene, setScene] = useState(null)
   const [typing, setTyping] = useState(false)
-  const [used, setUsed] = useState(new Set())
   const chatRef = useRef(null)
 
-  useEffect(() => { chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' }) }, [msgs, typing])
+  useEffect(() => {
+    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight
+  }, [scene, typing])
 
-  const COMMANDS = [
-    { id: 'digest', icon: '\u{1F4DD}', text: '帮我总结一下工作群今天都说了什么', badge: '多步执行' },
-    { id: 'alert', icon: '\u{1F514}', text: '帮我设置 36氪 的文章实时提醒', badge: '即时生效' },
-    { id: 'rag', icon: '\u{1F50D}', text: '我记得之前群里有人讨论过用 Redis 做缓存...', badge: '语义检索' },
-  ]
+  const sleep = ms => new Promise(r => setTimeout(r, ms))
 
-  function addMsg(type, content) {
-    setMsgs(prev => [...prev, { type, content, id: Date.now() }])
-  }
-
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
-
-  async function handleCmd(id) {
-    if (used.has(id)) return
-    setUsed(prev => new Set([...prev, id]))
-    const cmd = COMMANDS.find(c => c.id === id)
-    if (!cmd) return
-
-    addMsg('user', cmd.text)
-    await sleep(400)
+  async function handleClick(id) {
+    setScene(id)
     setTyping(true)
-    await sleep(id === 'rag' ? 1400 : 700)
+    await sleep(1200)
     setTyping(false)
-
-    if (id === 'digest') {
-      addMsg('agent', '\u{1F4DD} 好的，马上帮你整理！')
-      await sleep(250)
-      addMsg('digest-card', '')
-    } else if (id === 'alert') {
-      addMsg('agent', '\u{1F514} 搞定！已为你配置：<br><br>公众号：<strong style="color:#07c160;">36氪</strong><br>触发：有新文章发布时<br>动作：即时推送 AI 速读摘要到微信<br><br>下次 36氪 发文，你会第一时间收到通知 ✨')
-    } else if (id === 'rag') {
-      addMsg('agent', '\u{1F50D} 帮你翻了一下记忆——<br><br>在「项目核心群」<span style="color:var(--text-muted)">3月12日</span>找到了：<br><br>'
-        + '<span style="font-weight:600">张三</span> <span style="color:var(--text-muted)">14:32</span>：<br>'
-        + '<span style="border-left:2px solid var(--glass-border);padding-left:8px;color:var(--text-muted);display:block;margin:2px 0">"Redis 做缓存确实快，但咱们写多读少，命中率太低"</span>'
-        + '<span style="font-weight:600">李芳</span> <span style="color:var(--text-muted)">15:10</span>：<br>'
-        + '<span style="border-left:2px solid var(--glass-border);padding-left:8px;color:var(--text-muted);display:block;margin:2px 0">"换成本地缓存？内存映射文件就行，部署也简单"</span><br><br>'
-        + '\u{1F4CC} 结论：最终采用了本地缓存方案<br><br>'
-        + '不用翻聊天记录，跟我说个大概意思，我就能帮你找到 \u{1F440}')
-    }
   }
+
+  function reset() { setScene(null); setTyping(false) }
+
+  const btnClass = (id) =>
+    `flex items-center gap-2.5 p-3 bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.04)] border border-black/[0.04] text-sm text-[#333] cursor-pointer hover:bg-[#f7f7f7] transition-all ${scene === id ? 'ring-2 ring-[#07c160] ring-offset-1' : ''}`
 
   return (
-    <div className="animate-[pageIn_0.4s_cubic-bezier(0.16,1,0.3,1)_forwards] flex flex-col lg:flex-row gap-6 items-start justify-center">
-      {/* 左侧工具面板 */}
-      <div className="w-full lg:w-[240px] shrink-0 bg-bg-card border border-border-main rounded-2xl p-5">
-        <div className="text-sm font-bold mb-4 flex items-center gap-2">
-          <Lightning size={16} className="text-brand-green" weight="fill" />
-          Agent 能力
-          <span className="text-[10px] text-text-muted font-normal ml-auto">3类·12项</span>
-        </div>
-        <div className="space-y-4">
-          {[
-            { label: '\u{1F4D6} 问一问 · 信息查询', items: ['系统状态','搜索会话','群聊记忆','文章搜索','推送历史'], color: '#0a84ff' },
-            { label: '\u{1F6E0}️ 一句话 · 自动执行', items: ['生成摘要','配置预警','推送通知','确认执行'], color: '#f59e0b' },
-            { label: '\u{1F50D} 懂你意 · 语义检索 RAG', items: ['向量索引','语义匹配','跨源关联'], color: '#8b5cf6' },
-          ].map(group => (
-            <div key={group.label}>
-              <div className="text-[11px] font-semibold text-text-muted mb-2 tracking-wide">{group.label}</div>
-              <div className="flex flex-wrap gap-1.5 pl-2">
-                {group.items.map(t => (
-                  <span key={t} className="px-2 py-0.5 rounded text-[10px] font-medium" style={{background:`${group.color}18`,color:group.color,border:`0.5px solid ${group.color}1e`}}>{t}</span>
-                ))}
-              </div>
+    <div className="animate-[pageIn_0.4s_cubic-bezier(0.16,1,0.3,1)_forwards] flex flex-col md:flex-row gap-4 md:gap-12 items-center p-4 md:px-24 md:py-5 justify-start">
+      {/* Left rail */}
+      <div className="flex flex-col gap-3.5 w-full md:w-[220px] shrink-0">
+        <div className="bg-bg-card border border-border-main rounded-[14px] p-3.5">
+          <div className="text-[13px] font-bold mb-2.5 flex items-center gap-1.5">
+            <Lightning size={16} className="text-brand-green" weight="fill" />
+            AI Agent = 绑定微信 + AI
+          </div>
+          <p className="text-[11px] text-text-muted leading-relaxed mb-3">
+            Agent 不是一个独立功能——绑了微信、配了 AI，它就能调用<strong className="text-text-main">所有已配置的能力</strong>。说一句话，自动执行。
+          </p>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 p-2.5 bg-brand-green/5 rounded-lg text-xs border border-brand-green/10">
+              <span className="text-sm">✅</span>
+              <div><span className="text-text-main font-medium">已绑定微信</span><br /><span className="text-text-muted">结果可推送到手机</span></div>
             </div>
-          ))}
+            <div className="flex items-center gap-2 p-2.5 bg-brand-green/5 rounded-lg text-xs border border-brand-green/10">
+              <span className="text-sm">✅</span>
+              <div><span className="text-text-main font-medium">已配置 AI</span><br /><span className="text-text-muted">自动理解并拆解任务</span></div>
+            </div>
+          </div>
+        </div>
+        <div className="bg-bg-card border border-border-main rounded-[14px] p-3.5">
+          <div className="text-[13px] font-bold mb-2 flex items-center gap-1.5">
+            <span className="text-base">{'\u{1F4A1}'}</span>
+            点击试试看
+          </div>
+          <p className="text-[11px] text-text-muted leading-relaxed">
+            点击下方命令，Agent 自动拆解执行并推送结果到微信
+          </p>
+          {(scene || typing) && (
+            <button onClick={reset}
+              className="mt-2 text-[10px] px-2.5 py-1 rounded-full bg-bg-raised border border-border-main text-text-muted hover:text-text-main transition-colors cursor-pointer">
+              {'\u{27F2}'} 重置
+            </button>
+          )}
         </div>
       </div>
 
-      {/* 中间手机 */}
-      <div className="w-full max-w-[400px] shrink-0 mx-auto lg:mx-0">
-        <div className="bg-black rounded-[44px] border-[5px] border-[#1a1a1a] overflow-hidden" style={{boxShadow:'0 30px 70px -10px rgba(0,0,0,0.35)'}}>
-          <div className="relative h-7 flex justify-center">
-            <div className="absolute top-1.5 w-[120px] h-[28px] bg-black rounded-[16px] z-10" />
+      {/* Right: Phone frame — interactive */}
+      <div className="w-full max-w-[360px] mx-auto md:mx-0 h-[640px] bg-[#ededed] rounded-[44px] relative flex flex-col overflow-hidden border-[5px] border-[#1a1a1a] shrink-0" style={{ boxShadow: '0 30px 70px -10px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.08)' }}>
+        <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-[110px] h-[30px] bg-black rounded-[16px] z-[100]" />
+        <div className="h-12 px-7 pt-4 flex justify-between text-[#1a1a1a] text-[15px] font-semibold shrink-0 z-50">
+          <span>15:42</span>
+          <span className="text-xs flex items-center gap-1.5">
+            <svg width="14" height="10" viewBox="0 0 14 10"><rect x="0.5" y="6" width="2.5" height="3.5" rx="0.6" fill="#1a1a1a"/><rect x="3.5" y="4" width="2.5" height="5.5" rx="0.6" fill="#1a1a1a"/><rect x="6.5" y="2" width="2.5" height="7.5" rx="0.6" fill="#1a1a1a"/><rect x="9.5" y="0" width="2.5" height="9.5" rx="0.6" fill="#1a1a1a" opacity="0.2"/></svg>
+            <span style={{fontSize:'11px',fontWeight:600}}>5G</span>
+            <svg width="20" height="11" viewBox="0 0 20 11"><rect x="0.5" y="1" width="15" height="8.5" rx="2" fill="none" stroke="#1a1a1a" strokeWidth="1"/><rect x="2" y="2.5" width="12" height="5.5" rx="1" fill="#1a1a1a"/><path d="M16.5 3.5 L18.5 3.5 L18.5 7.5 L16.5 7.5" fill="none" stroke="#1a1a1a" strokeWidth="1" strokeLinejoin="round"/></svg>
+          </span>
+        </div>
+        <div className="h-[52px] flex items-center justify-between px-4 border-b border-black/[0.08] shrink-0 bg-[#ededed]">
+          <span className="text-[26px] text-black font-light leading-none">{'\u{2039}'}</span>
+          <div className="text-[17px] font-semibold text-[#1a1a1a] flex items-center gap-1.5 tracking-[0.3px]">
+            摘星 Agent
+            <div className="bg-[#d5d5d5] text-[#555] text-[11px] font-bold py-0.5 px-1.5 rounded">AI</div>
           </div>
-          <div className="h-10 px-7 flex justify-between text-white text-[14px] font-semibold">
-            <span>10:15</span>
-            <span className="flex items-center gap-1 text-[11px] font-semibold">
-              <span>5G</span>
-              <svg width="16" height="11" viewBox="0 0 20 11"><rect x="0.5" y="1" width="15" height="8.5" rx="2" fill="none" stroke="#fff" strokeWidth="0.8"/><rect x="2" y="2.5" width="12" height="5.5" rx="1" fill="#fff"/><path d="M16.5 3.5 L18.5 3.5 L18.5 7.5 L16.5 7.5" fill="none" stroke="#fff" strokeWidth="0.8"/></svg>
-            </span>
+          <div className="flex gap-1 items-center px-1 py-2.5">
+            <div className="w-[5px] h-[5px] rounded-full bg-black" />
+            <div className="w-[5px] h-[5px] rounded-full bg-black" />
+            <div className="w-[5px] h-[5px] rounded-full bg-black" />
           </div>
-          <div className="h-[50px] flex items-center justify-between px-4 border-b border-white/[0.06] bg-black">
-            <span className="text-[24px] text-[#0a84ff] font-light leading-none">{'‹'}</span>
-            <span className="text-[16px] font-semibold text-white flex items-center gap-1.5">
-              摘星 Agent
-              <span className="text-[9px] font-bold bg-white/10 text-white/60 px-1.5 py-0.5 rounded">AI</span>
-            </span>
-            <span className="flex gap-1"><i className="w-1 h-1 rounded-full bg-white/30" /><i className="w-1 h-1 rounded-full bg-white/30" /><i className="w-1 h-1 rounded-full bg-white/30" /></span>
-          </div>
-          <div ref={chatRef} className="h-[480px] overflow-y-auto p-4 flex flex-col gap-3 bg-black" style={{scrollbarWidth:'none'}}>
-            <div className="text-center text-[10px] text-white/20 my-1">今天 10:15</div>
-            <div className="flex gap-2 items-start">
-              <div className="w-[36px] h-[36px] rounded-lg bg-[#ef4545] shrink-0 flex items-center justify-center gap-1"><span className="w-[7px] h-[7px] rounded-full bg-white" /><span className="w-[7px] h-[7px] rounded-full bg-white" /></div>
-              <div className="bg-[#2c2c2c] text-[#e5e5e5] text-[14px] p-[10px_13px] rounded-[10px] rounded-bl-[3px] leading-[1.55] max-w-[80%]">
-                {'\u{1F44B}'} 你好呀～我是摘星，你的微信智能助手！<br/><br/>
-                我能帮你做这些事：<br/>
-                {'\u{1F4DD}'} 一句话生成群聊摘要、配置定时推送<br/>
-                {'\u{1F514}'} 设置关键词提醒、公众号文章实时通知<br/>
-                {'\u{1F50D}'} 语义搜索聊天记录和收藏——不用记原话，说个大概就行<br/><br/>
-                试试点一下面命令👇
-              </div>
-            </div>
+        </div>
 
-            {msgs.map(m => (
-              <div key={m.id} className={'flex gap-2 items-start ' + (m.type === 'user' ? 'flex-row-reverse' : '')}
-                style={{animation:'fadeSlideIn 0.35s ease-out'}}>
-                {m.type === 'user' ? (
-                  <img className="w-[36px] h-[36px] rounded-lg shrink-0 object-cover" src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80" />
-                ) : (
-                  <div className="w-[36px] h-[36px] rounded-lg bg-[#ef4545] shrink-0 flex items-center justify-center gap-1"><span className="w-[7px] h-[7px] rounded-full bg-white" /><span className="w-[7px] h-[7px] rounded-full bg-white" /></div>
-                )}
-                {m.type === 'digest-card' ? (
-                  <div className="bg-transparent border border-white/10 rounded-[10px] overflow-hidden max-w-[80%] p-3 text-[14px] leading-[1.55]">
-                    <div className="font-bold mb-1" style={{fontSize:'14px',color:'#07c160'}}>{'\u{1F4C4}'} 工作群 · 今日简报</div>
-                    <div className="text-[10px] pb-1.5 mb-2" style={{color:'rgba(255,255,255,0.3)',borderBottom:'0.5px solid rgba(255,255,255,0.06)'}}>AI 从 186 条消息中提炼</div>
-                    <div className="text-[11px] font-semibold mt-1.5 mb-1" style={{color:'rgba(255,255,255,0.45)'}}>{'\u{1F6A8}'} 紧急事项</div>
-                    <div style={{fontSize:'12px',color:'#f43f5e',lineHeight:1.5}}>老吴：数据库死锁！所有人停止合代码！</div>
-                    <div style={{fontSize:'12px',color:'#f43f5e',lineHeight:1.5}}>赵敏：报销通道今晚 24 点关闭</div>
-                    <div className="text-[11px] font-semibold mt-1.5 mb-1" style={{color:'rgba(255,255,255,0.45)'}}>{'\u{1F4C5}'} 核心决定</div>
-                    <div style={{fontSize:'12px',color:'rgba(255,255,255,0.7)',lineHeight:1.5}}>发布会提前至这周五，今晚全员对齐方案</div>
-                    <div style={{fontSize:'12px',color:'rgba(255,255,255,0.7)',lineHeight:1.5}}>Q2 方向锁定数据分析模块</div>
-                    <div className="text-[11px] font-semibold mt-1.5 mb-1" style={{color:'rgba(255,255,255,0.45)'}}>{'\u{1F4CE}'} 文件归档</div>
-                    <div style={{fontSize:'12px',color:'rgba(255,255,255,0.7)',lineHeight:1.5}}>王姐发了《预算分配最终版.pdf》</div>
-                    <div style={{fontSize:'11px',color:'#576b95',textAlign:'center',borderTop:'0.5px dashed rgba(255,255,255,0.08)',marginTop:'6px',paddingTop:'6px'}}>已折叠 43 条闲聊</div>
-                  </div>
-                ) : (
-                  <div className={'max-w-[80%] p-[10px_13px] text-[14px] leading-[1.55] ' + (m.type === 'user' ? 'bg-[#07c160] text-white rounded-[10px] rounded-br-[3px]' : 'bg-[#2c2c2c] text-[#e5e5e5] rounded-[10px] rounded-bl-[3px]')}
-                    dangerouslySetInnerHTML={{__html: m.content}} />
-                )}
-              </div>
-            ))}
+        {/* Scrollable chat area */}
+        <div ref={chatRef} className="flex-1 overflow-y-auto p-[18px_14px] flex flex-col gap-3.5 bg-[#ededed] text-[15px]" style={{ scrollbarWidth: 'none' }}>
 
-            {typing && (
-              <div className="flex gap-2 items-start">
-                <div className="w-[36px] h-[36px] rounded-lg bg-[#ef4545] shrink-0 flex items-center justify-center gap-1"><span className="w-[7px] h-[7px] rounded-full bg-white" /><span className="w-[7px] h-[7px] rounded-full bg-white" /></div>
-                <div className="bg-[#2c2c2c] rounded-[10px] rounded-bl-[3px] p-[10px_13px]">
-                  <div className="flex gap-1 items-center">
-                    <span className="w-[6px] h-[6px] rounded-full bg-white/30 animate-bounce" />
-                    <span className="w-[6px] h-[6px] rounded-full bg-white/30 animate-bounce" style={{animationDelay:'0.15s'}} />
-                    <span className="w-[6px] h-[6px] rounded-full bg-white/30 animate-bounce" style={{animationDelay:'0.3s'}} />
+          {/* Default: welcome + command buttons */}
+          {!scene && !typing && (
+            <>
+              <div className="text-center text-xs text-[#888] my-1 tracking-[0.3px]">今天 10:15</div>
+              <div className="flex gap-2.5 items-start">
+                <div className="w-[42px] h-[42px] rounded-lg bg-[#ef4545] shrink-0 flex items-center justify-center gap-1 shadow-[0_2px_6px_rgba(239,69,68,0.25)]">
+                  <div className="w-[9px] h-[9px] bg-white rounded-full" />
+                  <div className="w-[9px] h-[9px] bg-white rounded-full" />
+                </div>
+                <div>
+                  <div className="relative bg-white text-[#1a1a1a] text-[15px] p-[13px_15px] rounded-lg leading-[1.55] max-w-[78%] shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
+                    {'\u{1F44B}'} 你好呀～我是摘星，你的微信智能助手！<br /><br />
+                    你已经绑了微信、配了 AI，现在试试看{'\u{1F447}'}
                   </div>
                 </div>
               </div>
-            )}
-
-            {used.size < 3 && (
-              <div className="flex flex-col gap-2 mt-1">
-                {COMMANDS.filter(c => !used.has(c.id)).map(cmd => (
-                  <button key={cmd.id} onClick={() => handleCmd(cmd.id)}
-                    className="flex items-center gap-2 w-full p-[9px_11px] bg-white/[0.04] border border-white/[0.06] rounded-[10px] text-[13px] text-white/70 cursor-pointer hover:bg-white/10 hover:border-brand-green/30 hover:text-white transition-all text-left leading-[1.45] font-inherit active:scale-[0.98]">
-                    <span className="text-[16px] shrink-0">{cmd.icon}</span>
-                    <span className="flex-1">{cmd.text}</span>
-                    <span className="text-[9px] font-semibold text-brand-green bg-brand-green/10 px-1.5 py-0.5 rounded shrink-0">{cmd.badge}</span>
-                  </button>
-                ))}
+              <div className="flex flex-col gap-2 mt-2 px-1">
+                <button onClick={() => handleClick('digest')} className={btnClass('digest')}>
+                  <span>{'\u{1F4DD}'}</span>
+                  <span>帮我总结一下工作群今天都说了什么</span>
+                </button>
+                <button onClick={() => handleClick('alert')} className={btnClass('alert')}>
+                  <span>{'\u{1F514}'}</span>
+                  <span>帮我设置 36氪 的文章实时提醒</span>
+                </button>
+                <button onClick={() => handleClick('fav')} className={btnClass('fav')}>
+                  <span>{'\u{1F50D}'}</span>
+                  <span>帮我找出金融知识相关收藏内容</span>
+                </button>
               </div>
-            )}
-          </div>
-          <div className="h-[50px] flex items-center px-3 gap-2 border-t border-white/[0.06] bg-black">
-            <svg viewBox="0 0 24 24" width="20" height="20" stroke="rgba(255,255,255,0.3)" strokeWidth="1.8" fill="none"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" /></svg>
-            <div className="flex-1 h-[34px] bg-[#1c1c1e] rounded-lg border border-white/[0.06] flex items-center px-3 text-[13px] text-white/25">点上面试试...</div>
-            <span style={{fontSize:'18px',opacity:0.3}}>{'☺'}</span>
-            <div className="w-[26px] h-[26px] rounded-full border-[1.5px] border-white/20 flex items-center justify-center text-white/30 text-[15px] font-bold shrink-0">＋</div>
-          </div>
-          <div className="flex justify-center py-0.5 bg-black"><div className="w-[130px] h-[4px] bg-white/15 rounded-full" /></div>
+            </>
+          )}
+
+          {/* Typing indicator */}
+          {typing && (
+            <>
+              <div className="flex gap-2.5 items-start flex-row-reverse">
+                <div className="w-[42px] h-[42px] rounded-lg shrink-0 bg-[#ef4545] flex items-center justify-center gap-1 shadow-[0_2px_6px_rgba(239,69,68,0.25)]">
+                  <div className="w-[9px] h-[9px] bg-white rounded-full" />
+                  <div className="w-[9px] h-[9px] bg-white rounded-full" />
+                </div>
+                <div>
+                  <div className="relative bg-[#95ec69] text-[#1a1a1a] text-[15px] p-[13px_15px] rounded-lg leading-[1.55] shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
+                    {scene === 'digest' ? '帮我总结一下工作群今天都说了什么'
+                     : scene === 'alert' ? '帮我设置 36氪 的文章实时提醒'
+                     : '帮我找出金融知识相关收藏内容'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-2.5 items-start">
+                <div className="w-[42px] h-[42px] rounded-lg bg-[#ef4545] shrink-0 flex items-center justify-center gap-1 shadow-[0_2px_6px_rgba(239,69,68,0.25)]">
+                  <div className="w-[9px] h-[9px] bg-white rounded-full" />
+                  <div className="w-[9px] h-[9px] bg-white rounded-full" />
+                </div>
+                <div>
+                  <div className="relative bg-white text-[#1a1a1a] text-[15px] p-[13px_15px] rounded-lg leading-[1.55] shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
+                    <div className="flex gap-1.5 items-center">
+                      <span className="w-[7px] h-[7px] rounded-full bg-[#aaa] animate-typingBounce" />
+                      <span className="w-[7px] h-[7px] rounded-full bg-[#aaa] animate-typingBounce" style={{ animationDelay: '0.15s' }} />
+                      <span className="w-[7px] h-[7px] rounded-full bg-[#aaa] animate-typingBounce" style={{ animationDelay: '0.3s' }} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Scene: digest result */}
+          {scene === 'digest' && !typing && (
+            <div className="flex gap-2.5 items-start">
+              <div className="w-[42px] h-[42px] rounded-lg bg-[#ef4545] shrink-0 flex items-center justify-center gap-1 shadow-[0_2px_6px_rgba(239,69,68,0.25)]">
+                <div className="w-[9px] h-[9px] bg-white rounded-full" />
+                <div className="w-[9px] h-[9px] bg-white rounded-full" />
+              </div>
+              <div className="max-w-[78%] space-y-2">
+                <div className="relative bg-white text-[#1a1a1a] text-[15px] p-[13px_15px] rounded-lg leading-[1.55] shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
+                  <div className="text-sm font-semibold text-[#07c160] mb-2">{'\u{1F916}'} 收到，立即执行</div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-start gap-2 text-[14px]">
+                      <div className="w-[18px] h-[18px] rounded-full flex items-center justify-center shrink-0 mt-0.5 text-[9px] font-bold bg-[#07c160]/15 border border-[#07c160]/30 text-[#07c160]">{'\u{2713}'}</div>
+                      <div><div className="font-semibold">读取工作群消息</div><div className="text-[#07c160] text-[13px]">共 186 条</div></div>
+                    </div>
+                    <div className="flex items-start gap-2 text-[14px]">
+                      <div className="w-[18px] h-[18px] rounded-full flex items-center justify-center shrink-0 mt-0.5 text-[9px] font-bold bg-[#07c160]/15 border border-[#07c160]/30 text-[#07c160]">{'\u{2713}'}</div>
+                      <div><div className="font-semibold">AI 提炼摘要</div><div className="text-[#07c160] text-[13px]">已生成</div></div>
+                    </div>
+                    <div className="flex items-start gap-2 text-[14px]">
+                      <div className="w-[18px] h-[18px] rounded-full flex items-center justify-center shrink-0 mt-0.5 text-[9px] font-bold bg-[#07c160]/15 border border-[#07c160]/30 text-[#07c160]">{'\u{2713}'}</div>
+                      <div><div className="font-semibold">推送到微信</div><div className="text-[#07c160] text-[13px]">{'\u{2705}'} 已推送</div></div>
+                    </div>
+                  </div>
+                  <hr className="my-2 border-t border-dashed border-black/[0.08]" />
+                  <span>全部完成 {'\u{1F64C}'}</span>
+                  <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-[#07c160]/10 text-[#07c160] mt-2">
+                    <svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor"><path d="M128 24a104 104 0 1 0 104 104A104.2 104.2 0 0 0 128 24Zm49.5 85.8-58.6 56a8.1 8.1 0 0 1-5.6 2.2 7.7 7.7 0 0 1-5.5-2.2l-29.3-28a8 8 0 1 1 11-11.6l23.8 22.7 53.2-50.7a8 8 0 0 1 11 11.6Z" /></svg>
+                    已推送微信
+                  </div>
+                </div>
+                <div className="bg-white border border-black/[0.06] rounded-[10px] overflow-hidden shadow-[0_2px_4px_rgba(0,0,0,0.05)]">
+                  <div className="p-[13px_15px] text-[15px] font-bold border-b border-black/[0.06] flex items-center gap-1.5 text-[#07c160]">
+                    <svg width="14" height="14" viewBox="0 0 256 256" fill="none" stroke="currentColor" strokeWidth="16" strokeLinecap="round" strokeLinejoin="round"><path d="M144 64l-32 80-32-32-32 32"/><path d="M176 48l16 16-16 16"/></svg>
+                    工作群 · 今日简报
+                  </div>
+                  <div className="p-[13px_15px] text-sm text-[#333] space-y-1.5">
+                    <div className="text-xs text-[#888] pb-2 border-b border-black/[0.04]">AI 从 186 条消息中提炼</div>
+                    <div className="flex items-start gap-2 text-[14px]"><span className="text-[#e53935] shrink-0">{'\u{1F6A8}'}</span><div><b className="text-[#e53935]">老吴：</b>数据库死锁！所有人停止合代码！<br /><b className="text-[#e53935]">赵敏：</b>报销通道今晚 24 点关闭</div></div>
+                    <div className="flex items-start gap-2 text-[14px]"><span className="shrink-0">{'\u{1F4C5}'}</span><div>发布会提前至这周五，今晚全员对齐方案<br />Q2 方向锁定数据分析模块</div></div>
+                    <div className="flex items-start gap-2 text-[14px]"><span className="shrink-0">{'\u{1F4CE}'}</span>王姐发了《预算分配最终版.pdf》</div>
+                  </div>
+                  <div className="p-[11px_15px] text-[13px] text-[#576b95] border-t border-dashed border-black/[0.12] text-center font-medium">已折叠 43 条闲聊</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Scene: alert result */}
+          {scene === 'alert' && !typing && (
+            <div className="flex gap-2.5 items-start">
+              <div className="w-[42px] h-[42px] rounded-lg bg-[#ef4545] shrink-0 flex items-center justify-center gap-1 shadow-[0_2px_6px_rgba(239,69,68,0.25)]">
+                <div className="w-[9px] h-[9px] bg-white rounded-full" />
+                <div className="w-[9px] h-[9px] bg-white rounded-full" />
+              </div>
+              <div>
+                <div className="relative bg-white text-[#1a1a1a] text-[15px] p-[13px_15px] rounded-lg leading-[1.55] max-w-[78%] shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
+                  {'\u{1F514}'} 搞定！已为你配置：<br /><br />
+                  公众号：<strong style={{ color: '#07c160' }}>36氪</strong><br />
+                  触发：有新文章发布时<br />
+                  动作：即时推送 AI 速读摘要到微信<br /><br />
+                  下次 36氪 发文，你会第一时间收到通知 {'\u{2728}'}
+                  <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-[#07c160]/10 text-[#07c160] mt-2">
+                    <svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor"><path d="M128 24a104 104 0 1 0 104 104A104.2 104.2 0 0 0 128 24Zm49.5 85.8-58.6 56a8.1 8.1 0 0 1-5.6 2.2 7.7 7.7 0 0 1-5.5-2.2l-29.3-28a8 8 0 1 1 11-11.6l23.8 22.7 53.2-50.7a8 8 0 0 1 11 11.6Z" /></svg>
+                    配置已保存 · 实时监听中
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Scene: fav search result */}
+          {scene === 'fav' && !typing && (
+            <div className="flex gap-2.5 items-start">
+              <div className="w-[42px] h-[42px] rounded-lg bg-[#ef4545] shrink-0 flex items-center justify-center gap-1 shadow-[0_2px_6px_rgba(239,69,68,0.25)]">
+                <div className="w-[9px] h-[9px] bg-white rounded-full" />
+                <div className="w-[9px] h-[9px] bg-white rounded-full" />
+              </div>
+              <div className="max-w-[78%]">
+                <div className="relative bg-white text-[#1a1a1a] text-[15px] p-[13px_15px] rounded-lg leading-[1.55] shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
+                  {'\u{1F50D}'} 在收藏中找到 <strong>3 条</strong>金融知识相关内容：<br /><br />
+                  <div className="space-y-3">
+                    <div className="p-2.5 bg-[#f7f7f7] rounded-lg border border-black/[0.04]">
+                      <div className="font-semibold text-[14px]">{'\u{1F4C4}'} 资产配置入门指南</div>
+                      <div className="text-[13px] text-[#888] mt-0.5">收藏自 得到App · 2026-01-15</div>
+                      <div className="text-[13px] text-[#555] mt-1">核心原则：股债平衡、定期再平衡、风险承受能力优先</div>
+                    </div>
+                    <div className="p-2.5 bg-[#f7f7f7] rounded-lg border border-black/[0.04]">
+                      <div className="font-semibold text-[14px]">{'\u{1F4C4}'} 2026 Q1 宏观经济分析</div>
+                      <div className="text-[13px] text-[#888] mt-0.5">收藏自 公众号·泽平宏观 · 2026-03-20</div>
+                      <div className="text-[13px] text-[#555] mt-1">GDP 增速预期 5% 左右，重点关注消费复苏和基建投资</div>
+                    </div>
+                    <div className="p-2.5 bg-[#f7f7f7] rounded-lg border border-black/[0.04]">
+                      <div className="font-semibold text-[14px]">{'\u{1F4AC}'} 群聊讨论：基金定投策略</div>
+                      <div className="text-[13px] text-[#888] mt-0.5">来自 投资交流群 · 2026-02-28</div>
+                      <div className="text-[13px] text-[#555] mt-1">定投沪深300 + 中证500 搭配，每月10号自动扣款</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 pt-2 border-t border-dashed border-black/[0.06]">
+                    <span style={{ color: '#07c160', fontWeight: 600 }}>{'\u{1F4CC}'} 已推送微信 · 查看完整内容</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+
+        {/* Bottom bar */}
+        <div className="h-14 bg-[#f7f7f7] border-t border-black/[0.06] flex items-center px-3 gap-2.5 shrink-0">
+          <svg viewBox="0 0 24 24" width="26" height="26" stroke="#1a1a1a" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" /></svg>
+          <div className="flex-1 h-10 bg-white rounded-md flex items-center px-3 text-[#1a1a1a] text-[15px] border border-black/[0.08]" />
+          <svg viewBox="0 0 256 256" width="24" height="24" fill="none" stroke="#1a1a1a" strokeWidth="16" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><circle cx="128" cy="128" r="40" /><path d="M128 80v-8M128 184v-8M80 128h-8M184 128h-8" /></svg>
+          <div className="w-[30px] h-[30px] rounded-full border-[1.5px] border-[#1a1a1a] flex items-center justify-center text-[#1a1a1a] font-bold text-base shrink-0">＋</div>
+        </div>
+        <div className="h-[22px] bg-[#f7f7f7] flex justify-center items-end pb-1.5 shrink-0">
+          <div className="w-[130px] h-[5px] bg-black rounded-[100px]" />
         </div>
       </div>
     </div>
