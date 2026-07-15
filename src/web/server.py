@@ -1266,10 +1266,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"ok": False, "error": "Method not allowed"}).encode())
 
     def do_DELETE(self):
-        """Handle DELETE requests for OA groups and similar REST endpoints."""
+        """Handle DELETE requests for OA groups and MCP management."""
         delete_path = self.path.split("?")[0] if "?" in self.path else self.path
 
-        if (delete_path.startswith("/api/oa/groups/") and len(delete_path.split("/")) == 5):
+        if (delete_path.startswith("/api/oa/groups/") and len(delete_path.split("/")) == 5
+        ) or (self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 4):
             self.do_GET()
         else:
             self.send_response(405)
