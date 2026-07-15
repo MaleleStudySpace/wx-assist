@@ -3,8 +3,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   PuzzlePiece, Plus, X, ArrowsClockwise, Trash, Play, Pause,
-  DotsThree, Terminal, Globe, CaretDown, CaretRight,
-  MagnifyingGlass, WarningCircle, CheckCircle, Spinner,
+  Pencil, Terminal, Globe, CaretDown, CaretRight,
+  WarningCircle, Spinner,
 } from '@phosphor-icons/react'
 import { API_BASE } from './SharedComponents'
 
@@ -29,7 +29,7 @@ function SafetyBanner({ onDismiss }) {
       <WarningCircle size={18} weight="fill" className="text-status-warn shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0 text-sm text-text-secondary leading-relaxed">
         <strong className="text-text-main">安全须知</strong>
-        <span className="ml-1">— MCP 服务器是独立运行的程序，拥有你本机的同等权限。仅添加</span>
+        <span className="ml-1">- MCP 服务器是独立运行的程序，拥有你本机的同等权限。仅添加</span>
         <strong className="text-text-main">可信来源</strong>。
         <span className="ml-1">你可以随时在列表中禁用或删除已添加的服务器。</span>
       </div>
@@ -119,6 +119,14 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
 
           {/* 操作按钮组 */}
           <div className="flex items-center gap-1 shrink-0">
+            {/* 编辑 */}
+            <button
+              onClick={() => onEdit?.(server.name)}
+              className="p-2 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer"
+              title="编辑"
+            >
+              <Pencil size={15} />
+            </button>
             {/* 重启 */}
             <button
               onClick={() => onRestart?.(server.name)}
@@ -251,7 +259,16 @@ function ServerModal({ mode, initial, onSave, onClose }) {
 
     try { config.env = env.trim() ? JSON.parse(env) : {} } catch { setError('环境变量 JSON 格式错误'); setSaving(false); return }
 
-    if (onSave) await onSave(config)
+    if (onSave) {
+      try {
+        const ok = await onSave(config)
+        if (ok === false) { setSaving(false); return }
+      } catch (e) {
+        setError(e?.message || '保存失败')
+        setSaving(false)
+        return
+      }
+    }
     setSaving(false)
     onClose()
   }
@@ -449,6 +466,12 @@ export default function MCPTab() {
 
   useEffect(() => { fetchServers() }, [fetchServers])
 
+  // 轮询状态更新（每 10s）
+  useEffect(() => {
+    const id = setInterval(fetchServers, 10000)
+    return () => clearInterval(id)
+  }, [fetchServers])
+
   const dismissSafety = () => {
     setSafetyDismissed(true)
     localStorage.setItem('mcp_safety_dismissed', '1')
@@ -470,13 +493,29 @@ export default function MCPTab() {
   }
 
   const handleSave = async config => {
-    const r = await fetch(`${API_BASE}/api/mcp/servers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config),
-    })
-    await r.json()
+    const isEdit = modalMode === 'edit'
+    const originalName = editTarget?.name
+    if (isEdit && originalName) {
+      // 编辑: PUT 到原名称
+      const r = await fetch(`${API_BASE}/api/mcp/servers/${encodeURIComponent(originalName)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      })
+      const d = await r.json()
+      if (d.ok === false) { throw new Error(d.error || '保存失败') }
+    } else {
+      // 新增: POST
+      const r = await fetch(`${API_BASE}/api/mcp/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      })
+      const d = await r.json()
+      if (d.ok === false) { throw new Error(d.error || '保存失败') }
+    }
     await fetchServers()
+    return true
   }
 
   const handleDelete = async name => {
@@ -545,9 +584,6 @@ export default function MCPTab() {
       ) : (
         <div className="space-y-3">
           {servers.map(s => {
-            // 合并配置与状态；statuses 的 key 是 server name
-            const st = statuses[s.name]
-            const displayTools = s.name ? [] : []  // 未来可从 status 取
             return (
               <ServerCard
                 key={s.name}

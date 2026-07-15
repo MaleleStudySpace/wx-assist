@@ -1257,6 +1257,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
         put_path = self.path.split("?")[0] if "?" in self.path else self.path
         if self.path == "/api/assistant/config" or (
             put_path.startswith("/api/oa/groups/") and len(put_path.split("/")) == 5
+        ) or (
+            self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 5
         ):
             self.do_GET()
         else:
@@ -1270,7 +1272,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
         delete_path = self.path.split("?")[0] if "?" in self.path else self.path
 
         if (delete_path.startswith("/api/oa/groups/") and len(delete_path.split("/")) == 5
-        ) or (self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 4):
+        ) or (self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 5):
             self.do_GET()
         else:
             self.send_response(405)
@@ -1327,7 +1329,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          ) or (
                              self.path == "/api/mcp/servers"
                          ) or (
-                             self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 4
+                             self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 5
                          ):
             self.do_GET()
         else:
@@ -3610,8 +3612,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     return
 
                 # DELETE /api/mcp/servers/<name>
-                if _method == "DELETE" and len(_path_parts) == 4:
-                    _name = _path_parts[3]
+                if _method == "DELETE" and len(_path_parts) == 5:
+                    _name = _path_parts[4]
                     if _mgr:
                         try:
                             _mgr.remove(_name)
@@ -3623,8 +3625,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     return
 
                 # POST /api/mcp/servers/<name>/restart
-                if _method == "POST" and len(_path_parts) == 5 and _path_parts[4] == "restart":
-                    _name = _path_parts[3]
+                if _method == "POST" and len(_path_parts) == 6 and _path_parts[5] == "restart":
+                    _name = _path_parts[4]
                     if _mgr:
                         try:
                             _mgr.restart(_name)
@@ -3636,8 +3638,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     return
 
                 # POST /api/mcp/servers/<name>/toggle
-                if _method == "POST" and len(_path_parts) == 5 and _path_parts[4] == "toggle":
-                    _name = _path_parts[3]
+                if _method == "POST" and len(_path_parts) == 6 and _path_parts[5] == "toggle":
+                    _name = _path_parts[4]
                     if _mgr:
                         if _name in _mgr._degraded:
                             # 尝试重新启用
@@ -3650,6 +3652,34 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     return
 
                 self.send_json({"ok": False, "error": "Unknown MCP endpoint"})
+
+                # PUT /api/mcp/servers/<name> — 更新配置 (remove + re-register)
+                if _method == "PUT" and len(_path_parts) == 5:
+                    _name = _path_parts[4]
+                    _body_config = _body
+                    _body_config["name"] = _name
+                    valid = _validate_mcp_cfg([_body_config])
+                    if not valid["ok"]:
+                        self.send_json({"ok": False, "error": "配置无效", "errors": valid["errors"]})
+                        return
+                    item = valid["valid_items"][0]
+                    if _mgr:
+                        try:
+                            if _name in _mgr._clients or _name in _mgr._degraded:
+                                _mgr.remove(_name)
+                            _mgr.add(item)
+                            self.send_json({"ok": True})
+                        except Exception as e:
+                            self.send_json({"ok": False, "error": str(e)})
+                    else:
+                        from src.mcp.manager import MCPServerManager
+                        _new_mgr = MCPServerManager()
+                        _new_mgr.init_from_config(configs=[item])
+                        register_mcp_status(_new_mgr)
+                        import src.web.server as _sws
+                        _sws._mcp_manager = _new_mgr
+                        self.send_json({"ok": True})
+                    return
                 return
             except Exception as e:
                 logger.error("[MCP] API error: %s", e)

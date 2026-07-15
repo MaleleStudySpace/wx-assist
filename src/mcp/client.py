@@ -133,12 +133,22 @@ class StdioClient(MCPClient):
                 line = self._proc.stdout.readline()
                 if not line:
                     break
-                resp = json.loads(line.decode("utf-8").strip())
+                line_str = line.decode("utf-8").strip()
+                if not line_str:
+                    continue  # 跳过空行
+                resp = json.loads(line_str)
                 req_id = resp.get("id")
                 if req_id is not None:
                     q = self._pending.pop(req_id, None)
                     if q:
                         q.put(resp)
+                elif resp.get("method") == "notifications/message":
+                    # Server-sent notification (非标准 MCP 但容错)
+                    pass
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                # 非 JSON 行（如 debug 日志写到 stdout）→ 跳过，不崩溃
+                logger.warning("[MCP] %s reader 收到非 JSON 行: %s", self.name, e)
+                continue
             except (ValueError, OSError, EOFError) as e:
                 if not self._closed:
                     logger.warning("[MCP] %s reader error: %s", self.name, e)
