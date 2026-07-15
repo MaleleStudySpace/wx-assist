@@ -113,6 +113,11 @@ a = Analysis(
         # ChromaDB native Rust bindings (compiled .pyd, not auto-detected)
         'chromadb_rust_bindings',
         'chromadb.api.rust',
+    'src.mcp',
+    'src.mcp.client',
+    'src.mcp.manager',
+    'src.mcp.tool_registry',
+    'src.mcp.config_schema',
     ],
     hookspath=[],
     hooksconfig={},
