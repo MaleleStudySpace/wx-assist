@@ -428,6 +428,7 @@ class Bot:
 
         # ── 7b. AI Agent ─────────────────────────────────────────────
         agent_engine = None
+        mcp_manager = None
         try:
             from .agent import ToolExecutor, AgentEngine
             from .web.server import register_agent_engine, get_status_snapshot
@@ -442,6 +443,34 @@ class Bot:
                 oa_monitor=oa_monitor,
                 alert_engine=assistant_alert,
             )
+            _orig_reg = tool_executor.registry
+            # ── MCP Client Init (optional) ────────────────────────
+            mcp_manager = None
+            try:
+                from src.mcp.manager import MCPServerManager
+                from src.mcp.tool_registry import MCPToolRegistry, ProxyRegistry
+                from src.web.server import register_mcp_status
+
+                manager = MCPServerManager()
+                result = manager.init_from_config(config_path="data/user_mcp.json")
+                if result["count"] > 0:
+                    logger.info("[MCP] %d MCP servers initialized", result["count"])
+
+                    # Wrap tool executor registry with MCP tools
+                    mcp_wrapper = MCPToolRegistry(_orig_reg, manager)
+                    mcp_wrapper.refresh()
+                    tool_executor.registry = ProxyRegistry(_orig_reg, mcp_wrapper)
+                    logger.info("[MCP] Tool registry wrapped with MCP tools")
+
+                    # Register status updater for WebSocket broadcast
+                    register_mcp_status(manager)
+
+                    mcp_manager = manager  # 交给外层，用于 cleanup
+            except Exception as mcp_e:
+                logger.warning("[MCP] Init failed (continuing without): %s", mcp_e)
+                mcp_manager = None
+            # ── end MCP Init ──────────────────────────────────────
+
             agent_engine = AgentEngine(
                 summarizer=summarizer,
                 tool_executor=tool_executor,
@@ -632,7 +661,7 @@ class Bot:
             # ── Start MCP Server (daemon thread) ───────────────────
             try:
                 from .agent.mcp_server import start_mcp_server
-                start_mcp_server(tool_executor.registry)
+                start_mcp_server(_orig_reg)
             except Exception as mcp_e:
                 logger.warning("MCP server not started: %s", mcp_e)
         except Exception as e:
@@ -687,6 +716,12 @@ class Bot:
         except KeyboardInterrupt:
             pass
         finally:
+            # MCP shutdown first
+            if mcp_manager is not None:
+                try:
+                    mcp_manager.shutdown_all()
+                except Exception as e:
+                    logger.warning("[MCP] shutdown error: %s", e)
             if oa_monitor is not None:
                 try:
                     oa_monitor.stop()

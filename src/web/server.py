@@ -564,7 +564,7 @@ class _ServerStatus:
         "wechat_online", "ai_ok", "ai_verified", "model_name", "group_count",
         "last_api_call_sec_ago", "last_api_call_time",
         "timestamp", "error", "avatar_url", "wx_name",
-        "restricted_features_enabled", "rag_ok",
+        "restricted_features_enabled", "rag_ok", "mcp_servers",
     )
 
     def __init__(self):
@@ -587,6 +587,7 @@ class _ServerStatus:
         self.wx_name = ""
         self.restricted_features_enabled = False
         self.rag_ok = False
+        self.mcp_servers = "{}"
         self._clients: list = []
         self._clients_lock = threading.Lock()
 
@@ -787,6 +788,26 @@ def register_rag_engine(re):
 def get_rag_engine():
     """Get the registered RAGEngine instance, or None if not available."""
     return _rag_engine
+
+
+# ── MCP Client status ──────────────────────────────────────────────────
+
+_mcp_manager = None
+
+def register_mcp_status(mgr):
+    """Register the MCPServerManager so its status can be broadcast."""
+    global _mcp_manager
+    _mcp_manager = mgr
+    if mgr:
+        mgr.register_status_updater(_on_mcp_status_change)
+        import json
+        update_status(mcp_servers=json.dumps(mgr.get_status(), ensure_ascii=False))
+
+
+def _on_mcp_status_change(status_dict):
+    """Callback invoked by MCPServerManager when MCP status changes."""
+    import json
+    update_status(mcp_servers=json.dumps(status_dict, ensure_ascii=False))
 
 
 def is_shutting_down():
@@ -1302,6 +1323,10 @@ class _UIHandler(SimpleHTTPRequestHandler):
                              post_path == "/api/scheduler/tasks"
                          ) or (
                              self.path.startswith("/api/scheduler/tasks/") and len(self.path.split("/")) == 5
+                         ) or (
+                             self.path == "/api/mcp/servers"
+                         ) or (
+                             self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 4
                          ):
             self.do_GET()
         else:
@@ -3525,6 +3550,108 @@ class _UIHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 logger.error(f"AI Chat API error: {e}")
                 update_status(ai_ok=False, ai_verified=False)
+                self.send_json({"ok": False, "error": str(e)})
+                return
+
+
+        # ── MCP Server management ──────────────────────────────────────────
+        if self.path.startswith("/api/mcp/"):
+            try:
+                from src.mcp.manager import MCPServerManager as _MCPSrvMgr
+                from src.mcp.config_schema import validate_config as _validate_mcp_cfg
+                import json as _json
+                import os as _os
+
+                _mgr = _mcp_manager
+                _path_parts = self.path.split("/")
+                _method = self.command
+
+                # Parse body
+                _body = {}
+                if _method in ("POST", "PUT", "DELETE"):
+                    try:
+                        _length = int(self.headers.get("Content-Length", "0"))
+                        _body = _json.loads(self.rfile.read(_length)) if _length > 0 else {}
+                    except Exception:
+                        _body = {}
+
+                # GET /api/mcp/servers — 列出所有 server 配置 + 状态
+                if _method == "GET" and self.path == "/api/mcp/servers":
+                    if _mgr:
+                        result = {"ok": True, "servers": _mgr.get_configs(), "status": _mgr.get_status()}
+                    else:
+                        result = {"ok": True, "servers": [], "status": {}}
+                    self.send_json(result)
+                    return
+
+                # POST /api/mcp/servers — 新增 server
+                if _method == "POST" and self.path == "/api/mcp/servers":
+                    valid = _validate_mcp_cfg([_body])
+                    if not valid["ok"]:
+                        self.send_json({"ok": False, "error": "配置无效", "errors": valid["errors"]})
+                        return
+                    item = valid["valid_items"][0]
+                    if _mgr:
+                        try:
+                            _mgr.add(item)
+                        except (ValueError, RuntimeError) as e:
+                            self.send_json({"ok": False, "error": str(e)})
+                            return
+                    else:
+                        from src.mcp.manager import MCPServerManager
+                        _new_mgr = MCPServerManager()
+                        _new_mgr.init_from_config(configs=[item])
+                        register_mcp_status(_new_mgr)
+                        import src.web.server as _sws
+                        _sws._mcp_manager = _new_mgr
+                        _mgr = _new_mgr
+                    self.send_json({"ok": True})
+                    return
+
+                # DELETE /api/mcp/servers/<name>
+                if _method == "DELETE" and len(_path_parts) == 4:
+                    _name = _path_parts[3]
+                    if _mgr:
+                        try:
+                            _mgr.remove(_name)
+                            self.send_json({"ok": True})
+                        except Exception as e:
+                            self.send_json({"ok": False, "error": str(e)})
+                    else:
+                        self.send_json({"ok": False, "error": "MCP 管理器未初始化"})
+                    return
+
+                # POST /api/mcp/servers/<name>/restart
+                if _method == "POST" and len(_path_parts) == 5 and _path_parts[4] == "restart":
+                    _name = _path_parts[3]
+                    if _mgr:
+                        try:
+                            _mgr.restart(_name)
+                            self.send_json({"ok": True})
+                        except Exception as e:
+                            self.send_json({"ok": False, "error": str(e)})
+                    else:
+                        self.send_json({"ok": False, "error": "MCP 管理器未初始化"})
+                    return
+
+                # POST /api/mcp/servers/<name>/toggle
+                if _method == "POST" and len(_path_parts) == 5 and _path_parts[4] == "toggle":
+                    _name = _path_parts[3]
+                    if _mgr:
+                        if _name in _mgr._degraded:
+                            # 尝试重新启用
+                            self.send_json({"ok": True, "note": "受降级管理，需等待自动恢复"})
+                        else:
+                            _mgr.restart(_name)
+                            self.send_json({"ok": True})
+                    else:
+                        self.send_json({"ok": False, "error": "MCP 管理器未初始化"})
+                    return
+
+                self.send_json({"ok": False, "error": "Unknown MCP endpoint"})
+                return
+            except Exception as e:
+                logger.error("[MCP] API error: %s", e)
                 self.send_json({"ok": False, "error": str(e)})
                 return
 
