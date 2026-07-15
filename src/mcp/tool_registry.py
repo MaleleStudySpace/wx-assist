@@ -113,3 +113,33 @@ class MCPToolRegistry:
             parts.append("{init}{name} {t} {r}".format(
                 init=":", name=name, t=t, r=r))
         return " ".join(parts)
+
+
+class ProxyRegistry:
+    """透明代理：将本地 ToolRegistry 的 get_all_schemas()/execute() 替换为 MCP 增强版。
+
+    对于 register()/unregister()/get() 等非关键方法，透传到原始本地 registry。
+    用于 bot.py 中替换 tool_executor.registry，使 AgentEngine 无感知。
+    """
+
+    def __init__(self, local_registry, mcp_wrapper):
+        """
+        Args:
+            local_registry: src/agent/registry.ToolRegistry 实例
+            mcp_wrapper: MCPToolRegistry 实例
+        """
+        self._local = local_registry
+        self._mcp = mcp_wrapper
+
+    def get_all_schemas(self):
+        return self._mcp.get_all_schemas()
+
+    def get_descriptions(self):
+        return self._mcp.get_descriptions()
+
+    def execute(self, name, args):
+        return self._mcp.execute(name, args)
+
+    def __getattr__(self, name):
+        """未覆盖的方法透传到原始 registry（register, unregister, get 等）。"""
+        return getattr(self._local, name)

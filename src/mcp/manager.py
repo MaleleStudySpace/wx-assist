@@ -309,6 +309,53 @@ class MCPServerManager:
         """注册状态变更回调 (由 server.py 调用)。"""
         self._status_updater = callback
 
+    def invoke(self, server_name: str, tool_name: str, args: dict):
+        """调用 MCP server 的某个工具。
+
+        Args:
+            server_name: MCP server 名称
+            tool_name: 工具名 (不含 server__ 前缀)
+            args: 参数字典
+
+        Returns:
+            result dict (含 content 列表)
+
+        Raises:
+            ValueError: server 不存在或被降级
+            TimeoutError / ConnectionError: 调用失败
+        """
+        with self._lock:
+            if server_name in self._degraded:
+                raise RuntimeError("{}: server 已被降级".format(server_name))
+            client = self._clients.get(server_name)
+            config = self._name_map.get(server_name)
+
+        if client is None:
+            raise ValueError("不存在的 server: {}".format(server_name))
+
+        timeout = config.get("timeout", 30) if config else 30
+        try:
+            result = client.call_tool(tool_name, args, timeout=timeout)
+
+            # 记录成功，重置错误计数
+            with self._lock:
+                if server_name in self._consecutive_errors:
+                    self._consecutive_errors[server_name] = 0
+
+            return result
+        except (TimeoutError, ConnectionError, RuntimeError) as e:
+            # 记录错误
+            with self._lock:
+                self._consecutive_errors[server_name] = self._consecutive_errors.get(server_name, 0) + 1
+                n_err = self._consecutive_errors[server_name]
+                if n_err >= 3 and server_name not in self._degraded:
+                    self._tool_table = [t for t in self._tool_table if t["server"] != server_name]
+                    self._degraded.add(server_name)
+                    logger.warning("[MCP] %s: 调用失败 %d 次，已降级摘除", server_name, n_err)
+
+            self._notify_status()
+            raise
+
     def _notify_status(self):
         """通知外部 (server.py) 状态变更。"""
         if self._status_updater:
