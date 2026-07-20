@@ -3641,17 +3641,21 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 if _method == "POST" and len(_path_parts) == 6 and _path_parts[5] == "toggle":
                     _name = _path_parts[4]
                     if _mgr:
-                        if _name in _mgr._degraded:
-                            # 尝试重新启用
-                            self.send_json({"ok": True, "note": "受降级管理，需等待自动恢复"})
-                        else:
-                            _mgr.restart(_name)
+                        try:
+                            status_dict = _mgr.get_status()
+                            st = status_dict.get(_name, {}).get("status", "")
+                            if st == "stopped" or st == "error" or _name in _mgr._disabled_configs:
+                                # 启用（从禁用列表恢复）
+                                _mgr.enable(_name)
+                            else:
+                                # 运行中/降级 → 禁用
+                                _mgr.disable(_name)
                             self.send_json({"ok": True})
+                        except Exception as e:
+                            self.send_json({"ok": False, "error": str(e)})
                     else:
                         self.send_json({"ok": False, "error": "MCP 管理器未初始化"})
                     return
-
-                self.send_json({"ok": False, "error": "Unknown MCP endpoint"})
 
                 # PUT /api/mcp/servers/<name> — 更新配置 (remove + re-register)
                 if _method == "PUT" and len(_path_parts) == 5:
@@ -3665,7 +3669,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     item = valid["valid_items"][0]
                     if _mgr:
                         try:
-                            if _name in _mgr._clients or _name in _mgr._degraded:
+                            if _name in _mgr._clients or _name in _mgr._degraded or _name in _mgr._disabled_configs:
                                 _mgr.remove(_name)
                             _mgr.add(item)
                             self.send_json({"ok": True})
@@ -3680,6 +3684,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         _sws._mcp_manager = _new_mgr
                         self.send_json({"ok": True})
                     return
+
+                self.send_json({"ok": False, "error": "Unknown MCP endpoint"})
                 return
             except Exception as e:
                 logger.error("[MCP] API error: %s", e)

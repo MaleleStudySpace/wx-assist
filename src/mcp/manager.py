@@ -25,7 +25,8 @@ class MCPServerManager:
 
     def __init__(self):
         self._clients = {}      # name → MCPClient
-        self._name_map = {}     # name → config
+        self._name_map = {}     # name → config (仅活跃的)
+        self._disabled_configs = {}  # name → config (禁用的)
         self._tool_table = []   # 平铺工具表: [{server, name, schema}, ...]
         self._consecutive_errors = {}  # name → int
         self._degraded = set()  # set of degraded server names
@@ -62,6 +63,8 @@ class MCPServerManager:
             if not item.get("enabled", True):
                 logger.info("[MCP] %s: 已禁用，跳过", item["name"])
                 errors[item["name"]] = "disabled"
+                with self._lock:
+                    self._disabled_configs[item["name"]] = item
                 continue
             try:
                 self._start_one(item)
@@ -107,6 +110,8 @@ class MCPServerManager:
             self._name_map[name] = config
             self._consecutive_errors[name] = 0
             self._degraded.discard(name)
+            # 清除旧工具条目防重复，再追加新的
+            self._tool_table = [t for t in self._tool_table if t["server"] != name]
             for t in tools:
                 self._tool_table.append({
                     "server": name,
@@ -209,6 +214,10 @@ class MCPServerManager:
         if item["name"] in self._clients:
             raise ValueError("名称已存在: {}".format(item["name"]))
 
+        # 如果之前是禁用的，从禁用列表移除
+        with self._lock:
+            self._disabled_configs.pop(item["name"], None)
+
         try:
             self._start_one(item)
         except Exception:
@@ -227,6 +236,7 @@ class MCPServerManager:
             self._tool_table = [t for t in self._tool_table if t["server"] != name]
             self._degraded.discard(name)
             self._consecutive_errors.pop(name, None)
+            self._disabled_configs.pop(name, None)
 
         if client:
             client.close()
@@ -253,6 +263,48 @@ class MCPServerManager:
 
         self._notify_status()
 
+    def disable(self, name: str):
+        """禁用 MCP server：停止客户端，保留配置。"""
+        with self._lock:
+            client = self._clients.pop(name, None)
+            config = self._name_map.pop(name, None)
+            if config is None:
+                config = self._disabled_configs.get(name)
+            if config is None:
+                raise ValueError("不存在的 server: {}".format(name))
+            # 标记禁用
+            config["enabled"] = False
+            self._disabled_configs[name] = config
+            # 摘除工具
+            self._tool_table = [t for t in self._tool_table if t["server"] != name]
+            self._degraded.discard(name)
+            self._consecutive_errors.pop(name, None)
+
+        if client:
+            client.close()
+
+        self._persist_config()
+        self._notify_status()
+
+    def enable(self, name: str):
+        """启用 MCP server：从禁用列表取出，重新启动。"""
+        with self._lock:
+            config = self._disabled_configs.pop(name, None)
+        if config is None:
+            raise ValueError("不存在的或未被禁用的 server: {}".format(name))
+
+        config["enabled"] = True
+        try:
+            self._start_one(config)
+        except Exception:
+            # 启动失败 → 放回禁用列表
+            config["enabled"] = False
+            with self._lock:
+                self._disabled_configs[name] = config
+            raise
+
+        self._persist_config()
+
     def shutdown_all(self):
         """关闭全部 MCP server (bot 清理时调用)。"""
         self._stop_heartbeat_loop()
@@ -278,16 +330,19 @@ class MCPServerManager:
         """返回所有 MCP server 状态 dict (用于 WebSocket 广播)。"""
         status = {}
         with self._lock:
-            all_names = set(list(self._clients.keys()) + list(self._name_map.keys()) + list(self._degraded))
+            all_names = set(list(self._clients.keys()) + list(self._name_map.keys()) + list(self._degraded) + list(self._disabled_configs.keys()))
             for name in all_names:
                 client = self._clients.get(name)
-                config = self._name_map.get(name)
+                config = self._name_map.get(name) or self._disabled_configs.get(name)
                 tools_count = sum(
                     1 for t in self._tool_table if t["server"] == name
                 )
                 if name in self._degraded:
                     st = "degraded"
                     err = "ping 3 次失败"
+                elif name in self._disabled_configs and name not in self._clients:
+                    st = "stopped"
+                    err = "已禁用"
                 elif client and client.connected:
                     st = "running"
                     err = ""
@@ -367,7 +422,7 @@ class MCPServerManager:
     # ── 持久化 ──────────────────────────────────────────────────────────
 
     def _persist_config(self):
-        """将当前配置写回 data/user_mcp.json。"""
+        """将当前配置写回 data/user_mcp.json（包括禁用的 server）。"""
         path = "data/user_mcp.json"
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -375,12 +430,16 @@ class MCPServerManager:
             with self._lock:
                 for name, config in self._name_map.items():
                     items.append(config)
+                for name, config in self._disabled_configs.items():
+                    items.append(config)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump({"servers": items}, f, ensure_ascii=False, indent=2)
         except OSError as e:
             logger.warning("[MCP] 持久化配置失败: %s", e)
 
     def get_configs(self) -> list:
-        """返回当前所有配置 (用于 API 查询)。"""
+        """返回当前所有配置 (活跃 + 禁用，用于 API 查询)。"""
         with self._lock:
-            return list(self._name_map.values())
+            active = list(self._name_map.values())
+            disabled = list(self._disabled_configs.values())
+            return active + disabled

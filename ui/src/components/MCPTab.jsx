@@ -72,8 +72,8 @@ function ToolTags({ tools, degraded }) {
 /* ── 单张 Server 卡片 ─── */
 function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
   const [expanded, setExpanded] = useState(false)
-  const st = status || 'stopped'
-  const meta = STATUS_LABELS[st]
+  const st = status?.status || 'stopped'
+  const meta = STATUS_LABELS[st] || STATUS_LABELS.stopped
   const transportIcon = server.transport === 'http' ? Globe : Terminal
   const transportLabel = server.transport === 'http' ? '远程 HTTP' : '本地 stdio'
   const nTools = status?.tools_count ?? 0
@@ -251,25 +251,55 @@ function ServerModal({ mode, initial, onSave, onClose }) {
 
   const toggleJsonMode = () => {
     if (!jsonMode) {
-      setJsonText(JSON.stringify(buildConfig(), null, 2))
+      const current = buildConfig()
+      // 表单为空时 JSON 区留空，示例显示在上方提示
+      setJsonText(current.name || current.command || current.url
+        ? JSON.stringify(current, null, 2) : '')
     }
     setJsonMode(!jsonMode)
   }
 
   const applyJson = () => {
     try {
-      const d = JSON.parse(jsonText)
+      const raw = JSON.parse(jsonText)
+
+      // 自动检测格式: {"server-name": {"command": ...}} (Claude Code 风格)
+      let d = raw
+      if (!raw.name && !raw.transport && !raw.command && !raw.url) {
+        const keys = Object.keys(raw)
+        if (keys.length === 1 && raw[keys[0]] && typeof raw[keys[0]] === 'object') {
+          d = raw[keys[0]]
+          d.name = keys[0]
+        }
+      }
+
+      // 字段映射: type → transport
+      if (d.type && !d.transport) d.transport = d.type
+
+      // 校验必填
+      const missing = []
+      if (!d.name) missing.push('name')
+      if ((!d.transport || (d.transport !== 'stdio' && d.transport !== 'http'))) missing.push('transport')
+      if (missing.length > 0) {
+        setError('JSON 缺少必填字段: ' + missing.join(', ') + '\n预期格式: {"name":"xxx","transport":"stdio","command":"npx",...}')
+        return
+      }
+
       setName(d.name || '')
       setDesc(d.description || '')
       setTransport(d.transport || 'stdio')
-      if (d.timeout) setTimeout_(d.timeout)
+      setTimeout_(d.timeout || 30)
       setAutoRestart(d.auto_restart !== false)
-      if (d.transport === 'stdio') {
+      if (d.transport === 'stdio' || d.command) {
         setCmd(d.command || '')
         setArgs((d.args || []).join(', '))
+        setUrl('')
+        setHeaders('')
       } else {
         setUrl(d.url || '')
         setHeaders(d.headers ? JSON.stringify(d.headers, null, 1) : '')
+        setCmd('')
+        setArgs('')
       }
       setEnv(d.env ? JSON.stringify(d.env, null, 1) : '')
       setError('')
@@ -337,11 +367,12 @@ function ServerModal({ mode, initial, onSave, onClose }) {
           {jsonMode ? (
             <>
               <p className="text-[12px] text-text-muted/70 leading-relaxed">
-                直接编辑或粘贴 MCP 配置 JSON，支持全部字段。
+                粘贴合法 JSON 即可解析到表单。支持两种格式，空运行时显示示例。
               </p>
               <textarea value={jsonText} onChange={e => setJsonText(e.target.value)} rows={14}
-                className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-3 text-sm font-mono text-text-main
+                className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-3 text-sm font-mono text-text-main placeholder:text-text-muted/40
                   focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all resize-none"
+                placeholder={'可用格式:\n{\n  "name": "my-server",\n  "transport": "stdio",\n  "command": "npx",\n  "args": ["-y", "@xxx/mcp"],\n  "env": {"KEY": "val"}\n}\n\n也支持 Claude Code 格式:\n{"my-server": {"command": "npx", ...}}'}
               />
             </>
           ) : (
@@ -552,17 +583,29 @@ export default function MCPTab() {
   }
 
   const handleDelete = async name => {
-    await fetch(`${API_BASE}/api/mcp/servers/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    try {
+      const r = await fetch(`${API_BASE}/api/mcp/servers/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      const d = await r.json()
+      if (d.ok === false) { console.error('删除失败:', d.error); return }
+    } catch (e) { console.error('删除异常:', e) }
     await fetchServers()
   }
 
   const handleRestart = async name => {
-    await fetch(`${API_BASE}/api/mcp/servers/${encodeURIComponent(name)}/restart`, { method: 'POST' })
+    try {
+      const r = await fetch(`${API_BASE}/api/mcp/servers/${encodeURIComponent(name)}/restart`, { method: 'POST' })
+      const d = await r.json()
+      if (d.ok === false) { console.error('重启失败:', d.error); return }
+    } catch (e) { console.error('重启异常:', e) }
     await fetchServers()
   }
 
   const handleToggle = async name => {
-    await fetch(`${API_BASE}/api/mcp/servers/${encodeURIComponent(name)}/toggle`, { method: 'POST' })
+    try {
+      const r = await fetch(`${API_BASE}/api/mcp/servers/${encodeURIComponent(name)}/toggle`, { method: 'POST' })
+      const d = await r.json()
+      if (d.ok === false) { console.error('切换失败:', d.error); return }
+    } catch (e) { console.error('切换异常:', e) }
     await fetchServers()
   }
 
