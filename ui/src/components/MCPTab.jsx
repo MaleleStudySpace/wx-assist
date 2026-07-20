@@ -78,6 +78,14 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
   const transportLabel = server.transport === 'http' ? '远程 HTTP' : '本地 stdio'
   const nTools = status?.tools_count ?? 0
   const errorMsg = status?.error
+  // 可切换（非 running 和非停止状态都显示启用按钮）
+  const showEnable = st === 'degraded' || st === 'stopped' || st === 'error'
+
+  const handleCardClick = (e) => {
+    // 如果点的是按钮区域，不触发卡片展开
+    if (e.target.closest('button')) return
+    setExpanded(!expanded)
+  }
 
   return (
     <motion.div
@@ -85,8 +93,8 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -12 }}
-      className="bg-bg-card border border-border-main rounded-xl overflow-hidden transition-colors hover:border-border-strong"
-    >
+      className="bg-bg-card border border-border-main rounded-xl overflow-hidden transition-colors hover:border-border-strong cursor-pointer"
+      onClick={handleCardClick}
       <div className="p-5">
         <div className="flex items-start gap-3.5">
           <StatusDot status={st} />
@@ -123,7 +131,7 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
               className="p-2 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer" title="重启">
               <ArrowsClockwise size={15} />
             </button>
-            {st === 'degraded' || st === 'stopped' ? (
+            {showEnable ? (
               <button onClick={() => onToggle?.(server.name)}
                 className="p-2 rounded-lg text-text-muted hover:text-brand-green hover:bg-brand-green-light/20 transition-colors cursor-pointer" title="启用">
                 <Play size={15} />
@@ -154,15 +162,39 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
             transition={{ duration: 0.2, ease: easeOut }}
             className="overflow-hidden"
           >
-            <div className="border-t border-border-main/50 mx-5 pt-3 pb-4 space-y-2">
-              {server.tools.map(t => (
-                <div key={t.name} className="flex items-start gap-3 text-sm">
-                  <span className="font-mono text-sm text-brand-green shrink-0 mt-0.5">{t.name}</span>
-                  {t.description && (
-                    <span className="text-text-muted/80 leading-snug">{t.description}</span>
+            <div className="border-t border-border-main/50 mx-5 pt-3 pb-4 space-y-3">
+              {server.tools.map(t => {
+                const fn = t.schema?.function || {}
+                const params = fn.parameters || {}
+                const props = params.properties || {}
+                const required = params.required || []
+                return (
+                <div key={t.name} className="text-sm">
+                  <div className="flex items-start gap-3">
+                    <span className="font-mono text-sm text-brand-green shrink-0 mt-0.5">{t.name}</span>
+                    {fn.description && (
+                      <span className="text-text-muted/80 leading-snug">{fn.description}</span>
+                    )}
+                  </div>
+                  {Object.keys(props).length > 0 && (
+                    <div className="mt-1.5 ml-5 flex flex-wrap gap-1.5">
+                      {Object.entries(props).map(([pname, pinfo]) => (
+                        <span key={pname}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono
+                            bg-bg-raised text-text-muted/70 border border-border-main/50"
+                        >
+                          {pname}
+                          <span className="text-text-muted/50">{pinfo.type || 'any'}</span>
+                          {required.includes(pname) && (
+                            <span className="text-status-error">*</span>
+                          )}
+                        </span>
+                      ))}
+                    </div>
                   )}
                 </div>
-              ))}
+                )
+              })}
             </div>
           </motion.div>
         )}

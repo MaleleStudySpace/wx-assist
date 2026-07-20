@@ -442,4 +442,12 @@ class MCPServerManager:
         with self._lock:
             active = list(self._name_map.values())
             disabled = list(self._disabled_configs.values())
-            return active + disabled
+            # 为每个 config 注入 tools 列表
+            result = []
+            for c in active:
+                c["tools"] = [t for t in self._tool_table if t["server"] == c["name"]]
+                result.append(c)
+            for c in disabled:
+                c["tools"] = []
+                result.append(c)
+            return result
