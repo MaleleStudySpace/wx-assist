@@ -221,6 +221,7 @@ function ServerModal({ mode, initial, onSave, onClose }) {
   const [autoRestart, setAutoRestart] = useState(initial?.auto_restart !== false)
   const [jsonText, setJsonText] = useState('')
   const [saving, setSaving] = useState(false)
+  const [savePhase, setSavePhase] = useState('')
   const [error, setError] = useState('')
 
   // 从表单字段构建配置对象
@@ -291,6 +292,7 @@ function ServerModal({ mode, initial, onSave, onClose }) {
     if (transport === 'http' && !config.url) { setError('URL 不能为空'); setSaving(false); return }
 
     if (onSave) {
+      setSavePhase('正在启动服务器…\n首次安装需要下载依赖，请耐心等待')
       try {
         const ok = await onSave(config)
         if (ok === false) { setSaving(false); return }
@@ -430,6 +432,12 @@ function ServerModal({ mode, initial, onSave, onClose }) {
               <WarningCircle size={15} weight="fill" /> {error}
             </p>
           )}
+          {saving && savePhase && !error && (
+            <p className="text-sm text-text-muted flex items-center gap-2">
+              <Spinner size={14} className="animate-spin" />
+              <span className="whitespace-pre-line">{savePhase}</span>
+            </p>
+          )}
         </div>
 
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-main">
@@ -440,7 +448,7 @@ function ServerModal({ mode, initial, onSave, onClose }) {
           <button onClick={handleSave} disabled={saving}
             className="px-5 py-2 rounded-lg text-sm font-semibold bg-brand-green-hover dark:bg-brand-green text-white hover:brightness-110 disabled:opacity-40 transition-all cursor-pointer inline-flex items-center gap-2">
             {saving && <Spinner size={14} className="animate-spin" />}
-            {jsonMode ? '应用 JSON' : (saving ? '保存中…' : '保存')}
+            {jsonMode ? '应用 JSON' : (saving ? '等一等…' : '保存')}
           </button>
         </div>
       </motion.div>

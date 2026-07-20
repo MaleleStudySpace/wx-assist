@@ -77,7 +77,8 @@ class StdioClient(MCPClient):
 
     def initialize(self, timeout=None):
         """启动子进程 + 握手。"""
-        timeout = timeout or 10
+        # initialize 超时单独设大（首次 npx 下载可能 >30s）
+        timeout = timeout or max(self._timeout, 60)
         self._spawn()
         resp = self._send_request("initialize", {
             "protocolVersion": MCP_PROTOCOL_VERSION,
