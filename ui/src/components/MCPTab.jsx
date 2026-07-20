@@ -1,5 +1,5 @@
 /* MCP 工具管理页 */
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   PuzzlePiece, Plus, X, ArrowsClockwise, Trash, Play, Pause,
@@ -88,7 +88,6 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
       className="bg-bg-card border border-border-main rounded-xl overflow-hidden transition-colors hover:border-border-strong"
     >
       <div className="p-5">
-        {/* 顶行：状态 + 名称 + 操作按钮 */}
         <div className="flex items-start gap-3.5">
           <StatusDot status={st} />
           <div className="flex-1 min-w-0">
@@ -96,11 +95,10 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
               <span className="text-sm font-semibold text-text-main">{server.name}</span>
               <span className={`text-[12px] font-mono font-semibold ${meta.cls}`}>{meta.label}</span>
               {server.description && (
-                <span className="text-[12px] text-text-muted/70 hidden sm:inline">— {server.description}</span>
+                <span className="text-[12px] text-text-muted/70 hidden sm:inline">- {server.description}</span>
               )}
             </div>
 
-            {/* Meta 行 */}
             <div className="flex items-center gap-4 mt-1.5 text-[12px] text-text-muted/80 flex-wrap">
               <span className="inline-flex items-center gap-1">
                 <transportIcon size={13} weight="regular" />
@@ -111,61 +109,42 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
               {server.auto_restart !== false && <span>自动重启</span>}
             </div>
 
-            {/* 错误信息 */}
             {errorMsg && st !== 'running' && (
               <p className="mt-1.5 text-[12px] text-status-error/90 font-mono leading-snug truncate">{errorMsg}</p>
             )}
           </div>
 
-          {/* 操作按钮组 */}
           <div className="flex items-center gap-1 shrink-0">
-            {/* 编辑 */}
-            <button
-              onClick={() => onEdit?.(server.name)}
-              className="p-2 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer"
-              title="编辑"
-            >
+            <button onClick={() => onEdit?.(server.name)}
+              className="p-2 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer" title="编辑">
               <Pencil size={15} />
             </button>
-            {/* 重启 */}
-            <button
-              onClick={() => onRestart?.(server.name)}
-              className="p-2 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer"
-              title="重启"
-            >
+            <button onClick={() => onRestart?.(server.name)}
+              className="p-2 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer" title="重启">
               <ArrowsClockwise size={15} />
             </button>
-            {/* 启用/禁用 */}
             {st === 'degraded' || st === 'stopped' ? (
               <button onClick={() => onToggle?.(server.name)}
-                className="p-2 rounded-lg text-text-muted hover:text-brand-green hover:bg-brand-green-light/20 transition-colors cursor-pointer"
-                title="启用"
-              >
+                className="p-2 rounded-lg text-text-muted hover:text-brand-green hover:bg-brand-green-light/20 transition-colors cursor-pointer" title="启用">
                 <Play size={15} />
               </button>
             ) : (
               <button onClick={() => onToggle?.(server.name)}
-                className="p-2 rounded-lg text-text-muted hover:text-status-warn hover:bg-status-warn/10 transition-colors cursor-pointer"
-                title="禁用"
-              >
+                className="p-2 rounded-lg text-text-muted hover:text-status-warn hover:bg-status-warn/10 transition-colors cursor-pointer" title="禁用">
                 <Pause size={15} />
               </button>
             )}
-            {/* 展开工具详情 */}
             {nTools > 0 && (
               <button onClick={() => setExpanded(!expanded)}
-                className="p-2 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer"
-              >
+                className="p-2 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer">
                 {expanded ? <CaretDown size={15} weight="fill" /> : <CaretRight size={15} weight="fill" />}
               </button>
             )}
-            {/* 删除 */}
             <DelButton onConfirm={() => onDelete?.(server.name)} />
           </div>
         </div>
       </div>
 
-      {/* 工具详情展开 */}
       <AnimatePresence>
         {expanded && server.tools?.length > 0 && (
           <motion.div
@@ -199,8 +178,7 @@ function DelButton({ onConfirm }) {
     <div className="relative">
       {!confirming ? (
         <button onClick={() => setConfirming(true)}
-          className="p-2 rounded-lg text-text-muted hover:text-status-error hover:bg-status-error/10 transition-colors cursor-pointer"
-          title="删除">
+          className="p-2 rounded-lg text-text-muted hover:text-status-error hover:bg-status-error/10 transition-colors cursor-pointer" title="删除">
           <Trash size={15} />
         </button>
       ) : (
@@ -216,48 +194,101 @@ function DelButton({ onConfirm }) {
   )
 }
 
-/* ── 弹窗：添加/编辑服务器 ─── */
+function Field({ label, required, children, className }) {
+  return (
+    <div className={className || ''}>
+      <label className="block text-readable-label text-text-secondary mb-1.5">
+        {label}{required && <span className="text-status-error ml-0.5">*</span>}
+      </label>
+      {children}
+    </div>
+  )
+}
+
+/* ── 弹窗：添加/编辑服务器（表单 + JSON 双模式） ─── */
 function ServerModal({ mode, initial, onSave, onClose }) {
   const isEdit = mode === 'edit'
-  const [transport, setTransport] = useState(isEdit ? (initial?.transport || 'stdio') : 'stdio')
-  const [name, setName] = useState(isEdit ? (initial?.name || '') : '')
-  const [desc, setDesc] = useState(isEdit ? (initial?.description || '') : '')
-  const [cmd, setCmd] = useState(isEdit ? (initial?.command || '') : '')
-  const [args, setArgs] = useState(isEdit ? ((initial?.args || []).join(', ')) : '')
-  const [cwd, setCwd] = useState(isEdit ? (initial?.cwd || '') : '')
-  const [url, setUrl] = useState(isEdit ? (initial?.url || '') : '')
-  const [headers, setHeaders] = useState(isEdit ? (JSON.stringify(initial?.headers || {}, null, 1)) : '')
-  const [timeout, setTimeout_] = useState(isEdit ? (initial?.timeout || 30) : 30)
-  const [env, setEnv] = useState(isEdit ? (JSON.stringify(initial?.env || {}, null, 1)) : '')
-  const [autoRestart, setAutoRestart] = useState(isEdit ? (initial?.auto_restart !== false) : true)
+  const [jsonMode, setJsonMode] = useState(false)
+  const [transport, setTransport] = useState(initial?.transport || 'stdio')
+  const [name, setName] = useState(initial?.name || '')
+  const [desc, setDesc] = useState(initial?.description || '')
+  const [cmd, setCmd] = useState(initial?.command || '')
+  const [args, setArgs] = useState((initial?.args || []).join(', '))
+  const [url, setUrl] = useState(initial?.url || '')
+  const [headers, setHeaders] = useState(initial?.headers ? JSON.stringify(initial.headers, null, 1) : '')
+  const [timeout, setTimeout_] = useState(initial?.timeout || 30)
+  const [env, setEnv] = useState(initial?.env ? JSON.stringify(initial.env, null, 1) : '')
+  const [autoRestart, setAutoRestart] = useState(initial?.auto_restart !== false)
+  const [jsonText, setJsonText] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  const handleSave = async () => {
-    if (!name.trim()) { setError('名称不能为空'); return }
-    setError('')
-    setSaving(true)
-
-    const config = {
-      name: name.trim(),
+  // 从表单字段构建配置对象
+  const buildConfig = () => {
+    const cfg = {
+      name: name.trim() || undefined,
       description: desc.trim() || undefined,
       transport,
       timeout: Number(timeout) || 30,
       auto_restart: autoRestart,
     }
-
-    if (transport === 'stdio') {
-      if (!cmd.trim()) { setError('命令不能为空'); setSaving(false); return }
-      config.command = cmd.trim()
-      config.args = args.split(',').map(s => s.trim()).filter(Boolean)
-      if (cwd.trim()) config.cwd = cwd.trim()
-    } else {
-      if (!url.trim()) { setError('URL 不能为空'); setSaving(false); return }
-      config.url = url.trim()
-      try { config.headers = headers.trim() ? JSON.parse(headers) : {} } catch { setError('Headers JSON 格式错误'); setSaving(false); return }
+    if (env.trim()) {
+      try { cfg.env = JSON.parse(env) } catch {}
     }
+    if (transport === 'stdio') {
+      cfg.command = cmd.trim() || undefined
+      const a = args.split(/,| /).map(s => s.trim()).filter(Boolean)
+      if (a.length) cfg.args = a
+    } else {
+      cfg.url = url.trim() || undefined
+      if (headers.trim()) {
+        try { cfg.headers = JSON.parse(headers) } catch {}
+      }
+    }
+    return Object.fromEntries(Object.entries(cfg).filter(([_, v]) => v !== undefined))
+  }
 
-    try { config.env = env.trim() ? JSON.parse(env) : {} } catch { setError('环境变量 JSON 格式错误'); setSaving(false); return }
+  const toggleJsonMode = () => {
+    if (!jsonMode) {
+      setJsonText(JSON.stringify(buildConfig(), null, 2))
+    }
+    setJsonMode(!jsonMode)
+  }
+
+  const applyJson = () => {
+    try {
+      const d = JSON.parse(jsonText)
+      setName(d.name || '')
+      setDesc(d.description || '')
+      setTransport(d.transport || 'stdio')
+      if (d.timeout) setTimeout_(d.timeout)
+      setAutoRestart(d.auto_restart !== false)
+      if (d.transport === 'stdio') {
+        setCmd(d.command || '')
+        setArgs((d.args || []).join(', '))
+      } else {
+        setUrl(d.url || '')
+        setHeaders(d.headers ? JSON.stringify(d.headers, null, 1) : '')
+      }
+      setEnv(d.env ? JSON.stringify(d.env, null, 1) : '')
+      setError('')
+      setJsonMode(false)
+    } catch (e) {
+      setError('JSON 格式错误: ' + e.message)
+    }
+  }
+
+  const handleSave = async () => {
+    if (jsonMode) { applyJson(); return }
+
+    if (!name.trim()) { setError('名称不能为空'); return }
+    setError('')
+    setSaving(true)
+
+    const config = buildConfig()
+
+    if (transport === 'stdio' && !config.command) { setError('命令不能为空'); setSaving(false); return }
+    if (transport === 'http' && !config.url) { setError('URL 不能为空'); setSaving(false); return }
 
     if (onSave) {
       try {
@@ -290,103 +321,111 @@ function ServerModal({ mode, initial, onSave, onClose }) {
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-main">
           <h2 className="text-base font-semibold text-text-main">{isEdit ? '编辑服务器' : '添加服务器'}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={toggleJsonMode}
+              className="text-[11px] font-mono px-2.5 py-1 rounded-lg bg-bg-raised border border-border-main text-text-muted hover:text-text-main transition-colors cursor-pointer">
+              {jsonMode ? '📋 表单' : '{ } JSON'}
+            </button>
+            <button onClick={onClose} className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="px-6 py-5 space-y-5">
-          {/* Transport 切换 */}
-          <div className="flex rounded-xl bg-bg-raised border border-border-main p-0.5">
-            {['stdio', 'http'].map(t => (
-              <button key={t} onClick={() => setTransport(t)}
-                className={`flex-1 px-4 py-2 rounded-[10px] text-sm font-medium transition-all cursor-pointer
-                  ${transport === t
-                    ? 'bg-bg-main text-text-main shadow-sm border border-border-main'
-                    : 'text-text-muted hover:text-text-main'}`}
-              >
-                {t === 'stdio' ? '📡 本地 (stdio)' : '☁️ 远程 (HTTP)'}
-              </button>
-            ))}
-          </div>
+          {jsonMode ? (
+            <>
+              <p className="text-[12px] text-text-muted/70 leading-relaxed">
+                直接编辑或粘贴 MCP 配置 JSON，支持全部字段。
+              </p>
+              <textarea value={jsonText} onChange={e => setJsonText(e.target.value)} rows={14}
+                className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-3 text-sm font-mono text-text-main
+                  focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all resize-none"
+              />
+            </>
+          ) : (
+            <>
+              <div className="flex rounded-xl bg-bg-raised border border-border-main p-0.5">
+                {['stdio', 'http'].map(t => (
+                  <button key={t} onClick={() => setTransport(t)}
+                    className={`flex-1 px-4 py-2 rounded-[10px] text-sm font-medium transition-all cursor-pointer
+                      ${transport === t
+                        ? 'bg-bg-main text-text-main shadow-sm border border-border-main'
+                        : 'text-text-muted hover:text-text-main'}`}
+                  >
+                    {t === 'stdio' ? '📡 本地 (stdio)' : '☁️ 远程 (HTTP)'}
+                  </button>
+                ))}
+              </div>
 
-          {/* 通用字段 */}
-          <Field label="名称" required>
-            <input type="text" value={name} onChange={e => setName(e.target.value)}
-              className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm text-text-main placeholder:text-text-muted/60
-                focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
-              placeholder="weather-mcp" />
-          </Field>
-          <Field label="描述">
-            <input type="text" value={desc} onChange={e => setDesc(e.target.value)}
-              className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm text-text-main placeholder:text-text-muted/60
-                focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
-              placeholder="可选说明" />
-          </Field>
+              <Field label="名称" required>
+                <input type="text" value={name} onChange={e => setName(e.target.value)}
+                  className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm text-text-main placeholder:text-text-muted/60
+                    focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                  placeholder="weather-mcp" />
+              </Field>
 
-          {/* Stdio 字段 */}
-          {transport === 'stdio' && (
-            <div className="space-y-4">
-              <Field label="命令" required>
-                <input type="text" value={cmd} onChange={e => setCmd(e.target.value)}
-                  className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm font-mono text-text-main placeholder:text-text-muted/60
+              <Field label="描述">
+                <input type="text" value={desc} onChange={e => setDesc(e.target.value)}
+                  className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm text-text-main placeholder:text-text-muted/60
                     focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
-                  placeholder="npx" />
+                  placeholder="可选说明" />
               </Field>
-              <Field label="参数">
-                <input type="text" value={args} onChange={e => setArgs(e.target.value)}
-                  className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm font-mono text-text-muted placeholder:text-text-muted/60
-                    focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
-                  placeholder="-y, @xxx/server-weather, --api-key=xxx" />
-              </Field>
-              <Field label="工作目录">
-                <input type="text" value={cwd} onChange={e => setCwd(e.target.value)}
-                  className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm font-mono text-text-muted placeholder:text-text-muted/60
-                    focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
-                  placeholder="可选" />
-              </Field>
-            </div>
+
+              {transport === 'stdio' ? (
+                <div className="space-y-4">
+                  <Field label="命令" required>
+                    <input type="text" value={cmd} onChange={e => setCmd(e.target.value)}
+                      className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm font-mono text-text-main placeholder:text-text-muted/60
+                        focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                      placeholder="npx" />
+                  </Field>
+                  <Field label="参数">
+                    <input type="text" value={args} onChange={e => setArgs(e.target.value)}
+                      className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm font-mono text-text-muted placeholder:text-text-muted/60
+                        focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                      placeholder="-y, @xxx/server-weather, --api-key=xxx" />
+                    <p className="text-[11px] text-text-muted/50 mt-1">逗号或空格分隔</p>
+                  </Field>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <Field label="URL" required>
+                    <input type="text" value={url} onChange={e => setUrl(e.target.value)}
+                      className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm font-mono text-text-main placeholder:text-text-muted/60
+                        focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                      placeholder="https://mcp.example.com/mcp" />
+                  </Field>
+                  <Field label="Headers (JSON)">
+                    <textarea value={headers} onChange={e => setHeaders(e.target.value)} rows={2}
+                      className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm font-mono text-text-muted placeholder:text-text-muted/60
+                        focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all resize-none" />
+                  </Field>
+                </div>
+              )}
+
+              <div className="flex gap-4">
+                <Field label="超时 (s)" className="flex-1">
+                  <input type="number" value={timeout} onChange={e => setTimeout_(Number(e.target.value))} min={1} max={300}
+                    className="w-full bg-bg-raised border border-border-main rounded-lg px-3 py-2.5 text-sm font-mono text-text-main
+                      focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all" />
+                </Field>
+                <Field label="环境变量 (JSON)" className="flex-1">
+                  <input type="text" value={env} onChange={e => setEnv(e.target.value)}
+                    className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm font-mono text-text-muted placeholder:text-text-muted/60
+                      focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                    placeholder='{"KEY":"val"}' />
+                </Field>
+              </div>
+
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input type="checkbox" checked={autoRestart} onChange={e => setAutoRestart(e.target.checked)}
+                  className="accent-brand-green w-4 h-4 rounded border-border-main" />
+                <span className="text-sm text-text-secondary">崩溃后自动重启</span>
+              </label>
+            </>
           )}
 
-          {/* HTTP 字段 */}
-          {transport === 'http' && (
-            <div className="space-y-4">
-              <Field label="URL" required>
-                <input type="text" value={url} onChange={e => setUrl(e.target.value)}
-                  className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm font-mono text-text-main placeholder:text-text-muted/60
-                    focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
-                  placeholder="https://mcp.example.com/mcp" />
-              </Field>
-              <Field label="Headers (JSON)">
-                <textarea value={headers} onChange={e => setHeaders(e.target.value)} rows={2}
-                  className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm font-mono text-text-muted placeholder:text-text-muted/60
-                    focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all resize-none" />
-              </Field>
-            </div>
-          )}
-
-          {/* 可选字段行 */}
-          <div className="flex gap-4">
-            <Field label="超时 (s)" className="flex-1">
-              <input type="number" value={timeout} onChange={e => setTimeout_(Number(e.target.value))} min={1} max={300}
-                className="w-full bg-bg-raised border border-border-main rounded-lg px-3 py-2.5 text-sm font-mono text-text-main
-                  focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all" />
-            </Field>
-            <Field label="环境变量 (JSON)" className="flex-1">
-              <input type="text" value={env} onChange={e => setEnv(e.target.value)}
-                className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2.5 text-sm font-mono text-text-muted placeholder:text-text-muted/60
-                  focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
-                placeholder='{"KEY":"val"}' />
-            </Field>
-          </div>
-
-          <label className="flex items-center gap-2.5 cursor-pointer">
-            <input type="checkbox" checked={autoRestart} onChange={e => setAutoRestart(e.target.checked)}
-              className="accent-brand-green w-4 h-4 rounded border-border-main" />
-            <span className="text-sm text-text-secondary">崩溃后自动重启</span>
-          </label>
-
-          {/* 错误提示 */}
           {error && (
             <p className="text-sm text-status-error flex items-center gap-1.5">
               <WarningCircle size={15} weight="fill" /> {error}
@@ -402,22 +441,11 @@ function ServerModal({ mode, initial, onSave, onClose }) {
           <button onClick={handleSave} disabled={saving}
             className="px-5 py-2 rounded-lg text-sm font-semibold bg-brand-green-hover dark:bg-brand-green text-white hover:brightness-110 disabled:opacity-40 transition-all cursor-pointer inline-flex items-center gap-2">
             {saving && <Spinner size={14} className="animate-spin" />}
-            {saving ? '保存中…' : '保存'}
+            {jsonMode ? '应用 JSON' : (saving ? '保存中…' : '保存')}
           </button>
         </div>
       </motion.div>
     </motion.div>
-  )
-}
-
-function Field({ label, required, children, className }) {
-  return (
-    <div className={className || ''}>
-      <label className="block text-readable-label text-text-secondary mb-1.5">
-        {label}{required && <span className="text-status-error ml-0.5">*</span>}
-      </label>
-      {children}
-    </div>
   )
 }
 
@@ -496,7 +524,6 @@ export default function MCPTab() {
     const isEdit = modalMode === 'edit'
     const originalName = editTarget?.name
     if (isEdit && originalName) {
-      // 编辑: PUT 到原名称
       const r = await fetch(`${API_BASE}/api/mcp/servers/${encodeURIComponent(originalName)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -505,7 +532,6 @@ export default function MCPTab() {
       const d = await r.json()
       if (d.ok === false) { throw new Error(d.error || '保存失败') }
     } else {
-      // 新增: POST
       const r = await fetch(`${API_BASE}/api/mcp/servers`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -542,7 +568,6 @@ export default function MCPTab() {
       transition={{ duration: 0.3, ease: easeOut }}
       className="p-8 space-y-6 max-w-4xl "
     >
-      {/* 顶部栏 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <PuzzlePiece size={22} weight="fill" className="text-brand-green" />
@@ -554,18 +579,15 @@ export default function MCPTab() {
           )}
         </div>
         <button onClick={fetchServers}
-          className="p-2 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer"
-          title="刷新">
+          className="p-2 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer" title="刷新">
           <ArrowsClockwise size={16} className={loading ? 'animate-spin' : ''} />
         </button>
       </div>
 
-      {/* 安全提示 */}
       <AnimatePresence>
         {!safetyDismissed && <SafetyBanner onDismiss={dismissSafety} />}
       </AnimatePresence>
 
-      {/* 操作栏 */}
       <div className="flex items-center gap-3">
         <button onClick={handleAdd}
           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-brand-green-hover dark:bg-brand-green text-white hover:brightness-110 transition-all cursor-pointer">
@@ -574,7 +596,6 @@ export default function MCPTab() {
         </button>
       </div>
 
-      {/* Server 列表 / 空状态 */}
       {loading ? (
         <div className="flex items-center justify-center py-24">
           <Spinner size={24} className="animate-spin text-text-muted" />
@@ -584,6 +605,7 @@ export default function MCPTab() {
       ) : (
         <div className="space-y-3">
           {servers.map(s => {
+            const st = statuses[s.name]
             return (
               <ServerCard
                 key={s.name}
@@ -599,7 +621,6 @@ export default function MCPTab() {
         </div>
       )}
 
-      {/* 添加/编辑弹窗 */}
       <AnimatePresence>
         {showModal && (
           <ServerModal
