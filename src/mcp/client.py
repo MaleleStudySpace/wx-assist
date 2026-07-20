@@ -109,16 +109,32 @@ class StdioClient(MCPClient):
         cwd = self.config.get("cwd", None)
 
         logger.info("[MCP] spawn: %s %s", cmd, args_list)
-        self._proc = subprocess.Popen(
-            [cmd] + args_list,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            creationflags=creationflags,
-            cwd=cwd,
-            bufsize=0,
-        )
+        try:
+            self._proc = subprocess.Popen(
+                [cmd] + args_list,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                creationflags=creationflags,
+                cwd=cwd,
+                bufsize=0,
+            )
+        except FileNotFoundError:
+            if sys.platform == "win32" and not cmd.lower().endswith(('.exe', '.cmd', '.bat')):
+                # Windows 上 npx -> npx.cmd 自动补全
+                self._proc = subprocess.Popen(
+                    [cmd + ".cmd"] + args_list,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                    creationflags=creationflags,
+                    cwd=cwd,
+                    bufsize=0,
+                )
+            else:
+                raise
 
         # 后台 reader 线程：持续读 stdout，分发到对应 pending queue
         self._reader_thread = threading.Thread(
