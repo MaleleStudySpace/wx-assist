@@ -95,6 +95,7 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
       exit={{ opacity: 0, y: -12 }}
       className="bg-bg-card border border-border-main rounded-xl overflow-hidden transition-colors hover:border-border-strong cursor-pointer"
       onClick={handleCardClick}
+    >
       <div className="p-5">
         <div className="flex items-start gap-3.5">
           <StatusDot status={st} />
