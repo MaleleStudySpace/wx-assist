@@ -71,6 +71,7 @@ function ToolTags({ tools, degraded }) {
 
 /* ── 单张 Server 卡片 ─── */
 function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
+  const [expanded, setExpanded] = useState(false)
   const st = status?.status || 'stopped'
   const meta = STATUS_LABELS[st] || STATUS_LABELS.stopped
   const transportIcon = server.transport === 'http' ? Globe : Terminal
@@ -105,7 +106,13 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
                 <transportIcon size={13} weight="regular" />
                 {transportLabel}
               </span>
-              <span>{nTools} 个工具</span>
+              <button onClick={() => setExpanded(e => !e)}
+                className="inline-flex items-center gap-1 text-text-muted/80 hover:text-text-main transition-colors cursor-pointer bg-transparent border-none p-0 text-[12px] font-inherit"
+                title="查看工具详情"
+              >
+                {expanded ? <CaretDown size={13} weight="fill" /> : <CaretRight size={13} weight="fill" />}
+                {nTools} 个工具
+              </button>
               <span>{server.timeout || 30}s 超时</span>
               {server.auto_restart !== false && <span>自动重启</span>}
             </div>
@@ -138,38 +145,47 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
             <DelButton onConfirm={() => onDelete?.(server.name)} />
           </div>
         </div>
-      </div>{tools.length > 0 && (
-        <div className="border-t border-border-main/50 mx-5 pt-3 pb-4 space-y-3">
-          {tools.map(t => {
+      </div>
+
+      {expanded && tools.length > 0 && (
+        <div className="border-t border-border-main/50">
+          {tools.map((t, idx) => {
             const fn = t.schema?.function || {}
+            const desc = fn.description || ''
             const params = fn.parameters || {}
             const props = params.properties || {}
             const required = params.required || []
             return (
-            <div key={t.name} className="text-sm">
-              <div className="flex items-start gap-3">
-                <span className="font-mono text-sm text-brand-green shrink-0 mt-0.5">{t.name}</span>
-                {fn.description && (
-                  <span className="text-text-muted/80 leading-snug">{fn.description}</span>
+              <div key={t.name}
+                className={`px-5 py-3 ${idx < tools.length - 1 ? 'border-b border-border-main/30' : ''}`}
+              >
+                <div className="flex items-start gap-3">
+                  <span className="font-mono text-sm font-semibold text-brand-green shrink-0 mt-0.5">{t.name}</span>
+                  <span className="text-[11px] font-mono text-text-muted/50 mt-1 shrink-0">({fn.name})</span>
+                  {desc && (
+                    <span className="text-sm text-text-muted/90 leading-snug">{desc}</span>
+                  )}
+                </div>
+                {Object.keys(props).length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    <span className="text-[11px] text-text-muted/50 font-mono">参数:</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries(props).map(([pname, pinfo]) => (
+                        <span key={pname}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono
+                            bg-bg-raised text-text-muted/70 border border-border-main/50"
+                        >
+                          {pname}
+                          <span className="text-text-muted/50">{pinfo.type || 'any'}</span>
+                          {required.includes(pname) && (
+                            <span className="text-status-error font-bold" title="必填">*</span>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
-              {Object.keys(props).length > 0 && (
-                <div className="mt-1.5 ml-5 flex flex-wrap gap-1.5">
-                  {Object.entries(props).map(([pname, pinfo]) => (
-                    <span key={pname}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono
-                        bg-bg-raised text-text-muted/70 border border-border-main/50"
-                    >
-                      {pname}
-                      <span className="text-text-muted/50">{pinfo.type || 'any'}</span>
-                      {required.includes(pname) && (
-                        <span className="text-status-error">*</span>
-                      )}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
             )
           })}
         </div>
