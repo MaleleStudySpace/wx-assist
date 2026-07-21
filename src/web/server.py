@@ -3667,6 +3667,20 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         self.send_json({"ok": False, "error": "MCP 管理器未初始化"})
                     return
 
+                # POST /api/mcp/servers/<name>/tools/<tool>/toggle
+                if _method == "POST" and len(_path_parts) == 8 and _path_parts[5] == "tools" and _path_parts[7] == "toggle":
+                    _name = _path_parts[4]
+                    _tool_name = _path_parts[6]
+                    if _mgr:
+                        try:
+                            _mgr.toggle_tool(_name, _tool_name)
+                            self.send_json({"ok": True})
+                        except Exception as e:
+                            self.send_json({"ok": False, "error": str(e)})
+                    else:
+                        self.send_json({"ok": False, "error": "MCP 管理器未初始化"})
+                    return
+
                 # PUT /api/mcp/servers/<name> — 更新配置 (remove + re-register)
                 if _method == "PUT" and len(_path_parts) == 5:
                     _name = _path_parts[4]

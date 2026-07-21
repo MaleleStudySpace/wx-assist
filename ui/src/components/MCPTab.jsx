@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   PuzzlePiece, Plus, X, ArrowsClockwise, Trash, Play, Pause,
   Pencil, Terminal, Globe, CaretDown, CaretRight,
-  WarningCircle, Spinner,
+  WarningCircle, Spinner, ToggleLeft, ToggleRight,
 } from '@phosphor-icons/react'
 import { API_BASE } from './SharedComponents'
 
@@ -70,7 +70,7 @@ function ToolTags({ tools, degraded }) {
 }
 
 /* ── 单张 Server 卡片 ─── */
-function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
+function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit, onToolToggle }) {
   const [expanded, setExpanded] = useState(false)
   const st = status?.status || 'stopped'
   const meta = STATUS_LABELS[st] || STATUS_LABELS.stopped
@@ -165,9 +165,15 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
             const required = params.required || []
             return (
               <div key={t.name}
-                className={`px-5 py-3 ${idx < tools.length - 1 ? 'border-b border-border-main/30' : ''}`}
+                className={`px-5 py-3 ${idx < tools.length - 1 ? 'border-b border-border-main/30' : ''} ${t.disabled ? 'opacity-40' : ''}`}
               >
                 <div className="flex items-start gap-3">
+                  <button onClick={() => onToolToggle?.(server.name, t.name)}
+                    className="shrink-0 mt-0.5 cursor-pointer bg-transparent border-none p-0 text-text-muted hover:text-text-main transition-colors"
+                    title={t.disabled ? '启用此工具' : '禁用此工具'}
+                  >
+                    {t.disabled ? <ToggleLeft size={18} /> : <ToggleRight size={18} weight="fill" className="text-brand-green" />}
+                  </button>
                   <span className="font-mono text-sm font-semibold text-brand-green shrink-0 mt-0.5">{t.name}</span>
                   <span className="text-[11px] font-mono text-text-muted/50 mt-1 shrink-0">({fn.name})</span>
                   {desc && (
@@ -271,7 +277,7 @@ function ServerModal({ mode, initial, onSave, onClose }) {
     }
     if (transport === 'stdio') {
       cfg.command = cmd.trim() || undefined
-      const a = args.split(/,| /).map(s => s.trim()).filter(Boolean)
+      const a = args.split(/,\s*/).map(s => s.trim()).filter(Boolean)
       if (a.length) cfg.args = a
     } else {
       cfg.url = url.trim() || undefined
@@ -642,6 +648,15 @@ export default function MCPTab() {
     await fetchServers()
   }
 
+  const handleToolToggle = async (name, toolName) => {
+    try {
+      const r = await fetch(`${API_BASE}/api/mcp/servers/${encodeURIComponent(name)}/tools/${encodeURIComponent(toolName)}/toggle`, { method: 'POST' })
+      const d = await r.json()
+      if (d.ok === false) { console.error('工具切换失败:', d.error); return }
+    } catch (e) { console.error('工具切换异常:', e) }
+    await fetchServers()
+  }
+
   const nOnline = Object.values(statuses).filter(s => s?.status === 'running').length
 
   return (
@@ -698,6 +713,7 @@ export default function MCPTab() {
                 onToggle={handleToggle}
                 onDelete={handleDelete}
                 onEdit={handleEdit}
+                onToolToggle={handleToolToggle}
               />
             )
           })}

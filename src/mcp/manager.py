@@ -27,7 +27,8 @@ class MCPServerManager:
         self._clients = {}      # name → MCPClient
         self._name_map = {}     # name → config (仅活跃的)
         self._disabled_configs = {}  # name → config (禁用的)
-        self._tool_table = []   # 平铺工具表: [{server, name, schema}, ...]
+        self._tool_table = []   # 平铺工具表: [{server, name, schema}, ...] (已过滤禁用)
+        self._all_tool_table = []  # 完整工具表（含禁用，用于 UI 展示）
         self._consecutive_errors = {}  # name → int
         self._degraded = set()  # set of degraded server names
         self._heartbeat_thread = None
@@ -101,8 +102,16 @@ class MCPServerManager:
         client.initialize()
 
         # tools/list
-        tools = client.list_tools()
-        logger.info("[MCP] %s: %d tools", name, len(tools))
+        all_tools = client.list_tools()
+        logger.info("[MCP] %s: %d tools", name, len(all_tools))
+
+        # 过滤禁用的工具
+        disabled = set(config.get("disabled_tools", []))
+        tools = [t for t in all_tools if t["name"] not in disabled]
+        if len(disabled) > 0:
+            skipped = len(all_tools) - len(tools)
+            if skipped:
+                logger.info("[MCP] %s: 过滤 %d 个禁用工具", name, skipped)
 
         # 注册到 _clients + _tool_table
         with self._lock:
@@ -112,8 +121,9 @@ class MCPServerManager:
             self._degraded.discard(name)
             # 清除旧工具条目防重复，再追加新的
             self._tool_table = [t for t in self._tool_table if t["server"] != name]
-            for t in tools:
-                self._tool_table.append({
+            self._all_tool_table = [t for t in self._all_tool_table if t["server"] != name]
+            for t in all_tools:
+                entry = {
                     "server": name,
                     "name": t["name"],
                     "schema": {
@@ -124,8 +134,13 @@ class MCPServerManager:
                             "parameters": t.get("inputSchema", {}),
                         },
                     },
-                })
-                logger.debug("[MCP] 注册工具: %s__%s", name, t["name"])
+                    "disabled": t["name"] in disabled,
+                }
+                # 完整工具表（含禁用，用于 UI）
+                self._all_tool_table.append(entry)
+                if not entry["disabled"]:
+                    self._tool_table.append(entry)
+                    logger.debug("[MCP] 注册工具: %s__%s", name, t["name"])
 
         self._notify_status()
 
@@ -305,6 +320,48 @@ class MCPServerManager:
 
         self._persist_config()
 
+    def toggle_tool(self, name: str, tool_name: str, disabled: bool = None):
+        """启用/禁用 MCP server 的某个工具。
+
+        Args:
+            name: MCP server 名称
+            tool_name: 工具名
+            disabled: True=禁用, False=启用, None=自动切换
+
+        更新 config 的 disabled_tools 列表，刷新工具表，持久化。
+        不重新 list_tools — 避免持锁时调 MCP 子进程导致死锁。
+        """
+        with self._lock:
+            config = self._name_map.get(name)
+            if config is None:
+                config = self._disabled_configs.get(name)
+            if config is None:
+                raise ValueError("不存在的 server: {}".format(name))
+
+            disabled_tools = set(config.get("disabled_tools", []))
+            if disabled is None:
+                disabled = tool_name not in disabled_tools
+
+            if disabled:
+                disabled_tools.add(tool_name)
+            else:
+                disabled_tools.discard(tool_name)
+
+            config["disabled_tools"] = sorted(disabled_tools)
+
+            # 只更新 _all_tool_table 的 disabled 标志 + 同步 _tool_table
+            for entry in self._all_tool_table:
+                if entry["server"] == name and entry["name"] == tool_name:
+                    entry["disabled"] = disabled
+                    break
+
+            # 重建 _tool_table（全部从 _all_tool_table 取，去除非禁用）
+            self._tool_table = [t for t in self._all_tool_table
+                                if t["server"] != name or not t["disabled"]]
+
+        self._persist_config()
+        self._notify_status()
+
     def shutdown_all(self):
         """关闭全部 MCP server (bot 清理时调用)。"""
         self._stop_heartbeat_loop()
@@ -442,10 +499,10 @@ class MCPServerManager:
         with self._lock:
             active = list(self._name_map.values())
             disabled = list(self._disabled_configs.values())
-            # 为每个 config 注入 tools 列表
+            # 为每个 config 注入 tools 列表（含禁用工具，前端自己判断显示）
             result = []
             for c in active:
-                c["tools"] = [t for t in self._tool_table if t["server"] == c["name"]]
+                c["tools"] = [t for t in self._all_tool_table if t["server"] == c["name"]]
                 result.append(c)
             for c in disabled:
                 c["tools"] = []
