@@ -119,7 +119,6 @@ class StdioClient(MCPClient):
                 env=env,
                 creationflags=creationflags,
                 cwd=cwd,
-                bufsize=0,
             )
         except FileNotFoundError:
             if sys.platform == "win32" and not cmd.lower().endswith(('.exe', '.cmd', '.bat')):
@@ -132,7 +131,6 @@ class StdioClient(MCPClient):
                     env=env,
                     creationflags=creationflags,
                     cwd=cwd,
-                    bufsize=0,
                 )
             else:
                 raise
