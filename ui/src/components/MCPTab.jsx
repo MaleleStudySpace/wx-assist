@@ -147,9 +147,17 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
         </div>
       </div>
 
-      {expanded && tools.length > 0 && (
-        <div className="border-t border-border-main/50">
-          {tools.map((t, idx) => {
+      <AnimatePresence initial={false}>
+        {expanded && tools.length > 0 && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="border-t border-border-main/50">
+              {tools.map((t, idx) => {
             const fn = t.schema?.function || {}
             const desc = fn.description || ''
             const params = fn.parameters || {}
@@ -188,8 +196,10 @@ function ServerCard({ server, status, onRestart, onToggle, onDelete, onEdit }) {
               </div>
             )
           })}
-        </div>
-      )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   )
 }
