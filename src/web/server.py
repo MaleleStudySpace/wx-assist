@@ -2548,6 +2548,16 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 ilink.bind(bot_token, account_id, base_url, user_id)
                 # 重置单例，下次调用 get_ilink_push() 会重新从磁盘加载新账号
                 reset_ilink_push()
+                # 重新绑定 → 旧会话的同步游标已失效，必须清空，
+                # 否则新 ILinkReceiver() 会从磁盘加载旧 cursor，导致
+                # getupdates 返回 session_expired(-14) 或空响应，
+                # 用户从微信发来的消息永远收不到（agent 看似失效）。
+                from src.wechat.ilink_receiver import SYNC_BUF_PATH
+                try:
+                    SYNC_BUF_PATH.unlink(missing_ok=True)
+                    logger.info("iLink sync buf cleared on rebind")
+                except Exception as e:
+                    logger.warning("Failed to clear iLink sync buf on bind: %s", e)
                 # 启动 iLink 接收器
                 _start_ilink_receiver()
                 self.send_json({"ok": True, "message": "iLink bound successfully"})
