@@ -9,8 +9,8 @@ const LEVEL_STYLES = {
   WARNING: { color: 'var(--status-warn)', bg: 'var(--status-warn-soft)' },
   ERROR:   { color: 'var(--status-error)', bg: 'var(--status-error-soft)' },
 }
-const LEVEL_LABELS = { ALL: '全部', LLM: 'LLM', OP: '操作', INFO: 'INFO', WARNING: '警告', ERROR: '错误', DEBUG: 'DEBUG' }
-const FILTER_OPTIONS = ['ALL', 'OP', 'LLM', 'INFO', 'WARNING', 'ERROR', 'DEBUG']
+const LEVEL_LABELS = { ALL: '全部', LLM: 'LLM', OP: '操作', AGENT: 'Agent', INFO: 'INFO', WARNING: '警告', ERROR: '错误', DEBUG: 'DEBUG' }
+const FILTER_OPTIONS = ['ALL', 'OP', 'LLM', 'AGENT', 'INFO', 'WARNING', 'ERROR', 'DEBUG']
 
 // Operation tags that appear in [TAG] format — used for filtering and highlighting
 const OP_TAGS = [
@@ -20,6 +20,7 @@ const OP_TAGS = [
   'API', 'EXPORT',
   'ALERT', 'DIGEST',
   'WND',
+  'Agent', 'RAG',
 ]
 const OP_TAG_REGEX = new RegExp(`^\\[(${OP_TAGS.join('|')})\\]`)
 
@@ -38,6 +39,8 @@ const TAG_STYLES = {
   'ALERT':       { color: '#f97316', bg: 'rgba(249, 115, 22, 0.12)' },
   'DIGEST':      { color: '#14b8a6', bg: 'rgba(20, 184, 166, 0.12)' },
   'WND':         { color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.12)' },
+  'Agent':       { color: '#f472b6', bg: 'rgba(244, 114, 182, 0.12)' },
+  'RAG':         { color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)' },
 }
 
 function renderHighlightedMsg(msg) {
@@ -338,9 +341,11 @@ export default function LogViewer() {
         ? true
         : filter === 'LLM'
           ? (l.isLLMSummary || l.isLLMDetail)
-          : filter === 'OP'
-            ? OP_TAG_REGEX.test(l.msg || '')
-            : l.level === filter
+          : filter === 'AGENT'
+            ? (l.msg?.startsWith('[Agent]'))
+            : filter === 'OP'
+              ? OP_TAG_REGEX.test(l.msg || '')
+              : l.level === filter
       const matchesSearch = !searchQuery ||
         l.msg?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         l.ts?.toLowerCase().includes(searchQuery.toLowerCase()) ||

@@ -1094,8 +1094,10 @@ class ToolExecutor:
             if len(ts) > 10:
                 ts = ts[5:16]
             source = chunk.chat_id or chunk.sender_name or "公众号"
+            url = chunk.source_id or ""
+            url_line = f"\n   链接: {url}" if url else ""
             lines.append(
-                f"{i}. [{source} {ts}] {chunk.content[:200]}"
+                f"{i}. [{source} {ts}] {chunk.content[:200]}{url_line}"
             )
         return "\n".join(lines)
 
