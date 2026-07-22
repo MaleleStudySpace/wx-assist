@@ -261,7 +261,7 @@ def get_content_cache():
 # ── 后台缓存同步辅助（非阻塞，daemon 线程） ──────────────────────────
 
 def _bg_sync_oa(cc, gh_id=None):
-    """后台增量同步 OA 缓存。gh_id 指定则只同步一个公众号。"""
+    """后台增量同步 OA 缓存（账号 + 文章）。gh_id 指定则只同步一个公众号。"""
     def _run():
         try:
             client = get_wcdb_client()
@@ -270,7 +270,8 @@ def _bg_sync_oa(cc, gh_id=None):
             if gh_id:
                 cc.sync_oa_single(client, gh_id)
             else:
-                cc.sync_oa_incremental(client)
+                cc.sync_oa_accounts(client)       # ← 先刷账号列表
+                cc.sync_oa_incremental(client)    # ← 再刷文章
         except Exception:
             pass
     threading.Thread(target=_run, daemon=True, name="bg-oa-sync").start()
@@ -4971,16 +4972,57 @@ def _push_oa_digest(result, group, config):
 
 
 def handle_oa_search(params, config: AssistantConfig):
-    """GET /api/oa/search — Search OA articles across all accounts"""
+    """GET /api/oa/search — Search OA articles across all accounts (cache-first)"""
+    keyword = params.get("q", [""])[0] or params.get("keyword", [""])[0]
+    if not keyword:
+        return {"ok": False, "error": "Missing keyword"}
+
+    # ── Cache-first: oa_cache  LIKE 查询 ──
+    cc = get_content_cache()
+    if cc:
+        try:
+            like = "%{}%".format(keyword.replace("%", "\\%").replace("_", "\\_"))
+            cached = cc.query(
+                "SELECT title, digest, source_name, url, cover_url, "
+                "gh_id, pub_time FROM oa_cache "
+                "WHERE title LIKE ? ESCAPE '\\' "
+                "OR digest LIKE ? ESCAPE '\\' "
+                "OR source_name LIKE ? ESCAPE '\\' "
+                "ORDER BY pub_time DESC LIMIT 50",
+                [like, like, like],
+            )
+            if cached:
+                # 后台触发增量同步（不阻塞响应）
+                _bg_sync_oa(cc)
+                return {
+                    "ok": True,
+                    "data": [
+                        {
+                            "title": r["title"],
+                            "url": r["url"],
+                            "digest": r["digest"],
+                            "cover": r["cover_url"],
+                            "source_name": r["source_name"],
+                            "source_username": r["gh_id"],
+                            "pub_time": r["pub_time"],
+                            "gh_id": r["gh_id"],
+                            "timestamp": r["pub_time"],
+                            "create_time": r["pub_time"],
+                        }
+                        for r in cached
+                    ],
+                    "total": len(cached),
+                    "source": "cache",
+                }
+        except Exception as e:
+            logger.warning("[CACHE] oa_cache 搜索失败，降级到 WCDB: %s", e)
+
+    # ── 降级：直接读 WCDB ──
     client = get_wcdb_client()
     if not client:
         return {"ok": False, "error": "WCDB not available"}
 
     try:
-        keyword = params.get("q", [""])[0] or params.get("keyword", [""])[0]
-        if not keyword:
-            return {"ok": False, "error": "Missing keyword"}
-
         from src.assistant.oa_parser import fetch_oa_articles, get_oa_sessions
 
         # Get all OA sessions
@@ -5023,6 +5065,7 @@ def handle_oa_search(params, config: AssistantConfig):
                 for a in all_articles[:50]
             ],
             "total": len(all_articles),
+            "source": "wcdb",
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
