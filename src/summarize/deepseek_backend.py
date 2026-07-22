@@ -293,6 +293,11 @@ class OpenAICompatSummarizer(AbstractSummarizer):
 
         content = msg.content or ""
 
+        # Extract reasoning_content (DeepSeek thinking mode).
+        # Must be preserved in conversation history for tool-calling rounds,
+        # otherwise upstream API returns 400 (see DeepSeek docs).
+        reasoning = getattr(msg, "reasoning_content", None) or ""
+
         # If LLM called tools but left content empty, annotate so log is meaningful
         if not content and tool_calls:
             tool_names_str = ", ".join(tc["function"]["name"] for tc in tool_calls)
@@ -328,7 +333,7 @@ class OpenAICompatSummarizer(AbstractSummarizer):
                    "messages": len(messages)},
         )
 
-        return content, tool_calls
+        return content, tool_calls, reasoning
 
     # ── Direct summarization ──────────────────────────────────────
 

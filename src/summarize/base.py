@@ -211,7 +211,7 @@ class AbstractSummarizer(ABC):
     @abstractmethod
     def agent_chat(self, system_prompt: str,
                    messages: list[dict],
-                   tools: list[dict]) -> tuple[str, list[dict] | None]:
+                   tools: list[dict]) -> tuple[str, list[dict] | None, str]:
         """ReAct Agent chat with tool calling support.
 
         LLM may reply directly (content, None) or request tool calls (None, tool_calls).
@@ -222,10 +222,12 @@ class AbstractSummarizer(ABC):
             tools: OpenAI-format tool definitions.
 
         Returns:
-            (content, tool_calls):
+            (content, tool_calls, reasoning_content):
             - content: str | None — text reply
             - tool_calls: list[dict] | None — OpenAI-format tool calls
               each: {"id", "type", "function": {"name", "arguments"}}
+            - reasoning_content: str — thinking/chain-of-thought content
+              (DeepSeek reasoning models); empty string if not supported.
         """
         ...
 

@@ -182,10 +182,10 @@ def log_llm_interaction(
     if extra:
         detail["extra"] = extra
 
-    # json.dumps with ensure_ascii=True to avoid encoding issues when
-    # the log file is read back by the server and re-serialized as JSON.
-    # Chinese characters become \uXXXX escapes which are universally safe.
-    detail_json = json.dumps(detail, ensure_ascii=True)
+    # ensure_ascii=False so Chinese text is readable in log files.
+    # The log output is consumed by humans (not machines), so \uXXXX escapes
+    # hurt readability without meaningful benefit.
+    detail_json = json.dumps(detail, ensure_ascii=False)
 
     # Write detail to BOTH the main bot.log AND the dedicated llm.log
     logger.info("[LLM-DETAIL] %s", detail_json)

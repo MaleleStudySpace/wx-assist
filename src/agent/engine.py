@@ -142,7 +142,7 @@ class AgentEngine:
 
             # ── Call LLM ─────────────────────────────────────────
             try:
-                content, tool_calls = self._llm.agent_chat(
+                content, tool_calls, reasoning = self._llm.agent_chat(
                     system_prompt=system,
                     messages=messages,
                     tools=self._tools.registry.get_all_schemas(),
@@ -200,6 +200,7 @@ class AgentEngine:
                     messages.append({
                         "role": "assistant",
                         "content": None,
+                        "reasoning_content": "",
                         "tool_calls": [tc],
                     })
                     messages.append({
@@ -219,6 +220,7 @@ class AgentEngine:
                 messages.append({
                     "role": "assistant",
                     "content": None,
+                    "reasoning_content": reasoning,
                     "tool_calls": [tc],
                 })
                 messages.append({
@@ -272,6 +274,7 @@ class AgentEngine:
         messages.append({
             "role": "assistant",
             "content": None,
+            "reasoning_content": "",
             "tool_calls": [confirm_tc],
         })
 

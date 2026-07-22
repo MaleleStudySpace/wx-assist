@@ -189,7 +189,7 @@ class ClaudeSummarizer(AbstractSummarizer):
                    "messages": len(messages)},
         )
 
-        return content or "", tool_calls or None
+        return content or "", tool_calls or None, ""
 
     # ── Direct summarization ──────────────────────────────────────
 
