@@ -5225,84 +5225,95 @@ def _format_schedule(schedule: list, cron_expr: str) -> str:
     return ""
 
 
-# ── 调度器 API ──────────────────────────────────────────────────────────
+# ── 调度器 API（CronScheduler）────────────────────────────────────────
 
-def handle_scheduler_list(params, config: AssistantConfig):
-    """GET /api/scheduler/tasks — List all scheduled tasks"""
-    from src.scheduler.task_scheduler import get_task_scheduler
+def _get_cron_scheduler():
+    """取全局 CronScheduler 实例。"""
+    from src.web.server import _cron_scheduler
+    return _cron_scheduler
+
+
+def handle_scheduler_list(params, config):
+    """GET /api/scheduler/tasks — 列出所有定时任务"""
+    sched = _get_cron_scheduler()
+    if not sched:
+        return {"ok": True, "data": []}
+    return {"ok": True, "data": sched.list_jobs()}
+
+
+def handle_scheduler_create(params, config):
+    """POST /api/scheduler/tasks — 创建定时任务（skill 引用）"""
+    sched = _get_cron_scheduler()
+    if not sched:
+        return {"ok": False, "error": "CronScheduler 未就绪"}
+    body = params.get("_body", {})
+    if not body.get("name") or not body.get("skill") or not body.get("cron"):
+        return {"ok": False, "error": "name/skill/cron 必填"}
+
+    job = {
+        "name": body["name"],
+        "skill": body["skill"],
+        "cron": body["cron"],
+        "push": {
+            "enabled": body.get("push_enabled", True),
+            "target": body.get("push_target", "ilink"),
+        },
+    }
+    if body.get("args"):
+        job["args"] = body["args"]
+    if body.get("timeout"):
+        job["timeout"] = body["timeout"]
+
+    jid = sched.add_job(job)
+    return {"ok": True, "data": {"id": jid}}
+
+
+def handle_scheduler_update(params, config):
+    """PUT /api/scheduler/tasks/:id — 更新定时任务"""
+    sched = _get_cron_scheduler()
+    if not sched:
+        return {"ok": False, "error": "CronScheduler 未就绪"}
+    task_id = params.get("id", [""])[0]
+    body = params.get("_body", {})
+    ok = sched.update_job(task_id, body)
+    return {"ok": ok}
+
+
+def handle_scheduler_delete(params, config):
+    """DELETE /api/scheduler/tasks/:id — 删除定时任务"""
+    sched = _get_cron_scheduler()
+    if not sched:
+        return {"ok": False, "error": "CronScheduler 未就绪"}
+    task_id = params.get("id", [""])[0]
+    ok = sched.delete_job(task_id)
+    return {"ok": ok}
+
+
+def handle_scheduler_run(params, config):
+    """POST /api/scheduler/tasks/:id/run — 立即执行"""
+    sched = _get_cron_scheduler()
+    if not sched:
+        return {"ok": False, "error": "CronScheduler 未就绪"}
+    task_id = params.get("id", [""])[0]
     try:
-        scheduler = get_task_scheduler()
-        tasks = scheduler.list_tasks()
-        return {
-            "ok": True,
-            "data": [
-                {
-                    "id": t.id,
-                    "name": t.name,
-                    "task_type": t.task_type,
-                    "cron_expr": t.cron_expr,
-                    "function_ref": t.function_ref,
-                    "enabled": t.enabled,
-                    "last_run_time": t.last_run_time,
-                    "status": t.status,
-                }
-                for t in tasks
-            ],
-        }
+        text = sched.run_now(task_id)
+        return {"ok": True, "data": {"output": text[:1000]}}
     except Exception as e:
-        logger.error(f"Failed to list scheduler tasks: {e}")
         return {"ok": False, "error": str(e)}
 
 
-def handle_scheduler_create(params, config: AssistantConfig):
-    """POST /api/scheduler/tasks — Create a scheduled task"""
-    from src.scheduler.task_scheduler import get_task_scheduler, ScheduledTask
-    try:
-        body = params.get("_body", {})
-        task = ScheduledTask(
-            name=body.get("name", ""),
-            task_type=body.get("task_type", ""),
-            cron_expr=body.get("cron_expr", ""),
-            function_ref=body.get("function_ref", ""),
-            enabled=body.get("enabled", True),
-        )
-        scheduler = get_task_scheduler()
-        task_id = scheduler.add_task(task)
-        return {"ok": True, "data": {"id": task_id}}
-    except ValueError as e:
-        return {"ok": False, "error": str(e)}
-    except Exception as e:
-        logger.error(f"Failed to create scheduler task: {e}")
-        return {"ok": False, "error": str(e)}
+def _get_skill_engine():
+    """取全局 SkillEngine 实例。"""
+    from src.web.server import _skill_engine
+    return _skill_engine
 
 
-def handle_scheduler_delete(params, config: AssistantConfig):
-    """DELETE /api/scheduler/tasks/:id — Delete a scheduled task"""
-    from src.scheduler.task_scheduler import get_task_scheduler
-    try:
-        task_id = params.get("id", [""])[0]
-        scheduler = get_task_scheduler()
-        success = scheduler.remove_task(task_id)
-        return {"ok": success}
-    except Exception as e:
-        logger.error(f"Failed to delete scheduler task: {e}")
-        return {"ok": False, "error": str(e)}
-
-
-def handle_scheduler_update(params, config: AssistantConfig):
-    """PUT /api/scheduler/tasks/:id — Update a scheduled task"""
-    from src.scheduler.task_scheduler import get_task_scheduler
-    try:
-        task_id = params.get("id", [""])[0]
-        body = params.get("_body", {})
-        scheduler = get_task_scheduler()
-        success = scheduler.update_task(task_id, **body)
-        return {"ok": success}
-    except ValueError as e:
-        return {"ok": False, "error": str(e)}
-    except Exception as e:
-        logger.error(f"Failed to update scheduler task: {e}")
-        return {"ok": False, "error": str(e)}
+def handle_skill_list(params, config):
+    """GET /api/skills — 列出所有 skill"""
+    eng = _get_skill_engine()
+    if not eng:
+        return {"ok": True, "data": []}
+    return {"ok": True, "data": eng.list_skills()}
 
 
 # ── API Router ─────────────────────────────────────────────────────────
@@ -5393,13 +5404,19 @@ def handle_api_request(path: str, params: dict, config: AssistantConfig, body: d
         params["groupId"] = [group_id]
         return handle_oa_digest_run(params, config)
 
-    # ── 调度器 ─────────────────────────────────────────────────────────
+    # ── 调度器(CronScheduler) ────────────────────────────────────────────
     if path == "/api/scheduler/tasks" and not params.get("_body"):
         return handle_scheduler_list(params, config)
     if path == "/api/scheduler/tasks" and params.get("_body"):
         return handle_scheduler_create(params, config)
 
-    # Check for /api/scheduler/tasks/:id
+    # /api/scheduler/tasks/:id/run（6 段）
+    if path.startswith("/api/scheduler/tasks/") and path.endswith("/run") and len(path.split("/")) == 6:
+        parts = path.split("/")
+        params["id"] = [parts[4]]
+        return handle_scheduler_run(params, config)
+
+    # /api/scheduler/tasks/:id（5 段）
     if path.startswith("/api/scheduler/tasks/") and len(path.split("/")) == 5:
         task_id = path.split("/")[-1]
         params["id"] = [task_id]
@@ -5407,6 +5424,10 @@ def handle_api_request(path: str, params: dict, config: AssistantConfig, body: d
             return handle_scheduler_update(params, config)
         else:
             return handle_scheduler_delete(params, config)
+
+    # ── Skill ─────────────────────────────────────────────────────────
+    if path == "/api/skills":
+        return handle_skill_list(params, config)
 
     # ── 推送记录 ─────────────────────────────────────────────────────────
     if path == "/api/push/history":

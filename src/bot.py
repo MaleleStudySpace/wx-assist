@@ -478,6 +478,53 @@ class Bot:
             register_agent_engine(agent_engine)
             logger.info("Agent engine created")
 
+            # ── Skill 引擎（统一技能执行）──────────────────────────────
+            skill_engine = None
+            try:
+                from src.skill.engine import SkillEngine
+                skill_engine = SkillEngine(agent_engine=agent_engine)
+                try:
+                    from src.web.server import register_skill_engine
+                    register_skill_engine(skill_engine)
+                except Exception:
+                    pass
+                logger.info("[SKILL] SkillEngine 已初始化")
+            except Exception as e:
+                logger.warning("[SKILL] SkillEngine init failed: %s", e)
+
+            # ── CronScheduler（通用定时任务引擎）──────────────────────
+            cron_scheduler = None
+            try:
+                from src.scheduler.cron_scheduler import CronScheduler
+                cron_scheduler = CronScheduler(
+                    skill_engine=skill_engine,
+                    outbox=outbox,
+                    task_center=task_center,
+                )
+                cron_scheduler.start()
+                try:
+                    from src.web.server import register_cron_scheduler
+                    register_cron_scheduler(cron_scheduler)
+                except Exception:
+                    pass
+                logger.info("[CRON] CronScheduler 已初始化 (%d 个任务)",
+                            len(cron_scheduler.list_jobs()))
+            except Exception as e:
+                logger.warning("[CRON] CronScheduler init failed: %s", e)
+
+            # 注入 skill_engine + cron_scheduler 到 ToolExecutor
+            if tool_executor:
+                if skill_engine:
+                    try:
+                        tool_executor.set_skill_engine(skill_engine)
+                    except Exception as e:
+                        logger.warning("[SKILL] set_skill_engine failed: %s", e)
+                if cron_scheduler:
+                    try:
+                        tool_executor.set_cron_scheduler(cron_scheduler)
+                    except Exception as e:
+                        logger.warning("[CRON] set_cron_scheduler failed: %s", e)
+
             # ── RAG Engine (optional, zero impact on failure) ──
             rag_engine = None
             try:
@@ -743,6 +790,19 @@ class Bot:
                         pass
                 except Exception:
                     pass
+            # 注意：cron_scheduler 在 assistant 初始化区域定义，
+            # 如果 init 失败则不存在，用 locals().get() 安全访问。
+            _cs = locals().get('cron_scheduler')
+            if _cs is not None:
+                try:
+                    _cs.stop()
+                    try:
+                        from src.web.server import register_cron_scheduler
+                        register_cron_scheduler(None)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.warning("[CRON] stop error: %s", e)
             if self._health:
                 self._health.stop()
             try:

@@ -37,6 +37,7 @@ class ToolExecutor:
 
     def __init__(self, store, summarizer,
                  status_fn=None, task_center=None, scheduler=None,
+                 cron_scheduler=None, skill_engine=None,
                  rag=None, content_cache=None, oa_monitor=None,
                  alert_engine=None):
         self._store = store
@@ -44,6 +45,8 @@ class ToolExecutor:
         self._status_fn = status_fn
         self._task_center = task_center
         self._scheduler = scheduler
+        self._cron_scheduler = cron_scheduler
+        self._skill_engine = skill_engine
         self._rag = rag
         self._content_cache = content_cache
         self._oa_monitor = oa_monitor
@@ -56,6 +59,14 @@ class ToolExecutor:
     def set_rag(self, rag):
         """Set RAGEngine for search tools. Called after init if RAG available."""
         self._rag = rag
+
+    def set_cron_scheduler(self, cron_scheduler):
+        """注入 CronScheduler。在 bot.py 中 MCP init 完成后调用。"""
+        self._cron_scheduler = cron_scheduler
+
+    def set_skill_engine(self, skill_engine):
+        """注入 SkillEngine。"""
+        self._skill_engine = skill_engine
 
     # ── Registry population ─────────────────────────────────────────
 
@@ -449,6 +460,71 @@ class ToolExecutor:
                 "required": ["query"],
             },
             handler=self._handle_search_favorites,
+        )
+
+        # ── Skill 工具 ───────────────────────────────────────────────
+        if self._skill_engine:
+            self._register_skill_tools()
+
+        # ── Cron 定时任务管理工具 ────────────────────────────────────
+        # 注：ToolExecutor 创建时 _cron_scheduler 可能还没注入，
+        # 注册时判断 None 就跳过，等 set_cron_scheduler() 重新注册。
+        # 但 bot.py 目前 init 顺序是 ToolExecutor → MCP → CronScheduler
+        # → set_cron_scheduler，所以第一次注册时 cron_scheduler 可能
+        # 还没有。不过有 set_cron_scheduler 兜底。
+        if self._cron_scheduler:
+            self._register_cron_tools()
+
+    # ── 定时任务管理工具的注册方法（可被 set_cron_scheduler 调用）────
+
+    def _register_cron_tools(self) -> None:
+        """注册 cron 管理工具。提取为单独方法以便延迟注入后重注册。"""
+        r = self.registry
+        cs = self._cron_scheduler
+        if not cs:
+            return
+
+        r.register(
+            name="create_cron",
+            description="创建定时任务。创建一个按 cron 表达式定时执行 skill 的任务。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "任务名称"},
+                    "skill": {"type": "string",
+                              "description": "skill 名称，对应 data/skills/ 下的文件"},
+                    "cron": {"type": "string",
+                             "description": "5字段cron，例 '0 8 * * *'=每天早上8点"},
+                    "args": {"type": "object",
+                             "description": "传给 skill 的参数（字典），可选"},
+                    "push_target": {"type": "string", "enum": ["ilink", ""],
+                                    "description": "推送方式，ilink=推送到微信"},
+                },
+                "required": ["name", "skill", "cron"],
+            },
+            handler=self._handle_create_cron,
+        )
+        r.register(
+            name="delete_cron",
+            description="删除定时任务。需要任务ID。",
+            parameters={"type": "object", "properties": {
+                "id": {"type": "string", "description": "任务 ID"},
+            }, "required": ["id"]},
+            handler=self._handle_delete_cron,
+        )
+        r.register(
+            name="list_crons",
+            description="查看所有定时任务列表。",
+            parameters={"type": "object", "properties": {}},
+            handler=self._handle_list_crons,
+        )
+        r.register(
+            name="run_cron",
+            description="立即执行一个定时任务（不管 cron 是否到时间）。",
+            parameters={"type": "object", "properties": {
+                "id": {"type": "string", "description": "任务 ID"},
+            }, "required": ["id"]},
+            handler=self._handle_run_cron,
         )
 
     # ══════════════════════════════════════════════════════════════
@@ -1158,3 +1234,115 @@ class ToolExecutor:
                 f"{i}. [{sender} {ts}] {chunk.content[:200]}"
             )
         return "\n".join(lines)
+
+    # ── Cron + Skill task handlers ──────────────────────────────────
+
+    def _handle_create_cron(self, name: str, skill: str, cron: str,
+                            args: dict = None,
+                            push_target: str = "ilink") -> str:
+        """创建定时任务（引用 skill 执行）。"""
+        if not self._cron_scheduler:
+            return "定时任务系统未就绪"
+        if not skill:
+            return "请指定 skill 名称"
+        job = {
+            "name": name,
+            "skill": skill,
+            "cron": cron,
+            "push": {"enabled": bool(push_target),
+                     "target": push_target or "ilink"},
+        }
+        if args:
+            job["args"] = args
+
+        jid = self._cron_scheduler.add_job(job)
+        return (f"✅ 已创建定时任务「{name}」\n"
+                f"ID: {jid}\n"
+                f"Skill: {skill}\n"
+                f"Cron: {cron}\n"
+                f"推送: {'推送到微信' if push_target else '不推送'}")
+
+    def _handle_delete_cron(self, id: str) -> str:
+        if not self._cron_scheduler:
+            return "定时任务系统未就绪"
+        ok = self._cron_scheduler.delete_job(id)
+        return f"✅ 已删除任务 {id}" if ok else f"❌ 任务 {id} 不存在"
+
+    def _handle_list_crons(self) -> str:
+        if not self._cron_scheduler:
+            return "定时任务系统未就绪"
+        jobs = self._cron_scheduler.list_jobs()
+        if not jobs:
+            return "暂无定时任务"
+        lines = [f"📋 定时任务 ({len(jobs)} 个):"]
+        for j in jobs:
+            enabled = "🟢" if j.get("enabled") else "🔴"
+            lines.append(
+                f"{enabled} [{j.get('id', '?')[:8]}] "
+                f"{j.get('name', '?')} (skill:{j.get('skill', '?')}) "
+                f"{j.get('cron', '?')}"
+            )
+        return "\n".join(lines)
+
+    def _handle_run_cron(self, id: str) -> str:
+        if not self._cron_scheduler:
+            return "定时任务系统未就绪"
+        try:
+            text = self._cron_scheduler.run_now(id)
+            return f"✅ 已执行，结果:\n{text[:500]}"
+        except Exception as e:
+            return f"❌ 执行失败: {e}"
+
+    # ── Skill 工具 ────────────────────────────────────────────────
+
+    def _register_skill_tools(self) -> None:
+        """注册 skill 相关工具（list_skills, execute_skill）。"""
+        r = self.registry
+        se = self._skill_engine
+        if not se:
+            return
+
+        r.register(
+            name="list_skills",
+            description="列出所有可用的 skill 及其描述。",
+            parameters={"type": "object", "properties": {}},
+            handler=self._handle_list_skills,
+        )
+        r.register(
+            name="execute_skill",
+            description="立即执行一个 skill，并返回结果。"
+                       "skill 可执行脚本或 AI 任务。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "skill 名称"},
+                    "args": {"type": "object",
+                             "description": "参数（字典），可选"},
+                },
+                "required": ["name"],
+            },
+            handler=self._handle_execute_skill,
+        )
+
+    def _handle_list_skills(self) -> str:
+        if not self._skill_engine:
+            return "Skill 系统未就绪"
+        skills = self._skill_engine.list_skills()
+        if not skills:
+            return "暂无可用 skill"
+        lines = [f"📋 Skill ({len(skills)} 个):"]
+        for s in skills:
+            lines.append(
+                f"  - {s.get('name', '?')}: "
+                f"{s.get('description', '')[:60]}"
+            )
+        return "\n".join(lines)
+
+    def _handle_execute_skill(self, name: str, args: dict = None) -> str:
+        if not self._skill_engine:
+            return "Skill 系统未就绪"
+        try:
+            return self._skill_engine.execute(name, args or {})
+        except Exception as e:
+            return f"❌ Skill 执行失败: {e}"

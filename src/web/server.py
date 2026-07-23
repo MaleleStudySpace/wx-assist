@@ -762,6 +762,22 @@ def register_oa_monitor(monitor):
     global _oa_monitor
     _oa_monitor = monitor
 
+
+_cron_scheduler = None  # CronScheduler — registered by bot.py for API access
+_skill_engine = None    # SkillEngine — registered by bot.py for API access
+
+
+def register_cron_scheduler(sched):
+    """Register the CronScheduler so API handlers can access it."""
+    global _cron_scheduler
+    _cron_scheduler = sched
+
+
+def register_skill_engine(engine):
+    """Register the SkillEngine so API handlers can access it."""
+    global _skill_engine
+    _skill_engine = engine
+
 _task_center = None
 _content_cache = None  # ContentCache — registered by bot.py for cache-first reads
 
@@ -1258,6 +1274,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/assistant/config" or (
             put_path.startswith("/api/oa/groups/") and len(put_path.split("/")) == 5
         ) or (
+            put_path.startswith("/api/scheduler/tasks/") and len(put_path.split("/")) == 5
+        ) or (
             self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 5
         ):
             self.do_GET()
@@ -1268,10 +1286,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"ok": False, "error": "Method not allowed"}).encode())
 
     def do_DELETE(self):
-        """Handle DELETE requests for OA groups and MCP management."""
+        """Handle DELETE requests for OA groups, MCP, and scheduler."""
         delete_path = self.path.split("?")[0] if "?" in self.path else self.path
 
         if (delete_path.startswith("/api/oa/groups/") and len(delete_path.split("/")) == 5
+        ) or (delete_path.startswith("/api/scheduler/tasks/") and len(delete_path.split("/")) == 5
         ) or (self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 5):
             self.do_GET()
         else:
@@ -1326,6 +1345,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                              post_path == "/api/scheduler/tasks"
                          ) or (
                              self.path.startswith("/api/scheduler/tasks/") and len(self.path.split("/")) == 5
+                         ) or (
+                             self.path.startswith("/api/scheduler/tasks/") and len(self.path.split("/")) == 6 and self.path.endswith("/run")
                          ) or (
                              self.path == "/api/mcp/servers"
                          ) or (
@@ -3716,11 +3737,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)})
                 return
 
-        # ── API: 收藏/朋友圈/公众号/会话管理/调度器/导出/推送记录 (wechat-data-hub) ──────────
+        # ── API: 收藏/朋友圈/公众号/会话管理/调度器/定时任务/导出/推送记录 ──
         if (self.path.startswith("/api/fav/") or self.path.startswith("/api/sns/") or
             self.path.startswith("/api/oa/") or self.path.startswith("/api/chat/") or
-            self.path.startswith("/api/scheduler/") or self.path.startswith("/api/export/") or
-            self.path.startswith("/api/push/") or self.path.startswith("/api/groups/") or
+            self.path.startswith("/api/scheduler/") or self.path.startswith("/api/skills") or
+            self.path.startswith("/api/export/") or self.path.startswith("/api/push/") or
+            self.path.startswith("/api/groups/") or
             self.path.startswith("/api/tasks/") or self.path.startswith("/api/tasks?") or self.path == "/api/tasks" or
             self.path == "/api/scheduled-tasks"):
             try:

@@ -131,6 +131,19 @@ class AgentEngine:
 
         return reply
 
+    # ── One-shot execution (for cron agent_task) ──────────────────────
+
+    def run_once(self, prompt: str, system_override: str = "") -> str:
+        """一次性执行，不保留历史。供定时任务等外部场景调用。
+
+        跟 run() 用的是同一个 _react_loop，同一个工具集（含 MCP）。
+        不装历史，不触发记忆合 consolidation。
+        """
+        system = system_override or self._build_system_prompt()
+        messages = [{"role": "user", "content": prompt}]
+        logger.info("[Agent] run_once — prompt='%s'", prompt[:80])
+        return self._react_loop(system, messages)
+
     # ── ReAct loop core ────────────────────────────────────────────
 
     def _react_loop(self, system: str,
