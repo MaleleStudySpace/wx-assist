@@ -232,6 +232,30 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         )
         response = self.client.chat.completions.create(**params)
         content = response.choices[0].message.content
+        reasoning = getattr(response.choices[0].message, 'reasoning_content', None)
+
+        # Graceful degradation: thinking mode consumed all tokens, leaving content=null.
+        # Detect → disable thinking → retry with doubled max_tokens.
+        if not content and reasoning:
+            logger.warning(
+                "[LONG-API] thinking mode consumed all tokens (model=%s, max=%d, "
+                "reasoning_chars=%d). Retrying with thinking disabled.",
+                self.model, max_tokens, len(reasoning),
+            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=max(max_tokens * 2, 4096),
+                    temperature=temperature,
+                    messages=api_messages,
+                    extra_body={"thinking": {"type": "disabled"}},
+                )
+                content = response.choices[0].message.content
+                if content:
+                    return content
+            except Exception as retry_err:
+                logger.warning("[LONG-API] Retry with thinking disabled also failed: %s", retry_err)
+
         if not content:
             logger.warning("[LONG-API] LLM returned empty content (model=%s)", self.model)
             return "..."
