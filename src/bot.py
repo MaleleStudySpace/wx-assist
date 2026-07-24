@@ -480,13 +480,14 @@ class Bot:
                 from src.wechat.ilink_push import get_ilink_push as _get_ilink
                 _ilink = _get_ilink()
                 if _ilink.is_available():
-                    def _on_agent_progress(step, max_steps, tool_names):
+                    def _on_agent_progress(step, max_steps, tool_names, reasoning):
                         import logging as _lg
                         try:
-                            _ilink.send_message(
-                                f"🤔 思考中 [{step}/{max_steps}] — "
-                                f"正在执行: {tool_names}"
-                            )
+                            parts = [f"🤔 思考中 [{step}/{max_steps}]"]
+                            if reasoning:
+                                parts.append(f"💭 {reasoning.strip()}")
+                            parts.append(f"🔧 正在执行: {tool_names}")
+                            _ilink.send_message("\n".join(parts))
                         except Exception as _e:
                             _lg.getLogger(__name__).warning(
                                 "iLink progress push failed: %s", _e

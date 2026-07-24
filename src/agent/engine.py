@@ -52,14 +52,19 @@ AGENT_SYSTEM_PROMPT = """\
 - 不要编造工具返回的结果
 - 任务完成后，用自然语言回复用户
 
-## 停止条件
-你的思考和行动轮数上限为 {max_steps} 步。注意以下原则：
+## 停止条件（必须遵守）
 
-1. 如果连续 3 次调用同一工具仍未取得新进展（返回空、返回相同内容、或报错），
-   说明当前路径走不通。此时不要再换参数重试，直接回复用户当前找到的信息
-   （哪怕不完整），并说明局限性。
-2. 如果搜索结果不足以定位目标，直接告诉用户"没找到"，请其提供更精确的描述。
-   不要反复换同义词重试同一类型的搜索。
+你的行动轮数上限为 {max_steps} 步，每一步都在消耗资源，不要浪费。
+
+**⚡ 强制规则：连续 3 次调用同一个工具仍未取得有效进展时，必须立即停止。**
+所谓有效进展是指：返回了新的、有用的、可以推进任务的数据。
+如果返回空、返回无关内容、反复报错、或每次都是差不多的结果，都视为无进展。
+
+此时：
+1. **禁止**再调用任何工具
+2. **必须**直接回复用户当前情况
+3. 即使用户的问题没解决，也要说"我没找到，请提供更精确的描述"
+4. 不要换参数重试——换个关键词搜还是同一个工具，算连续调用
 """
 
 
@@ -182,8 +187,8 @@ class AgentEngine:
                         content[:60] if content else "(null)",
                         len(tool_calls) if tool_calls else 0)
             if reasoning:
-                logger.debug("[Agent] Step %d reasoning: %s",
-                             step, reasoning)
+                logger.info("[Agent] Step %d reasoning: %s",
+                            step, reasoning)
 
             # ── Push progress via callback (iLink etc.) ─────────────
             if tool_calls and self._progress_callback:
@@ -191,7 +196,8 @@ class AgentEngine:
                     tc["function"]["name"] for tc in tool_calls
                 )
                 try:
-                    self._progress_callback(step, self._max_steps, tool_names)
+                    self._progress_callback(step, self._max_steps,
+                                            tool_names, reasoning)
                 except Exception as e:
                     logger.warning("[Agent] progress_callback failed: %s", e)
 
@@ -216,6 +222,26 @@ class AgentEngine:
                     confirm_tc = tc
                 else:
                     action_tcs.append(tc)
+
+            # ── Force-stop: same tool called 3+ times consecutively ──
+            if action_tcs:
+                current_tool = action_tcs[0]["function"]["name"]
+                if current_tool == self._consecutive_tool[0]:
+                    self._consecutive_tool = (current_tool, self._consecutive_tool[1] + 1)
+                else:
+                    self._consecutive_tool = (current_tool, 1)
+
+                if self._consecutive_tool[1] >= 3:
+                    logger.warning(
+                        "[Agent] Tool '%s' called %d times consecutively — "
+                        "forcing stop to avoid endless loop",
+                        current_tool, self._consecutive_tool[1],
+                    )
+                    return (
+                        f"我尝试了多次搜索，但没找到完全匹配的文章。\n"
+                        f"以下是当前搜索结果，你看有没有你要找的：\n"
+                        f"{content or '（结果已返回）'}"
+                    )
 
             if confirm_tc is not None:
                 # confirm_action is special: don't execute it,
