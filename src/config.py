@@ -238,6 +238,7 @@ class BotConfig:
     # === Tuning ===
     poll_interval_sec: float = 1.0
     chunk_size: int = 400
+    agent_max_steps: int = 8
 
     # === Logging ===
     log_level: str = "INFO"
@@ -304,6 +305,7 @@ def load_config() -> BotConfig:
         "db_path": os.getenv("LOCAL_DB_PATH", "data/messages.db").strip(),
         "poll_interval_sec": float(os.getenv("POLL_INTERVAL_SEC", "1.0")),
         "chunk_size": int(os.getenv("CHUNK_SIZE", "400")),
+        "agent_max_steps": int((os.getenv("AGENT_MAX_STEPS") or "").strip() or "8"),
         "enable_restricted_features": os.getenv("ENABLE_RESTRICTED_FEATURES", "false").strip().lower() == "true",
         "memory_consolidation_enabled": os.getenv("MEMORY_CONSOLIDATION_ENABLED", "false").strip().lower() == "true",
         "log_level": os.getenv("LOG_LEVEL", "INFO").strip(),

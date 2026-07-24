@@ -1173,7 +1173,7 @@ class ToolExecutor:
             url = chunk.source_id or ""
             url_line = f"\n   链接: {url}" if url else ""
             lines.append(
-                f"{i}. [{source} {ts}] {chunk.content[:200]}{url_line}"
+                f"{i}. [{source} {ts}] {chunk.content}{url_line}"
             )
         return "\n".join(lines)
 

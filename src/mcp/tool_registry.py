@@ -34,6 +34,14 @@ class MCPToolRegistry:
         self._local = local_registry
         self._mcp_manager = mcp_manager
         self._mcp_schemas = []  # list[dict] — LLM function calling schema 格式
+        self._dirty = False     # 标记需要刷新（UI 修改 MCP 配置后）
+
+    def mark_dirty(self):
+        """标记 MCP 工具表已变更，下次 get_all_schemas 时自动刷新。
+
+        在 UI 端新增/删除/启停 MCP server 或 toggle 工具后调用。"""
+        self._dirty = True
+        logger.info("[MCP] 标记 dirty，下次 Agent 调用时将刷新工具表")
 
     def refresh(self):
         """从 manager 拉最新工具表，构建 MCP schema。"""
@@ -60,9 +68,10 @@ class MCPToolRegistry:
         """返回 LLM 的 tools 参数完整列表 (本地 + MCP)。"""
         local_schemas = self._local.get_all_schemas()
 
-        # 如果 MCP 已注入但不在 tool_table 中，refresh
-        if self._mcp_manager and not self._mcp_schemas:
+        # 如果标记 dirty 或首次需要，刷新 MCP 工具表
+        if self._mcp_manager and (self._dirty or not self._mcp_schemas):
             self.refresh()
+            self._dirty = False
 
         return local_schemas + self._mcp_schemas
 

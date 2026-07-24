@@ -360,8 +360,9 @@ def _read_recent_logs():
                 f.readline()
             raw = f.read()
         lines = raw.decode("utf-8", errors="replace").splitlines()
-        # Return last 500 lines
-        recent = lines[-500:]
+        # Return last 2000 lines instead of 500, so LLM-DETAIL long lines
+        # don't push useful context out of the log viewer too quickly.
+        recent = lines[-2000:]
         # Regex: timestamp [LEVEL] module: message
         pattern = re.compile(
             r'^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+'
@@ -809,6 +810,8 @@ def get_rag_engine():
 # ── MCP Client status ──────────────────────────────────────────────────
 
 _mcp_manager = None
+_mcp_tool_registry = None
+
 
 def register_mcp_status(mgr):
     """Register the MCPServerManager so its status can be broadcast."""
@@ -818,6 +821,12 @@ def register_mcp_status(mgr):
         mgr.register_status_updater(_on_mcp_status_change)
         import json
         update_status(mcp_servers=json.dumps(mgr.get_status(), ensure_ascii=False))
+
+
+def register_mcp_tool_registry(registry):
+    """Register the MCPToolRegistry so UI config changes can trigger tool list refresh."""
+    global _mcp_tool_registry
+    _mcp_tool_registry = registry
 
 
 def _on_mcp_status_change(status_dict):
@@ -3639,6 +3648,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         import src.web.server as _sws
                         _sws._mcp_manager = _new_mgr
                         _mgr = _new_mgr
+                    _mcp_tool_registry and _mcp_tool_registry.mark_dirty()
                     self.send_json({"ok": True})
                     return
 
@@ -3648,6 +3658,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     if _mgr:
                         try:
                             _mgr.remove(_name)
+                            _mcp_tool_registry and _mcp_tool_registry.mark_dirty()
                             self.send_json({"ok": True})
                         except Exception as e:
                             self.send_json({"ok": False, "error": str(e)})
@@ -3661,6 +3672,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     if _mgr:
                         try:
                             _mgr.restart(_name)
+                            _mcp_tool_registry and _mcp_tool_registry.mark_dirty()
                             self.send_json({"ok": True})
                         except Exception as e:
                             self.send_json({"ok": False, "error": str(e)})
@@ -3681,6 +3693,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             else:
                                 # 运行中/降级 → 禁用
                                 _mgr.disable(_name)
+                            _mcp_tool_registry and _mcp_tool_registry.mark_dirty()
                             self.send_json({"ok": True})
                         except Exception as e:
                             self.send_json({"ok": False, "error": str(e)})
@@ -3695,6 +3708,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     if _mgr:
                         try:
                             _mgr.toggle_tool(_name, _tool_name)
+                            _mcp_tool_registry and _mcp_tool_registry.mark_dirty()
                             self.send_json({"ok": True})
                         except Exception as e:
                             self.send_json({"ok": False, "error": str(e)})
@@ -3717,6 +3731,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             if _name in _mgr._clients or _name in _mgr._degraded or _name in _mgr._disabled_configs:
                                 _mgr.remove(_name)
                             _mgr.add(item)
+                            _mcp_tool_registry and _mcp_tool_registry.mark_dirty()
                             self.send_json({"ok": True})
                         except Exception as e:
                             self.send_json({"ok": False, "error": str(e)})

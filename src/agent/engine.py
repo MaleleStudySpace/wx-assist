@@ -50,7 +50,16 @@ AGENT_SYSTEM_PROMPT = """\
 - 调用工具时必须使用正确的参数
 - 如果用户指令不清晰，直接询问澄清
 - 不要编造工具返回的结果
-- 任务完成后，用自然语言回复用户，不超过 200 字
+- 任务完成后，用自然语言回复用户
+
+## 停止条件
+你的思考和行动轮数上限为 {max_steps} 步。注意以下原则：
+
+1. 如果连续 3 次调用同一工具仍未取得新进展（返回空、返回相同内容、或报错），
+   说明当前路径走不通。此时不要再换参数重试，直接回复用户当前找到的信息
+   （哪怕不完整），并说明局限性。
+2. 如果搜索结果不足以定位目标，直接告诉用户"没找到"，请其提供更精确的描述。
+   不要反复换同义词重试同一类型的搜索。
 """
 
 
@@ -64,13 +73,18 @@ class AgentEngine:
         summarizer: AbstractSummarizer instance with agent_chat() support.
         tool_executor: ToolExecutor instance.
         max_steps: Maximum ReAct iterations before giving up.
+        progress_callback: Optional. Called with (step, max_steps, tool_name) after
+                          each tool-calling step, so callers can push progress
+                          to the user via iLink or other channels.
     """
 
     def __init__(self, summarizer, tool_executor,
-                 max_steps: int = 8):
+                 max_steps: int = 8,
+                 progress_callback=None):
         self._llm = summarizer
         self._tools = tool_executor
         self._max_steps = max_steps
+        self._progress_callback = progress_callback
         # Pending confirmation state (confirm_action state machine)
         self._pending_confirm: Optional[dict] = None
         # Bypass flag: allow one step to execute requires_confirm tools
@@ -167,6 +181,19 @@ class AgentEngine:
             logger.info("[Agent] LLM response — content=%s, tool_calls=%d",
                         content[:60] if content else "(null)",
                         len(tool_calls) if tool_calls else 0)
+            if reasoning:
+                logger.debug("[Agent] Step %d reasoning: %s",
+                             step, reasoning)
+
+            # ── Push progress via callback (iLink etc.) ─────────────
+            if tool_calls and self._progress_callback:
+                tool_names = ", ".join(
+                    tc["function"]["name"] for tc in tool_calls
+                )
+                try:
+                    self._progress_callback(step, self._max_steps, tool_names)
+                except Exception as e:
+                    logger.warning("[Agent] progress_callback failed: %s", e)
 
             # ── LLM chose to reply — task complete ────────────────
             if not tool_calls:
@@ -391,6 +418,7 @@ class AgentEngine:
         """Build the system prompt with tool descriptions and memories."""
         desc = self._tools.registry.get_descriptions()
         prompt = AGENT_SYSTEM_PROMPT.replace("{tool_descriptions}", desc)
+        prompt = prompt.replace("{max_steps}", str(self._max_steps))
 
         # Append long-term memories
         memories = self._load_memories(MEMORY_LOAD_COUNT)

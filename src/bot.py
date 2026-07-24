@@ -449,7 +449,7 @@ class Bot:
             try:
                 from src.mcp.manager import MCPServerManager
                 from src.mcp.tool_registry import MCPToolRegistry, ProxyRegistry
-                from src.web.server import register_mcp_status
+                from src.web.server import register_mcp_status, register_mcp_tool_registry
 
                 manager = MCPServerManager()
                 result = manager.init_from_config(config_path="data/user_mcp.json")
@@ -465,15 +465,42 @@ class Bot:
                     # Register status updater for WebSocket broadcast
                     register_mcp_status(manager)
 
+                    # Register tool registry so MCP UI changes trigger tool list refresh
+                    register_mcp_tool_registry(mcp_wrapper)
+
                     mcp_manager = manager  # 交给外层，用于 cleanup
             except Exception as mcp_e:
                 logger.warning("[MCP] Init failed (continuing without): %s", mcp_e)
                 mcp_manager = None
             # ── end MCP Init ──────────────────────────────────────
 
+            # ── iLink progress callback: push thinking status during Agent loop ──
+            _agent_progress_callback = None
+            try:
+                from src.wechat.ilink_push import get_ilink_push as _get_ilink
+                _ilink = _get_ilink()
+                if _ilink.is_available():
+                    def _on_agent_progress(step, max_steps, tool_names):
+                        import logging as _lg
+                        try:
+                            _ilink.send_message(
+                                f"🤔 思考中 [{step}/{max_steps}] — "
+                                f"正在执行: {tool_names}"
+                            )
+                        except Exception as _e:
+                            _lg.getLogger(__name__).warning(
+                                "iLink progress push failed: %s", _e
+                            )
+                    _agent_progress_callback = _on_agent_progress
+                    logger.info("[Agent] iLink progress push enabled")
+            except Exception as _e:
+                logger.debug("[Agent] iLink progress push not available: %s", _e)
+
             agent_engine = AgentEngine(
                 summarizer=summarizer,
                 tool_executor=tool_executor,
+                max_steps=config.agent_max_steps,
+                progress_callback=_agent_progress_callback,
             )
             register_agent_engine(agent_engine)
             logger.info("Agent engine created")

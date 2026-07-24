@@ -354,7 +354,8 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             extra={"tool_calls": len(tool_calls) if tool_calls else 0,
                    "tools": ",".join(tool_names),
                    "tool_defs": tools,
-                   "messages": len(messages)},
+                   "messages": len(messages),
+                   "reasoning_content": reasoning},
         )
 
         return content, tool_calls, reasoning
