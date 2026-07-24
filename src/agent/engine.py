@@ -78,7 +78,7 @@ class AgentEngine:
         summarizer: AbstractSummarizer instance with agent_chat() support.
         tool_executor: ToolExecutor instance.
         max_steps: Maximum ReAct iterations before giving up.
-        progress_callback: Optional. Called with (step, max_steps, tool_name) after
+        progress_callback: Optional. Called with (step, max_steps, tool_names, reasoning) after
                           each tool-calling step, so callers can push progress
                           to the user via iLink or other channels.
     """
@@ -222,26 +222,6 @@ class AgentEngine:
                     confirm_tc = tc
                 else:
                     action_tcs.append(tc)
-
-            # ── Force-stop: same tool called 3+ times consecutively ──
-            if action_tcs:
-                current_tool = action_tcs[0]["function"]["name"]
-                if current_tool == self._consecutive_tool[0]:
-                    self._consecutive_tool = (current_tool, self._consecutive_tool[1] + 1)
-                else:
-                    self._consecutive_tool = (current_tool, 1)
-
-                if self._consecutive_tool[1] >= 3:
-                    logger.warning(
-                        "[Agent] Tool '%s' called %d times consecutively — "
-                        "forcing stop to avoid endless loop",
-                        current_tool, self._consecutive_tool[1],
-                    )
-                    return (
-                        f"我尝试了多次搜索，但没找到完全匹配的文章。\n"
-                        f"以下是当前搜索结果，你看有没有你要找的：\n"
-                        f"{content or '（结果已返回）'}"
-                    )
 
             if confirm_tc is not None:
                 # confirm_action is special: don't execute it,
