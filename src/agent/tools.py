@@ -17,6 +17,7 @@ from src.assistant.config import (
     OAGroup,
     OAMonitorGroup,
 )
+from src.skill.engine import SkillNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +62,14 @@ class ToolExecutor:
         self._rag = rag
 
     def set_cron_scheduler(self, cron_scheduler):
-        """注入 CronScheduler。在 bot.py 中 MCP init 完成后调用。"""
+        """注入 CronScheduler。注入后自动注册 cron 管理工具。"""
         self._cron_scheduler = cron_scheduler
+        self._register_cron_tools()
 
     def set_skill_engine(self, skill_engine):
-        """注入 SkillEngine。"""
+        """注入 SkillEngine。注入后自动注册 skill 工具。"""
         self._skill_engine = skill_engine
+        self._register_skill_tools()
 
     # ── Registry population ─────────────────────────────────────────
 
@@ -486,13 +489,15 @@ class ToolExecutor:
 
         r.register(
             name="create_cron",
-            description="创建定时任务。创建一个按 cron 表达式定时执行 skill 的任务。",
+            description="创建定时任务。创建一个按 cron 表达式定时执行 skill 的任务。"
+                       "创建前先用 list_skills 查看可用的 skill 名称。"
+                       "该操作需要用户确认。",
             parameters={
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "任务名称"},
                     "skill": {"type": "string",
-                              "description": "skill 名称，对应 data/skills/ 下的文件"},
+                              "description": "skill 名称，先用 list_skills 查看可用 skill"},
                     "cron": {"type": "string",
                              "description": "5字段cron，例 '0 8 * * *'=每天早上8点"},
                     "args": {"type": "object",
@@ -503,14 +508,16 @@ class ToolExecutor:
                 "required": ["name", "skill", "cron"],
             },
             handler=self._handle_create_cron,
+            requires_confirm=True,
         )
         r.register(
             name="delete_cron",
-            description="删除定时任务。需要任务ID。",
+            description="删除定时任务。需要任务ID。该操作需要用户确认。可用 list_crons 查看任务ID。",
             parameters={"type": "object", "properties": {
                 "id": {"type": "string", "description": "任务 ID"},
             }, "required": ["id"]},
             handler=self._handle_delete_cron,
+            requires_confirm=True,
         )
         r.register(
             name="list_crons",
@@ -1254,6 +1261,18 @@ class ToolExecutor:
         if cron_err:
             return f"❌ cron 表达式格式错误: {cron_err}"
 
+        # 校验 skill 是否存在
+        if self._skill_engine:
+            try:
+                self._skill_engine.get_skill(skill)
+            except SkillNotFound:
+                return f"❌ skill '{skill}' 不存在，请先用 list_skills 查看可用 skill"
+
+        # 去重检查：同名
+        for j in self._cron_scheduler.list_jobs():
+            if j.get("name") == name:
+                return f"❌ 已存在同名任务「{name}」（ID: {j.get('id', '?')}）"
+
         job = {
             "name": name,
             "skill": skill,
@@ -1320,7 +1339,8 @@ class ToolExecutor:
         r.register(
             name="execute_skill",
             description="立即执行一个 skill，并返回结果。"
-                       "skill 可执行脚本或 AI 任务。",
+                       "skill 可执行脚本或 AI 任务。"
+                       "先用 list_skills 查看可用 skill。该操作需要用户确认。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -1332,6 +1352,7 @@ class ToolExecutor:
                 "required": ["name"],
             },
             handler=self._handle_execute_skill,
+            requires_confirm=True,
         )
 
     def _handle_list_skills(self) -> str:
