@@ -698,8 +698,7 @@ function ConfirmDialog({ title, message, confirmLabel = '确认', danger = true,
 }
 
 // ── Main panel ─────────────────────────────────────────────────────
-export default function SchedulerPanel() {
-  const [activeTab, setActiveTab] = useState('tasks')
+export default function SchedulerPanel({ section = 'tasks', onSectionChange = () => {} }) {
   const [tasks, setTasks] = useState([])
   const [skills, setSkills] = useState([])
   const [loading, setLoading] = useState(true)
@@ -827,55 +826,15 @@ export default function SchedulerPanel() {
           <div className="w-1.5 h-4.5 rounded-full shadow-sm bg-brand-green" />
           <h3 className="text-sm font-semibold tracking-tight text-text-main">定时任务</h3>
           <Clock size={16} className="text-text-muted" />
-          <span className="text-xs text-text-muted">· 共 {tasks.length} 个任务</span>
+          <span className="text-xs text-text-muted">· 共 {tasks.length} 个任务 · {enabledCount} 个启用</span>
         </div>
         <p className="text-xs text-text-muted leading-relaxed pl-4">
-          通用定时调度 · 通过 skill 执行 · 当前 {enabledCount} 个启用
+          通用定时调度 · 通过 skill 执行
         </p>
       </div>
 
-      {/* Tabs */}
-      <div className="flex items-center gap-1 mb-5 border-b border-border-main">
-        {[
-          { id: 'tasks', label: '定时任务', count: tasks.length },
-          { id: 'skills', label: 'Skill 库', count: skills.length },
-          { id: 'history', label: '执行历史' },
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2 text-xs font-medium transition-colors cursor-pointer relative
-              ${activeTab === tab.id
-                ? 'text-brand-green'
-                : 'text-text-muted hover:text-text-main'}`}
-          >
-            {tab.label}
-            {tab.count !== undefined && (
-              <span className={`ml-1.5 inline-block px-1.5 py-0.5 rounded text-[10px]
-                ${activeTab === tab.id ? 'bg-brand-green/15' : 'bg-bg-raised'}`}>
-                {tab.count}
-              </span>
-            )}
-            {activeTab === tab.id && (
-              <motion.div
-                layoutId="scheduler-tab"
-                className="absolute -bottom-px left-0 right-0 h-0.5 bg-brand-green"
-              />
-            )}
-          </button>
-        ))}
-        {activeTab === 'tasks' && (
-          <button
-            onClick={() => { setEditingTask(null); setShowForm(true) }}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-brand-green/10 border border-brand-green/30 text-brand-green hover:bg-brand-green/15 transition-colors cursor-pointer"
-          >
-            <Plus size={12} weight="bold" /> 新建任务
-          </button>
-        )}
-      </div>
-
-      {/* Tasks Tab */}
-      {activeTab === 'tasks' && (
+      {/* Tasks Section */}
+      {section === 'tasks' && (
         <>
           {showForm && (
             <TaskForm
@@ -911,6 +870,12 @@ export default function SchedulerPanel() {
                 {f.label}
               </button>
             ))}
+            <button
+              onClick={() => { setEditingTask(null); setShowForm(true) }}
+              className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-brand-green/10 border border-brand-green/30 text-brand-green hover:bg-brand-green/15 transition-colors cursor-pointer"
+            >
+              <Plus size={12} weight="bold" /> 新建任务
+            </button>
           </div>
 
           {loading ? (
@@ -952,10 +917,10 @@ export default function SchedulerPanel() {
       )}
 
       {/* Skills Tab */}
-      {activeTab === 'skills' && <SkillLibrary skills={skills} />}
+      {section === 'skills' && <SkillLibrary skills={skills} />}
 
-      {/* History Tab */}
-      {activeTab === 'history' && <ExecutionHistory />}
+      {/* History Section */}
+      {section === 'history' && <ExecutionHistory />}
 
       {/* Delete confirmation */}
       <AnimatePresence>

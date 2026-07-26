@@ -37,7 +37,14 @@ const TABS = [
   { id: 'favorites', label: '收藏助手', icon: Star },
   { id: 'moments', label: '朋友圈助手', icon: Eye },
   { id: 'oa', label: '公众号助手', icon: Newspaper },
-  { id: 'scheduler', label: '定时任务', icon: Clock },
+  {
+    id: 'scheduler', label: '定时任务', icon: Clock,
+    subs: [
+      { id: 'tasks', label: '⏰ 定时任务' },
+      { id: 'skills', label: '🧩 Skill 库' },
+      { id: 'history', label: '📊 执行历史' },
+    ],
+  },
   { id: 'mcp', label: 'MCP 工具', icon: PuzzlePiece },
   { id: 'logs', label: '运行日志', icon: Scroll },
 ]
@@ -45,6 +52,7 @@ const TABS = [
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [configSection, setConfigSection] = useState('ai')
+  const [schedulerSection, setSchedulerSection] = useState('tasks')
   const [botStatus, setBotStatus] = useState(null)
   const [onboardingDone, setOnboardingDone] = useState(null) // null = loading
   const [authError, setAuthError] = useState(false) // true = LAN unauthorized
@@ -270,7 +278,7 @@ export default function App() {
                     </motion.div>
                     <span className="z-10">{label}</span>
                   </motion.button>
-                  {/* Config sub-nav: animates height and opacity on toggle */}
+                  {/* Sub-nav (config + scheduler): animates height and opacity on toggle */}
                   {subs && (
                     <AnimatePresence initial={false}>
                       {activeTab === id && (
@@ -281,26 +289,39 @@ export default function App() {
                           transition={{ duration: 0.2, ease: 'easeInOut' }}
                           className="ml-6 mt-1 border-l border-border-main pl-4 space-y-0.5 overflow-hidden font-mono"
                         >
-                          {subs.map(sub => (
-                            <button
-                              key={sub.id}
-                              onClick={() => { setActiveTab(id); setConfigSection(sub.id) }}
-                              className={`w-full text-left py-1.5 text-xs font-semibold transition-all cursor-pointer relative pl-3.5 ${
-                                activeTab === id && configSection === sub.id
-                                  ? 'text-brand-green-hover dark:text-brand-green'
-                                  : 'text-text-muted hover:text-text-main'
-                              }`}
-                            >
-                              {activeTab === id && configSection === sub.id && (
-                                <motion.div
-                                  layoutId="activeConfigSub"
-                                  className="absolute left-0 top-1.5 w-1 h-3 bg-brand-green rounded-full"
-                                  transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-                                />
-                              )}
-                              <span className="pl-1.5">{sub.label}</span>
-                            </button>
-                          ))}
+                          {subs.map(sub => {
+                            // 每个父 tab 独立维护自己的 section state
+                            const curSection =
+                              id === 'config' ? configSection :
+                              id === 'scheduler' ? schedulerSection :
+                              ''
+                            const setCurSection =
+                              id === 'config' ? setConfigSection :
+                              id === 'scheduler' ? setSchedulerSection :
+                              () => {}
+                            const isCurSub = activeTab === id && curSection === sub.id
+                            const layoutKey = `activeSub-${id}`
+                            return (
+                              <button
+                                key={sub.id}
+                                onClick={() => { setActiveTab(id); setCurSection(sub.id) }}
+                                className={`w-full text-left py-1.5 text-xs font-semibold transition-all cursor-pointer relative pl-3.5 ${
+                                  isCurSub
+                                    ? 'text-brand-green-hover dark:text-brand-green'
+                                    : 'text-text-muted hover:text-text-main'
+                                }`}
+                              >
+                                {isCurSub && (
+                                  <motion.div
+                                    layoutId={layoutKey}
+                                    className="absolute left-0 top-1.5 w-1 h-3 bg-brand-green rounded-full"
+                                    transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                                  />
+                                )}
+                                <span className="pl-1.5">{sub.label}</span>
+                              </button>
+                            )
+                          })}
                         </motion.div>
                       )}
                     </AnimatePresence>
@@ -399,7 +420,13 @@ export default function App() {
                 {TABS.map(({ id, label, icon: Icon, subs }) => (
                   <div key={id} className="flex-shrink-0">
                     <button
-                      onClick={() => { setActiveTab(id); if (subs) setConfigSection(subs[0].id) }}
+                      onClick={() => {
+                        setActiveTab(id)
+                        if (subs) {
+                          if (id === 'config') setConfigSection(subs[0].id)
+                          else if (id === 'scheduler') setSchedulerSection(subs[0].id)
+                        }
+                      }}
                       className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[12px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
                         activeTab === id
                           ? 'bg-brand-green/15 text-brand-green font-semibold'
@@ -409,22 +436,31 @@ export default function App() {
                       <Icon size={13} weight={activeTab === id ? 'fill' : 'regular'} />
                       {label}
                     </button>
-                    {/* Config sub-tabs (mobile: only AI + Push) */}
+                    {/* Sub-tabs (mobile: scheduler 全显示，config 只显示 AI + Push) */}
                     {activeTab === id && subs && (
                       <div className="flex gap-0.5 mt-0.5 ml-0.5">
-                        {subs.filter(sub => sub.id === 'ai' || sub.id === 'push').map(sub => (
-                          <button
-                            key={sub.id}
-                            onClick={() => setConfigSection(sub.id)}
-                            className={`px-2 py-0.5 rounded text-[10px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
-                              configSection === sub.id
-                                ? 'bg-brand-green/20 text-brand-green'
-                                : 'text-text-muted/70 hover:text-text-main'
-                            }`}
-                          >
-                            {sub.label}
-                          </button>
-                        ))}
+                        {subs.filter(sub => {
+                          if (id === 'scheduler') return true
+                          return sub.id === 'ai' || sub.id === 'push'
+                        }).map(sub => {
+                          const curSection =
+                            id === 'scheduler' ? schedulerSection : configSection
+                          const setCurSection =
+                            id === 'scheduler' ? setSchedulerSection : setConfigSection
+                          return (
+                            <button
+                              key={sub.id}
+                              onClick={() => setCurSection(sub.id)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                                curSection === sub.id
+                                  ? 'bg-brand-green/20 text-brand-green'
+                                  : 'text-text-muted/70 hover:text-text-main'
+                              }`}
+                            >
+                              {sub.label}
+                            </button>
+                          )
+                        })}
                       </div>
                     )}
                   </div>
@@ -448,7 +484,7 @@ export default function App() {
                 {activeTab === 'favorites' && <FavoritesTab />}
                 {activeTab === 'moments' && <MomentsTab />}
                 {activeTab === 'oa' && <OATab />}
-                {activeTab === 'scheduler' && <SchedulerPanel />}
+                {activeTab === 'scheduler' && <SchedulerPanel section={schedulerSection} onSectionChange={setSchedulerSection} />}
                 {activeTab === 'mcp' && <MCPTab />}
                 {activeTab === 'logs' && <LogViewer />}
               </motion.div>
