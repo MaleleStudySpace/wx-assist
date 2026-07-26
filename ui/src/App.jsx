@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Gear, ChartLine, Scroll, Spinner, Sun, Moon, ChatCircleDots, Star, Eye, Newspaper, Chats, PaperPlaneTilt, Bell, QrCode, X, PuzzlePiece } from '@phosphor-icons/react'
+import { Gear, ChartLine, Scroll, Spinner, Sun, Moon, ChatCircleDots, Star, Eye, Newspaper, Chats, PaperPlaneTilt, Bell, QrCode, X, PuzzlePiece, Clock } from '@phosphor-icons/react'
 import { API_BASE, getWsUrl } from './components/SharedComponents'
 import Dashboard from './components/Dashboard'
 import ConfigPanel from './components/ConfigPanel'
@@ -11,6 +11,7 @@ import FavoritesTab from './components/FavoritesTab'
 import MomentsTab from './components/MomentsTab'
 import OATab from './components/OATab'
 import MCPTab from './components/MCPTab'
+import SchedulerPanel from './components/SchedulerPanel'
 import ChatTab from './components/ChatTab'
 import FeatureGuide from './components/FeatureGuide'
 import TaskCenter from './components/TaskCenter'
@@ -36,6 +37,7 @@ const TABS = [
   { id: 'favorites', label: '收藏助手', icon: Star },
   { id: 'moments', label: '朋友圈助手', icon: Eye },
   { id: 'oa', label: '公众号助手', icon: Newspaper },
+  { id: 'scheduler', label: '定时任务', icon: Clock },
   { id: 'mcp', label: 'MCP 工具', icon: PuzzlePiece },
   { id: 'logs', label: '运行日志', icon: Scroll },
 ]
@@ -446,6 +448,7 @@ export default function App() {
                 {activeTab === 'favorites' && <FavoritesTab />}
                 {activeTab === 'moments' && <MomentsTab />}
                 {activeTab === 'oa' && <OATab />}
+                {activeTab === 'scheduler' && <SchedulerPanel />}
                 {activeTab === 'mcp' && <MCPTab />}
                 {activeTab === 'logs' && <LogViewer />}
               </motion.div>
