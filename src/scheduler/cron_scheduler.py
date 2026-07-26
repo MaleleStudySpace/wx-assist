@@ -79,7 +79,8 @@ class CronScheduler:
         logger.info("[CRON] 已停止")
 
     def reload(self) -> None:
-        self._jobs = _load_jobs()
+        with self._lock:
+            self._jobs = _load_jobs()
         logger.info("[CRON] 已重载 (%d 个任务)", len(self._jobs))
 
     # ── CRUD ────────────────────────────────────────────────────────
@@ -88,9 +89,10 @@ class CronScheduler:
         return list(self._jobs)
 
     def get_job(self, job_id: str) -> dict | None:
-        for j in self._jobs:
-            if j.get("id") == job_id:
-                return dict(j)
+        with self._lock:
+            for j in self._jobs:
+                if j.get("id") == job_id:
+                    return dict(j)
         return None
 
     def add_job(self, job: dict) -> str:
@@ -153,7 +155,10 @@ class CronScheduler:
     def _tick(self) -> None:
         now = datetime.now()
         now_ts = time.time()
-        for job in self._jobs:
+        # 快照当前任务列表（持锁防并发修改）
+        with self._lock:
+            jobs = list(self._jobs)
+        for job in jobs:
             if not job.get("enabled"):
                 continue
             expr = job.get("cron", "")

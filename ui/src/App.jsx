@@ -40,9 +40,9 @@ const TABS = [
   {
     id: 'scheduler', label: '定时任务', icon: Clock,
     subs: [
-      { id: 'tasks', label: '⏰ 定时任务' },
-      { id: 'skills', label: '🧩 Skill 库' },
-      { id: 'history', label: '📊 执行历史' },
+      { id: 'tasks', label: '定时任务' },
+      { id: 'skills', label: 'Skill 库' },
+      { id: 'history', label: '执行历史' },
     ],
   },
   { id: 'mcp', label: 'MCP 工具', icon: PuzzlePiece },
