@@ -1245,6 +1245,15 @@ class ToolExecutor:
             return "定时任务系统未就绪"
         if not skill:
             return "请指定 skill 名称"
+        if not cron:
+            return "请指定 cron 表达式"
+
+        # 校验 cron 表达式语法
+        from src.utils.cron import validate_cron_syntax
+        cron_err = validate_cron_syntax(cron)
+        if cron_err:
+            return f"❌ cron 表达式格式错误: {cron_err}"
+
         job = {
             "name": name,
             "skill": skill,

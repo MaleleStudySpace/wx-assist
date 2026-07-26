@@ -2413,9 +2413,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         existing.oa_monitor_groups = _dict_to_config({"oa_monitor_groups": body["oa_monitor_groups"]}).oa_monitor_groups
                     if "digest_groups" in body:
                         # Validate cron expressions before saving
-                        from src.assistant.config import _validate_cron_expr
+                        from src.utils.cron import validate_daily_cron
                         for dg_data in body["digest_groups"]:
-                            cron_err = _validate_cron_expr(dg_data.get("cron_expr", ""), f"{dg_data.get('group_name','')}")
+                            cron_err = validate_daily_cron(dg_data.get("cron_expr", ""), f"{dg_data.get('group_name','')}")
                             if cron_err:
                                 self.send_json({"ok": False, "error": cron_err})
                                 return

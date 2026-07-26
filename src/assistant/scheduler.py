@@ -7,6 +7,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
+from src.utils.cron import cron_matches
+
 from .config import AssistantConfig, DigestGroup, OAGroup, save_assistant_config
 from .digest import filter_messages, build_digest_prompt, generate_memory_update_prompt, DIGEST_SYSTEM_PROMPT, STYLE_PRESETS
 from .outbox import Outbox
@@ -57,75 +59,6 @@ def _save_state(state: dict[str, float]) -> None:
         pass
 
 
-def _cron_matches(cron_expr: str, now: datetime) -> bool:
-    """Check if a 5-field cron expression matches the current time.
-
-    Supports multi-line cron (any line matching = true).
-    Fields: minute hour day month day_of_week
-    Supports: *, specific values, ranges (1-5), steps (*/15), lists (1,3,5)
-    """
-    for line in cron_expr.strip().split('\n'):
-        line = line.strip()
-        if not line:
-            continue
-        if _single_cron_matches(line, now):
-            return True
-    return False
-
-
-def _single_cron_matches(cron_expr: str, now: datetime) -> bool:
-    """Check if a single 5-field cron expression matches the current time."""
-    fields = cron_expr.strip().split()
-    if len(fields) != 5:
-        return False
-
-    now_fields = [
-        now.minute,         # 0-59
-        now.hour,           # 0-23
-        now.day,            # 1-31
-        now.month,          # 1-12
-        now.isoweekday() % 7,  # 0-6 (Sunday=0)
-    ]
-
-    for cron_field, now_val in zip(fields, now_fields):
-        if not _field_matches(cron_field, now_val):
-            return False
-    return True
-
-
-def _field_matches(field: str, value: int) -> bool:
-    """Check if a single cron field matches a value.
-
-    Supports: *, 5, 1-5, */15, 1,3,5
-    """
-    # List of sub-expressions (comma-separated)
-    for part in field.split(','):
-        part = part.strip()
-        if part == '*':
-            return True  # wildcard always matches
-        if '/' in part:
-            # Step expression: */15 or 0-30/5
-            range_part, step_str = part.split('/', 1)
-            step = int(step_str)
-            if range_part == '*':
-                start, end = 0, 59  # reasonable max for minute/hour
-            elif '-' in range_part:
-                start, end = map(int, range_part.split('-'))
-            else:
-                start = int(range_part)
-                end = 59
-            if value >= start and (value - start) % step == 0:
-                return True
-        elif '-' in part:
-            # Range: 1-5
-            start, end = map(int, part.split('-'))
-            if start <= value <= end:
-                return True
-        else:
-            # Single value
-            if int(part) == value:
-                return True
-    return False
 
 
 class DigestScheduler:
@@ -265,7 +198,7 @@ class DigestScheduler:
             if ts > now_ts:
                 break
             dt = datetime.fromtimestamp(ts)
-            if _cron_matches(cron_expr, dt):
+            if cron_matches(cron_expr, dt):
                 return True
         return False
 
@@ -392,7 +325,7 @@ class DigestScheduler:
             if not oa.cron_expr:
                 continue  # manual trigger only
             try:
-                if not _cron_matches(oa.cron_expr, now):
+                if not cron_matches(oa.cron_expr, now):
                     continue
             except Exception:
                 logger.warning("Invalid cron_expr '%s' for OA group '%s', skipping",
@@ -463,7 +396,7 @@ class DigestScheduler:
         """
         if dg.cron_expr:
             try:
-                return _cron_matches(dg.cron_expr, now)
+                return cron_matches(dg.cron_expr, now)
             except Exception:
                 logger.warning("Invalid cron_expr '%s' for '%s', falling back to schedule",
                                dg.cron_expr, dg.group_name)

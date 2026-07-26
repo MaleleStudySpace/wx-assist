@@ -4672,8 +4672,8 @@ def handle_oa_groups_create(params, config: AssistantConfig):
 
         # Validate cron expression before saving (same rule as digest_groups)
         if cron_expr:
-            from src.assistant.config import _validate_cron_expr
-            cron_err = _validate_cron_expr(cron_expr, f"公众号分组“{name}”")
+            from src.utils.cron import validate_daily_cron
+            cron_err = validate_daily_cron(cron_expr, f"公众号分组“{name}”")
             if cron_err:
                 return {"ok": False, "error": cron_err}
 
@@ -4706,8 +4706,8 @@ def handle_oa_groups_update(params, config: AssistantConfig):
 
         # Validate cron expression before saving (same rule as digest_groups)
         if "cron_expr" in body and body.get("cron_expr"):
-            from src.assistant.config import _validate_cron_expr
-            cron_err = _validate_cron_expr(body["cron_expr"], f"公众号分组 ID“{group_id}”")
+            from src.utils.cron import validate_daily_cron
+            cron_err = validate_daily_cron(body["cron_expr"], f"公众号分组 ID“{group_id}”")
             if cron_err:
                 return {"ok": False, "error": cron_err}
 
@@ -5249,6 +5249,12 @@ def handle_scheduler_create(params, config):
     body = params.get("_body", {})
     if not body.get("name") or not body.get("skill") or not body.get("cron"):
         return {"ok": False, "error": "name/skill/cron 必填"}
+
+    # 校验 cron 表达式语法
+    from src.utils.cron import validate_cron_syntax
+    cron_err = validate_cron_syntax(body["cron"])
+    if cron_err:
+        return {"ok": False, "error": f"cron 格式错误: {cron_err}"}
 
     job = {
         "name": body["name"],

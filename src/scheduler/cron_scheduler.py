@@ -14,41 +14,13 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+from src.utils.cron import cron_matches
+
 CHECK_INTERVAL = 60       # tick 间隔（秒）
 MIN_TRIGGER_GAP = 120     # 防止重复触发（秒）
 SILENT = "[SILENT]"       # 输出此标记时跳过推送
 
 STATE_PATH = Path("data/cron_jobs.json")
-
-
-# ── Cron 匹配（5 字段）──────────────────────────────────────────────────
-
-def _field_matches(field: str, value: int) -> bool:
-    for part in field.split(','):
-        part = part.strip()
-        if part == '*': return True
-        if '/' in part:
-            r, s = part.split('/', 1); step = int(s)
-            start = 0 if r == '*' else int(r); end = 59
-            if value >= start and (value - start) % step == 0: return True
-        elif '-' in part:
-            s, e = map(int, part.split('-')); return True if s <= value <= e else False
-        else:
-            if int(part) == value: return True
-    return False
-
-
-def cron_matches(expr: str, now: datetime) -> bool:
-    for line in expr.strip().split('\n'):
-        line = line.strip()
-        if not line: continue
-        fields = line.split()
-        if len(fields) != 5: continue
-        values = [now.minute, now.hour, now.day, now.month,
-                  now.isoweekday() % 7]
-        if all(_field_matches(f, v) for f, v in zip(fields, values)):
-            return True
-    return False
 
 
 def _load_jobs() -> list[dict]:
