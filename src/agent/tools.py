@@ -499,7 +499,9 @@ class ToolExecutor:
                     "skill": {"type": "string",
                               "description": "skill 名称，先用 list_skills 查看可用 skill"},
                     "cron": {"type": "string",
-                             "description": "5字段cron，例 '0 8 * * *'=每天早上8点"},
+                             "description": "5字段cron表达式：分 时 日 月 周。"
+                             "周日=0。支持 */15(步进)、1-5(范围)、1,3,5(列表)、多行(多个触发时间)。"
+                             "例：'0 8 * * *'=每天8点，'0 9 * * 1-5'=工作日9点。"},
                     "args": {"type": "object",
                              "description": "传给 skill 的参数（字典），可选"},
                     "push_target": {"type": "string", "enum": ["ilink", ""],
@@ -1248,17 +1250,23 @@ class ToolExecutor:
                             args: dict = None,
                             push_target: str = "ilink") -> str:
         """创建定时任务（引用 skill 执行）。"""
+        logger.info("[CronTool] create_cron — name=%s skill=%s cron=%s args=%s",
+                    name, skill, cron, args)
         if not self._cron_scheduler:
+            logger.warning("[CronTool] create_cron 失败: cron_scheduler 未就绪")
             return "定时任务系统未就绪"
         if not skill:
+            logger.warning("[CronTool] create_cron 失败: skill 为空")
             return "请指定 skill 名称"
         if not cron:
+            logger.warning("[CronTool] create_cron 失败: cron 为空")
             return "请指定 cron 表达式"
 
         # 校验 cron 表达式语法
         from src.utils.cron import validate_cron_syntax
         cron_err = validate_cron_syntax(cron)
         if cron_err:
+            logger.warning("[CronTool] create_cron 失败: cron 语法错误 — %s", cron_err)
             return f"❌ cron 表达式格式错误: {cron_err}"
 
         # 校验 skill 是否存在
@@ -1266,12 +1274,8 @@ class ToolExecutor:
             try:
                 self._skill_engine.get_skill(skill)
             except SkillNotFound:
+                logger.warning("[CronTool] create_cron 失败: skill '%s' 不存在", skill)
                 return f"❌ skill '{skill}' 不存在，请先用 list_skills 查看可用 skill"
-
-        # 去重检查：同名
-        for j in self._cron_scheduler.list_jobs():
-            if j.get("name") == name:
-                return f"❌ 已存在同名任务「{name}」（ID: {j.get('id', '?')}）"
 
         job = {
             "name": name,
@@ -1284,6 +1288,8 @@ class ToolExecutor:
             job["args"] = args
 
         jid = self._cron_scheduler.add_job(job)
+        logger.info("[CronTool] create_cron 成功: id=%s name=%s skill=%s cron=%s",
+                    jid, name, skill, cron)
         return (f"✅ 已创建定时任务「{name}」\n"
                 f"ID: {jid}\n"
                 f"Skill: {skill}\n"
@@ -1292,14 +1298,21 @@ class ToolExecutor:
 
     def _handle_delete_cron(self, id: str) -> str:
         if not self._cron_scheduler:
+            logger.warning("[CronTool] delete_cron 失败: cron_scheduler 未就绪")
             return "定时任务系统未就绪"
         ok = self._cron_scheduler.delete_job(id)
+        if ok:
+            logger.info("[CronTool] delete_cron 成功: id=%s", id)
+        else:
+            logger.warning("[CronTool] delete_cron 失败: id=%s 不存在", id)
         return f"✅ 已删除任务 {id}" if ok else f"❌ 任务 {id} 不存在"
 
     def _handle_list_crons(self) -> str:
         if not self._cron_scheduler:
+            logger.warning("[CronTool] list_crons 失败: cron_scheduler 未就绪")
             return "定时任务系统未就绪"
         jobs = self._cron_scheduler.list_jobs()
+        logger.info("[CronTool] list_crons — 共 %d 个任务", len(jobs))
         if not jobs:
             return "暂无定时任务"
         lines = [f"📋 定时任务 ({len(jobs)} 个):"]
@@ -1313,12 +1326,16 @@ class ToolExecutor:
         return "\n".join(lines)
 
     def _handle_run_cron(self, id: str) -> str:
+        logger.info("[CronTool] run_cron — id=%s", id)
         if not self._cron_scheduler:
+            logger.warning("[CronTool] run_cron 失败: cron_scheduler 未就绪")
             return "定时任务系统未就绪"
         try:
             text = self._cron_scheduler.run_now(id)
+            logger.info("[CronTool] run_cron 完成: id=%s result_len=%d", id, len(text or ""))
             return f"✅ 已执行，结果:\n{text[:500]}"
         except Exception as e:
+            logger.warning("[CronTool] run_cron 失败: id=%s — %s", id, e)
             return f"❌ 执行失败: {e}"
 
     # ── Skill 工具 ────────────────────────────────────────────────
@@ -1357,8 +1374,10 @@ class ToolExecutor:
 
     def _handle_list_skills(self) -> str:
         if not self._skill_engine:
+            logger.warning("[SkillTool] list_skills 失败: skill_engine 未就绪")
             return "Skill 系统未就绪"
         skills = self._skill_engine.list_skills()
+        logger.info("[SkillTool] list_skills — 共 %d 个 skill", len(skills))
         if not skills:
             return "暂无可用 skill"
         lines = [f"📋 Skill ({len(skills)} 个):"]
@@ -1370,9 +1389,15 @@ class ToolExecutor:
         return "\n".join(lines)
 
     def _handle_execute_skill(self, name: str, args: dict = None) -> str:
+        logger.info("[SkillTool] execute_skill — name=%s args=%s", name, args)
         if not self._skill_engine:
+            logger.warning("[SkillTool] execute_skill 失败: skill_engine 未就绪")
             return "Skill 系统未就绪"
         try:
-            return self._skill_engine.execute(name, args or {})
+            result = self._skill_engine.execute(name, args or {})
+            logger.info("[SkillTool] execute_skill 完成: name=%s result_len=%d",
+                        name, len(result or ""))
+            return result
         except Exception as e:
+            logger.warning("[SkillTool] execute_skill 失败: name=%s — %s", name, e)
             return f"❌ Skill 执行失败: {e}"

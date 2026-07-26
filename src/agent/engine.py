@@ -224,10 +224,11 @@ class AgentEngine:
                     action_tcs.append(tc)
 
             if confirm_tc is not None:
-                # confirm_action is special: don't execute it,
-                # instead store pending state and ask user.
-                logger.info("[Agent] Intercepting confirm_action — pausing for user confirmation")
-                return self._intercept_confirm(system, messages, confirm_tc)
+                logger.info("[Agent] Intercepting confirm_action — %d pending action(s): %s",
+                            len(action_tcs),
+                            [t["function"]["name"] for t in action_tcs])
+                return self._intercept_confirm(system, messages, confirm_tc,
+                                               action_tcs, reasoning or "")
 
             # ── Execute tools ───────────────────────────────────────
             for tc in action_tcs:
@@ -293,12 +294,14 @@ class AgentEngine:
 
     def _intercept_confirm(self, system: str,
                            messages: list[dict],
-                           confirm_tc: dict) -> str:
+                           confirm_tc: dict,
+                           action_tcs: list[dict],
+                           reasoning: str = "") -> str:
         """Intercept a confirm_action call from the LLM.
 
-        Stores the pending confirmation state and returns a question
-        to present to the user.  The next call to ``run()`` will
-        route through ``_handle_confirm_response()``.
+        Saves both the confirm state AND any pending action_tcs.
+        On user confirm, action_tcs are executed directly without
+        going back to the LLM for re-generation.
 
         Returns:
             Confirmation question text for the user.
@@ -316,23 +319,25 @@ class AgentEngine:
             question += f"\n{details}"
         question += "\n\n回复「确定」执行，回复「取消」放弃。"
 
-        # Store the assistant message with the confirm_action call
+        # Store ALL tool_calls (confirm + actions) in assistant message
+        all_tcs = [confirm_tc] + (action_tcs or [])
         messages.append({
             "role": "assistant",
             "content": None,
-            "reasoning_content": "",
-            "tool_calls": [confirm_tc],
+            "reasoning_content": reasoning,
+            "tool_calls": all_tcs,
         })
 
         self._pending_confirm = {
             "question": question,
             "messages": messages,
             "system": system,
-            "tool_call_id": confirm_tc["id"],
+            "confirm_tool_call_id": confirm_tc["id"],
+            "action_tcs": action_tcs or [],
         }
 
-        logger.info("[Agent] Pending confirm: action=%s details=%s",
-                    action, details)
+        logger.info("[Agent] Pending confirm: action=%s, action_tcs=%s",
+                    action, [t["function"]["name"] for t in (action_tcs or [])])
         return question
 
     def _handle_confirm_response(self,
@@ -340,13 +345,10 @@ class AgentEngine:
                                  fresh_messages: list[dict]) -> str:
         """Handle user's response to a pending confirmation question.
 
-        If the user confirms, injects a tool result and continues
-        the ReAct loop.  If cancelled, injects cancellation and
-        lets the LLM respond.  If unclear, re-asks the question.
-
-        Args:
-            user_message: The user's reply to the confirmation prompt.
-            fresh_messages: New messages list for this run.
+        If the user confirms, executes pending action_tcs directly
+        (no LLM re-generation needed) and continues the ReAct loop.
+        If cancelled, injects cancellation for all pending actions.
+        If unclear, re-asks the question.
 
         Returns:
             Either the continued ReAct loop result, or a re-ask.
@@ -355,35 +357,60 @@ class AgentEngine:
         assert pending is not None, "_handle_confirm_response called with no pending state"
 
         clean = user_message.strip().lower()
-        logger.info("[Agent] _handle_confirm_response — user_response='%s'",
-                    clean[:40])
+        logger.info("[Agent] _handle_confirm_response — user_response='%s'", clean[:40])
 
-        # ── User confirmed ───────────────────────────────────────
+        # ── User confirmed: execute pending actions directly ─────────
         if self._is_confirm_yes(clean):
-            logger.info("[Agent] User CONFIRMED — injecting tool result, continuing ReAct loop")
+            logger.info("[Agent] User CONFIRMED — executing %d pending action(s)",
+                        len(pending.get("action_tcs", [])))
+
+            # Inject confirm_action result
             pending["messages"].append({
                 "role": "tool",
-                "tool_call_id": pending["tool_call_id"],
+                "tool_call_id": pending["confirm_tool_call_id"],
                 "content": "用户已确认操作，请继续执行。",
             })
-            self._pending_confirm = None
-            self._bypass_confirm = True
-            return self._react_loop(
-                pending["system"], pending["messages"],
-            )
 
-        # ── User cancelled ───────────────────────────────────────
+            # Execute each pending action directly
+            for tc in pending.get("action_tcs", []):
+                name = tc["function"]["name"]
+                args = self._parse_args(tc)
+                logger.info("[Agent] Executing confirmed action: %s(%s)", name, args)
+                try:
+                    result = self._tools.registry.execute(name, args)
+                    logger.info("[Agent] Confirmed action done: %s — result=%s",
+                                name, (result or "")[:120])
+                except Exception as e:
+                    result = f"执行失败: {e}"
+                    logger.warning("[Agent] Confirmed action failed: %s — %s", name, e)
+                pending["messages"].append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result,
+                })
+
+            self._pending_confirm = None
+            # Set bypass for the next ReAct step (post-confirm tool calls)
+            self._bypass_confirm = True
+            return self._react_loop(pending["system"], pending["messages"])
+
+        # ── User cancelled: inject cancellation for all actions ──────
         if self._is_confirm_no(clean):
-            logger.info("[Agent] User CANCELLED — injecting cancellation")
+            logger.info("[Agent] User CANCELLED — cancelling %d pending action(s)",
+                        len(pending.get("action_tcs", [])))
             pending["messages"].append({
                 "role": "tool",
-                "tool_call_id": pending["tool_call_id"],
+                "tool_call_id": pending["confirm_tool_call_id"],
                 "content": "用户取消了操作。请告知用户操作已取消。",
             })
+            for tc in pending.get("action_tcs", []):
+                pending["messages"].append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": "用户取消了操作，该操作未执行。",
+                })
             self._pending_confirm = None
-            return self._react_loop(
-                pending["system"], pending["messages"],
-            )
+            return self._react_loop(pending["system"], pending["messages"])
 
         # ── Unclear — re-ask ─────────────────────────────────────
         logger.info("[Agent] Confirm response unclear, re-asking: '%s'", clean[:60])
