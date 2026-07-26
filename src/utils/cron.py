@@ -135,9 +135,11 @@ def _validate_field_value(field: str, lo: int, hi: int) -> bool:
                 continue
             if '-' in range_part:
                 vals = range_part.split('-')
-                if not all(v.isdigit() for v in vals):
+                if not all(v.isdigit() for v in vals) or len(vals) != 2:
                     return False
                 if not (lo <= int(vals[0]) <= hi and lo <= int(vals[1]) <= hi):
+                    return False
+                if int(vals[0]) > int(vals[1]):  # 反向范围非法
                     return False
             else:
                 if not range_part.isdigit():
@@ -149,6 +151,8 @@ def _validate_field_value(field: str, lo: int, hi: int) -> bool:
             if len(vals) != 2 or not all(v.isdigit() for v in vals):
                 return False
             if not (lo <= int(vals[0]) <= hi and lo <= int(vals[1]) <= hi):
+                return False
+            if int(vals[0]) > int(vals[1]):  # 反向范围非法
                 return False
         else:
             if not part.isdigit():
