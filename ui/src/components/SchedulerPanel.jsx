@@ -184,6 +184,7 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
     initial?.args ? JSON.stringify(initial.args, null, 2) : '{}'
   )
   const [argsError, setArgsError] = useState('')
+  const [parsedArgs, setParsedArgs] = useState({})
   const [touched, setTouched] = useState(false)
 
   const selectedSkill = useMemo(
@@ -191,22 +192,34 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
     [skills, skill]
   )
 
+  // 解析 args（独立 useEffect，避免 render 期内 setState 导致死循环）
+  useEffect(() => {
+    if (!touched) {
+      setArgsError('')
+      return
+    }
+    if (!argsJson.trim()) {
+      setParsedArgs({})
+      setArgsError('')
+      return
+    }
+    try {
+      const v = JSON.parse(argsJson)
+      if (typeof v !== 'object' || Array.isArray(v) || v === null) {
+        setParsedArgs({})
+        setArgsError('参数必须是 JSON 对象')
+      } else {
+        setParsedArgs(v)
+        setArgsError('')
+      }
+    } catch (e) {
+      setParsedArgs({})
+      setArgsError(`JSON 解析失败: ${e.message}`)
+    }
+  }, [argsJson, touched])
+
   const cronError = touched ? validateCronExpr(cronExpr) : ''
   const nameError = touched && !name.trim() ? '任务名称不能为空' : ''
-
-  let parsedArgs = {}
-  try {
-    parsedArgs = argsJson.trim() ? JSON.parse(argsJson) : {}
-    if (typeof parsedArgs !== 'object' || Array.isArray(parsedArgs)) {
-      if (touched) setArgsError('参数必须是 JSON 对象')
-      parsedArgs = {}
-    } else {
-      setArgsError('')
-    }
-  } catch (e) {
-    if (touched) setArgsError(`JSON 解析失败: ${e.message}`)
-    parsedArgs = {}
-  }
 
   const nextTriggers = useMemo(() => {
     if (cronError) return []
