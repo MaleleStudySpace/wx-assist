@@ -441,8 +441,10 @@ function SessionItem({ session, isActive, onSelect }) {
             <p className="text-xs text-text-muted truncate mt-0.5">{session.summary}</p>
           ) : session.last_sender_display_name ? (
             <p className="text-xs text-text-muted truncate mt-0.5">
-              {session.last_sender_display_name}: ...
+              {session.last_sender_display_name}: {session.summary || '...'}
             </p>
+          ) : session.summary ? (
+            <p className="text-xs text-text-muted truncate mt-0.5">{session.summary}</p>
           ) : null}
         </div>
       </div>

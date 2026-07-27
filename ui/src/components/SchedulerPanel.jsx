@@ -419,16 +419,19 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
           </div>
 
           <div className="flex gap-2">
-            <textarea
-              value={cronExpr}
-              onChange={(e) => { setCronExpr(e.target.value); setTouched(true) }}
-              onBlur={() => setTouched(true)}
-              rows={1}
-              placeholder="0 8 * * *"
-              className={`flex-1 bg-bg-raised border rounded-full px-4 py-2 text-sm text-text-main font-mono
-                focus:outline-none focus:ring-1 focus:ring-brand-green/30 resize-none
-                ${cronError ? 'border-[#d45656]' : 'border-border-main focus:border-brand-green'}`}
-            />
+            <div className="flex-1">
+              <textarea
+                value={cronExpr}
+                onChange={(e) => { setCronExpr(e.target.value); setTouched(true) }}
+                onBlur={() => setTouched(true)}
+                rows={2}
+                placeholder="0 8 * * *"
+                className={`w-full bg-bg-raised border rounded-lg px-4 py-2 text-sm text-text-main font-mono
+                  focus:outline-none focus:ring-1 focus:ring-brand-green/30 resize-none
+                  ${cronError ? 'border-[#d45656]' : 'border-border-main focus:border-brand-green'}`}
+              />
+              <p className="text-[11px] text-text-muted/50 mt-0.5">支持多行，一行一个 cron，任一匹配即触发</p>
+            </div>
             {!cronError && nextTriggers.length > 0 && (
               <span className="shrink-0 text-xs text-brand-green bg-brand-green/[0.06] rounded-lg px-3 py-2 flex items-center">
                 ⚡ 下次执行: {nextTriggers.slice(0, 2).map(formatLocalTime).join(' · ')}
@@ -620,6 +623,67 @@ function SkillLibrary({ skills }) {
                 </code>
               </div>
             </div>
+
+            {/* ── Skill 开发指南 ── */}
+            <hr className="border-border-main my-4" />
+            <details className="group cursor-pointer">
+              <summary className="text-xs font-semibold text-text-muted hover:text-text-main transition-colors select-none">
+                 📖 Skill 开发指南
+              </summary>
+              <div className="mt-3 text-xs space-y-3 text-text-secondary leading-relaxed">
+                <p><strong className="text-text-main">Skill</strong> = 一个可执行的能力单元。放在 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised text-brand-green/90">data/skills/</code> 下，每项一个目录。</p>
+
+                <div>
+                  <p className="text-text-main font-medium mb-1">目录结构</p>
+                  <pre className="bg-bg-raised/60 border border-border-main rounded-lg p-2.5 font-mono text-[11px] leading-relaxed">
+data/skills/&#123;skill-name&#125;/
+├── SKILL.md        ← 元数据定义（YAML frontmatter + Markdown 说明）
+├── scripts/        ← script 类型的脚本目录
+└── examples/       ← 可选：使用示例
+                  </pre>
+                </div>
+
+                <div>
+                  <p className="text-text-main font-medium mb-1">SKILL.md 格式</p>
+                  <pre className="bg-bg-raised/60 border border-border-main rounded-lg p-2.5 font-mono text-[11px] leading-relaxed">
+---
+name: my-skill           # 唯一标识，字母数字下划线
+type: script             # script(子进程) | agent(AI 执行)
+description: 做什么用的    # 简短描述
+command: myscript.py     # script 类型必填：可执行文件名
+timeout: 30              # 超时秒数（默认 30）
+args:
+  param1:
+    type: string         # string | integer | boolean
+    required: true
+    description: 参数说明
+  param2:
+    type: integer
+    default: 10
+    description: 可选参数
+---
+# 更详细说明（Markdown）
+                  </pre>
+                </div>
+
+                <div>
+                  <p className="text-text-main font-medium mb-1">两种类型</p>
+                  <div className="bg-bg-raised/60 border border-border-main rounded-lg p-2.5 space-y-2">
+                    <div>
+                      <span className="inline-block px-1.5 py-0.5 rounded bg-brand-green/15 text-brand-green font-mono text-[10px] mr-1">script</span>
+                      执行 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised">scripts/</code> 下的脚本。脚本从 stdin 接收参数（<code className="font-mono px-1 py-0.5 rounded bg-bg-raised">--key value</code>），stdout 输出结果。<br />
+                      输出 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised text-[#d45656]">[SILENT]</code> 表示无新内容，跳过推送。
+                    </div>
+                    <div>
+                      <span className="inline-block px-1.5 py-0.5 rounded bg-[#a78bfa]/20 text-[#a78bfa] font-mono text-[10px] mr-1">agent</span>
+                      由 AI 根据 prompt 执行。SKILL.md 的 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised">prompt</code> 字段定义 AI 的行为指令。
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-text-muted/60 text-[11px]">创建后重启 bot 自动加载。<span className="text-text-secondary">CRUD 操作热更新，无需重启。</span></p>
+              </div>
+            </details>
           </>
         ) : (
           <div className="text-center py-12 text-text-muted text-sm">
