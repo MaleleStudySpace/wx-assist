@@ -238,6 +238,70 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
 
   const canSave = name.trim() && skill && !cronError && !argsError
 
+  // 参数输入模式：有 schema 时逐字段渲染
+  function onArgFieldChange(fieldName, value) {
+    setTouched(true)
+    try {
+      const cur = argsJson.trim() ? JSON.parse(argsJson) : {}
+      cur[fieldName] = value
+      setArgsJson(JSON.stringify(cur, null, 2))
+    } catch {
+      // JSON 当前有语法错误时暂不更新
+    }
+  }
+
+  // 新建时切换 skill 自动填充参数默认值
+  useEffect(() => {
+    if (initial?.id) return
+    const schema = selectedSkill?.args
+    if (!schema || Object.keys(schema).length === 0) return
+    const defaults = {}
+    for (const [key, def] of Object.entries(schema)) {
+      if (def.default !== undefined) defaults[key] = def.default
+    }
+    setArgsJson(JSON.stringify(defaults, null, 2))
+  }, [skill])
+
+  // ── 参数输入组件（用于 schema 逐个字段） ────────────────────────
+  function ArgFields() {
+    const schema = selectedSkill?.args
+    if (!schema || Object.keys(schema).length === 0) return null
+    return (
+      <div className="space-y-2.5">
+        {Object.entries(schema).map(([name, def]) => {
+          const val = parsedArgs?.[name]
+          const isNum = def.type === 'integer' || def.type === 'number'
+          const displayVal = val === null || val === undefined ? '' : String(val)
+          return (
+            <div key={name}>
+              <label className="text-xs text-text-muted flex items-baseline gap-1 mb-1">
+                <code className="font-mono text-brand-green/90 text-[12px]">{name}</code>
+                <span className="text-text-muted/60 font-mono text-[10px]">{def.type || 'any'}</span>
+                {def.required !== false && <span className="text-[#d45656] text-[10px]">必填</span>}
+                {def.default !== undefined && <span className="text-text-muted/50 text-[10px]">默认 {JSON.stringify(def.default)}</span>}
+              </label>
+              <input
+                type={isNum ? 'number' : 'text'}
+                value={displayVal}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  onArgFieldChange(name, isNum && raw !== '' ? Number(raw) : raw)
+                }}
+                placeholder={def.description || name}
+                className="w-full bg-bg-raised border border-border-main rounded-lg px-3 py-2 text-sm text-text-main font-mono
+                  focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/20
+                  placeholder:text-text-muted/40"
+              />
+              {def.description && (
+                <p className="text-[11px] text-text-muted/60 mt-0.5">{def.description}</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   function handleSubmit() {
     setTouched(true)
     if (!canSave) return
@@ -259,78 +323,111 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
       animate={{ opacity: 1, y: 0 }}
       className="border border-brand-green/30 rounded-xl bg-bg-card overflow-hidden mb-6"
     >
+      {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-border-main">
-        <h4 className="text-sm font-semibold text-text-main">
-          {initial?.id ? '编辑定时任务' : '新建定时任务'}
-        </h4>
-        <button onClick={onCancel} className="p-1 rounded-full text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer">
+        <div className="flex items-center gap-3 min-w-0">
+          <h4 className="text-sm font-semibold text-text-main shrink-0">
+            {initial?.id ? '编辑定时任务' : '新建定时任务'}
+          </h4>
+          {initial?.id && (
+            <span className="text-[11px] text-text-muted truncate">
+              {initial.last_run
+                ? <>上次 {formatLocalTime(initial.last_run)}</>
+                : '从未执行'}
+              · 成功 <span className="text-brand-green">{initial.run_count || 0}</span>
+              {(initial.error_count || 0) > 0 && (
+                <> · 失败 <span className="text-[#d45656]">{initial.error_count}</span></>
+              )}
+            </span>
+          )}
+        </div>
+        <button onClick={onCancel}
+          className="p-1 rounded-full text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer shrink-0">
           <X size={14} />
         </button>
       </div>
 
       <div className="p-5 space-y-4">
-        {/* 基本信息 */}
-        <div>
-          <div className="text-[11px] uppercase tracking-wider text-brand-green font-semibold mb-2.5">基本信息</div>
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs text-text-muted mb-1">任务名称 <span className="text-[#d45656]">*</span></label>
-              <Input value={name} onChange={setName} placeholder="例：36氪早报" />
-              {nameError && <p className="text-xs text-[#d45656] mt-1">{nameError}</p>}
-            </div>
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Skill <span className="text-[#d45656]">*</span></label>
-              <select
-                value={skill}
-                onChange={(e) => setSkill(e.target.value)}
-                disabled={!skills.length}
-                className="w-full bg-bg-raised border border-border-main rounded-full px-4 py-2.5 text-sm text-text-main
-                  focus:outline-none focus:border-brand-green cursor-pointer disabled:opacity-50"
-              >
-                {!skills.length && <option>(暂无 skill，请先在 data/skills/ 创建)</option>}
-                {skills.map(s => (
-                  <option key={s.name} value={s.name}>
-                    {s.name} · {s.description?.slice(0, 50)}
-                  </option>
-                ))}
-              </select>
-              {selectedSkill && (
-                <div className="mt-1.5">
-                  <p className="text-[11px] text-text-muted">
-                    类型: <code className="font-mono">{selectedSkill.type}</code>
-                  </p>
-                  {selectedSkill.args && Object.keys(selectedSkill.args).length > 0 && (
-                    <div className="mt-1.5 bg-bg-raised/60 border border-border-main rounded-lg p-2 font-mono text-[11px]">
-                      {Object.entries(selectedSkill.args).map(([name, def]) => (
-                        <div key={name} className="py-0.5 flex flex-wrap items-baseline gap-x-2">
-                          <span className="text-brand-green/90 font-semibold">{name}</span>
-                          <span className="text-text-muted">{def.type || 'any'}</span>
-                          {def.required !== false && <span className="text-[#d45656] text-[10px]">必填</span>}
-                          {def.default !== undefined && (
-                            <span className="text-text-muted/70 text-[10px]">默认 {JSON.stringify(def.default)}</span>
-                          )}
-                          {def.description && (
-                            <span className="text-text-muted/70 w-full text-[10px]">{def.description}</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+        {/* Row: 名称 + Skill */}
+        <div className="flex gap-3">
+          <div className="flex-1 min-w-0">
+            <label className="block text-xs text-text-muted mb-1.5">
+              任务名称 <span className="text-[#d45656]">*</span>
+            </label>
+            <Input value={name} onChange={setName} placeholder="例：36氪早报" />
+            {nameError && <p className="text-xs text-[#d45656] mt-1">{nameError}</p>}
+          </div>
+          <div className="flex-1 min-w-0">
+            <label className="block text-xs text-text-muted mb-1.5">
+              执行 Skill <span className="text-[#d45656]">*</span>
+            </label>
+            <select
+              value={skill}
+              onChange={(e) => setSkill(e.target.value)}
+              disabled={!skills.length}
+              className="w-full bg-bg-raised border border-border-main rounded-full px-4 py-2.5 text-sm text-text-main
+                focus:outline-none focus:border-brand-green cursor-pointer disabled:opacity-50"
+            >
+              {!skills.length && <option>(暂无 skill)</option>}
+              {skills.map(s => (
+                <option key={s.name} value={s.name}>
+                  {s.name} · {s.description?.slice(0, 50)}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
-        {/* Cron */}
-        <div>
-          <div className="text-[11px] uppercase tracking-wider text-brand-green font-semibold mb-2.5">时间设置</div>
+        {/* Skill info badge */}
+        {selectedSkill && (
+          <div className="flex items-center gap-2 px-3 py-2.5 bg-bg-raised/60 rounded-lg">
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-brand-green/15 text-brand-green uppercase tracking-wider">
+              {selectedSkill.type}
+            </span>
+            <span className="text-xs text-text-muted leading-relaxed">{selectedSkill.description}</span>
+          </div>
+        )}
 
-          <div className="flex flex-wrap gap-1.5 mb-2.5">
+        {/* 参数：schema 感知 */}
+        {selectedSkill?.args && Object.keys(selectedSkill.args).length > 0 ? (
+          <div>
+            <label className="block text-xs text-text-muted mb-2">配置参数</label>
+            <ArgFields />
+          </div>
+        ) : (
+          <div>
+            <label className="block text-xs text-text-muted mb-1">
+              参数 <span className="text-text-muted/60 font-normal">· JSON</span>
+            </label>
+            <textarea
+              value={argsJson}
+              onChange={(e) => { setArgsJson(e.target.value); setTouched(true) }}
+              onBlur={() => setTouched(true)}
+              rows={3}
+              placeholder='{"key": "value"}'
+              className={`w-full bg-bg-raised border rounded-lg px-3 py-2 text-xs text-text-main font-mono
+                focus:outline-none focus:ring-1 focus:ring-brand-green/30 resize-none
+                ${argsError ? 'border-[#d45656]' : 'border-border-main focus:border-brand-green'}`}
+            />
+            {argsError ? (
+              <p className="text-xs text-[#d45656] mt-1">⚠ {argsError}</p>
+            ) : (
+              <p className="text-[11px] text-text-muted/60 mt-0.5">此 skill 无预设参数说明，按需传入 JSON 对象</p>
+            )}
+          </div>
+        )}
+
+        <hr className="border-border-main" />
+
+        {/* 触发时间 */}
+        <div>
+          <label className="block text-xs text-text-muted mb-2">触发时间 <span className="text-[#d45656]">*</span></label>
+
+          <div className="flex flex-wrap gap-1.5 mb-2">
             {CRON_PRESETS.map((p, i) => (
               <button
                 key={i}
-                onClick={() => setCronExpr(p.cron)}
+                onClick={() => { setCronExpr(p.cron); setTouched(true) }}
                 className={`text-xs px-2.5 py-1 rounded-full border transition-colors cursor-pointer
                   ${cronExpr === p.cron
                     ? 'bg-brand-green/15 border-brand-green/40 text-brand-green font-medium'
@@ -342,67 +439,62 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
             ))}
           </div>
 
-          <label className="block text-xs text-text-muted mb-1">Cron 表达式 <span className="text-[#d45656]">*</span></label>
-          <textarea
-            value={cronExpr}
-            onChange={(e) => { setCronExpr(e.target.value); setTouched(true) }}
-            onBlur={() => setTouched(true)}
-            rows={2}
-            placeholder="0 8 * * *"
-            className={`w-full bg-bg-raised border rounded-full px-4 py-2 text-sm text-text-main font-mono
-              focus:outline-none focus:ring-1 focus:ring-brand-green/30 resize-none
-              ${cronError ? 'border-[#d45656]' : 'border-border-main focus:border-brand-green'}`}
-          />
-          <p className="text-[11px] text-text-muted mt-1.5">
-            多行格式，每行一个触发时间（任一匹配即触发）<br />
-            每行 5 字段：<code className="font-mono">分 时 日 月 周</code> · 周日=0<br />
-            单字段支持：<code className="font-mono">*/N</code>（步进）<code className="font-mono">N-M</code>（范围）<code className="font-mono">N,M,K</code>（列表）
-          </p>
-          {cronError ? (
-            <p className="text-xs text-[#d45656] mt-1.5">⚠ {cronError}</p>
-          ) : nextTriggers.length > 0 && (
-            <p className="text-[11px] text-brand-green mt-1.5">
-              ⚡ 下次触发: {nextTriggers.map(formatLocalTime).join(' · ')}
-            </p>
-          )}
-        </div>
-
-        {/* Args JSON */}
-        <div>
-          <div className="text-[11px] uppercase tracking-wider text-brand-green font-semibold mb-2.5">参数 (JSON)</div>
-          <textarea
-            value={argsJson}
-            onChange={(e) => { setArgsJson(e.target.value); setTouched(true) }}
-            onBlur={() => setTouched(true)}
-            rows={4}
-            placeholder='{"url": "https://..."}'
-            className={`w-full bg-bg-raised border rounded-lg px-3 py-2 text-xs text-text-main font-mono
-              focus:outline-none focus:ring-1 focus:ring-brand-green/30 resize-none
-              ${argsError ? 'border-[#d45656]' : 'border-border-main focus:border-brand-green'}`}
-          />
-          {argsError ? (
-            <p className="text-xs text-[#d45656] mt-1">⚠ {argsError}</p>
-          ) : (
-            <p className="text-[11px] text-text-muted mt-1">
-              按所选 skill 的 args schema 填入，自由格式 JSON 对象
-            </p>
-          )}
-        </div>
-
-        {/* Toggles */}
-        <div className="grid grid-cols-2 gap-3 pt-2 border-t border-border-main">
-          <div className="flex items-center gap-2.5">
-            <Toggle enabled={pushEnabled} onChange={setPushEnabled} />
-            <span className="text-xs text-text-main">推送到 iLink (微信)</span>
+          <div className="flex gap-2">
+            <textarea
+              value={cronExpr}
+              onChange={(e) => { setCronExpr(e.target.value); setTouched(true) }}
+              onBlur={() => setTouched(true)}
+              rows={1}
+              placeholder="0 8 * * *"
+              className={`flex-1 bg-bg-raised border rounded-full px-4 py-2 text-sm text-text-main font-mono
+                focus:outline-none focus:ring-1 focus:ring-brand-green/30 resize-none
+                ${cronError ? 'border-[#d45656]' : 'border-border-main focus:border-brand-green'}`}
+            />
+            {!cronError && nextTriggers.length > 0 && (
+              <span className="shrink-0 text-xs text-brand-green bg-brand-green/[0.06] rounded-lg px-3 py-2 flex items-center">
+                ⚡ {nextTriggers.slice(0, 2).map(formatLocalTime).join(' · ')}
+              </span>
+            )}
           </div>
-          <div className="flex items-center gap-2.5">
+
+          {cronError && <p className="text-xs text-[#d45656] mt-1.5">⚠ {cronError}</p>}
+
+          <details className="mt-1.5 text-[11px] text-text-muted cursor-pointer group">
+            <summary className="hover:text-text-main transition-colors select-none">Cron 语法参考</summary>
+            <div className="mt-1.5 pl-3 border-l border-border-main space-y-1 text-[12px] leading-relaxed">
+              <p><code className="font-mono text-[11px] px-1 py-0.5 rounded bg-bg-raised text-text-secondary">分 时 日 月 周</code> · 周日=0</p>
+              <p><code className="font-mono text-[11px] px-1 py-0.5 rounded bg-bg-raised">0 9 * * *</code> 每天 9:00</p>
+              <p><code className="font-mono text-[11px] px-1 py-0.5 rounded bg-bg-raised">*/15 * * * *</code> 每 15 分钟</p>
+              <p><code className="font-mono text-[11px] px-1 py-0.5 rounded bg-bg-raised">0 9 * * 1-5</code> 工作日 9:00</p>
+              <p className="text-text-muted/60 mt-1">支持多行，每行一个 cron，任一行匹配即触发</p>
+            </div>
+          </details>
+        </div>
+
+        <hr className="border-border-main" />
+
+        {/* 投递设置 */}
+        <div>
+          <label className="block text-xs text-text-muted mb-1">投递方式</label>
+          <div className="flex items-center justify-between py-2.5">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-xs text-text-main font-medium">推送到微信</span>
+              <span className="text-[11px] text-text-muted/60">执行结果通过 iLink 推送</span>
+            </div>
+            <Toggle enabled={pushEnabled} onChange={setPushEnabled} />
+          </div>
+          <hr className="border-border-main my-0" />
+          <div className="flex items-center justify-between py-2.5">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-xs text-text-main font-medium">{initial?.id ? '启用' : '创建后立即启用'}</span>
+              <span className="text-[11px] text-text-muted/60">暂停时不会触发调度</span>
+            </div>
             <Toggle enabled={enabled} onChange={setEnabled} />
-            <span className="text-xs text-text-main">创建后立即启用</span>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex gap-2 pt-2">
+        <div className="flex gap-2 pt-1">
           <button
             onClick={handleSubmit}
             disabled={!canSave}
