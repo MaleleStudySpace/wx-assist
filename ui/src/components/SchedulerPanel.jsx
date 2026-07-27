@@ -548,7 +548,8 @@ function ExecutionHistory() {
   async function load() {
     setLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/api/tasks?task_type=cron&limit=50`)
+      // 只拉 cron 类型的任务（type=cron = task_type='cron'）
+      const res = await fetch(`${API_BASE}/api/tasks?type=cron&limit=100`)
       const data = await res.json()
       if (data.ok) setTasks(data.tasks || [])
     } catch {}
@@ -565,7 +566,7 @@ function ExecutionHistory() {
     if (filter.search.trim()) {
       const q = filter.search.toLowerCase()
       result = result.filter(t => {
-        const haystack = `${t.title || ''} ${t.progress || ''} ${t.result || ''} ${t.error || ''}`.toLowerCase()
+        const haystack = `${t.group_name || ''} ${t.progress || ''} ${t.result || ''} ${t.error || ''}`.toLowerCase()
         return haystack.includes(q)
       })
     }
@@ -607,7 +608,7 @@ function ExecutionHistory() {
         <input
           value={filter.search}
           onChange={(e) => setFilter(f => ({ ...f, search: e.target.value }))}
-          placeholder="🔍 在输出中搜索..."
+          placeholder="🔍 按定时任务名搜索..."
           className="flex-1 bg-bg-raised border border-border-main rounded-full px-3 py-1.5 text-xs text-text-main
             focus:outline-none focus:border-brand-green"
         />
@@ -646,7 +647,7 @@ function ExecutionHistory() {
                         {t.created_at?.slice(11, 19) || '--:--:--'}
                       </span>
                       <span className="text-text-main flex-shrink-0 max-w-[120px] truncate">
-                        {t.title?.split(' - ').pop() || t.title || 'task'}
+                        {t.group_name || 'task'}
                       </span>
                       <span className={`flex-1 truncate font-mono ${isFail ? 'text-[#d45656]' : 'text-text-secondary'}`}>
                         {snippet.slice(0, 120)}
