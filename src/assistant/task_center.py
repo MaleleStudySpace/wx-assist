@@ -223,8 +223,14 @@ class TaskCenter:
                 where.append("status = ?")
                 params.append(status)
             if task_type:
-                where.append("task_type = ?")
-                params.append(task_type)
+                types = [t.strip() for t in task_type.split(",") if t.strip()]
+                if len(types) == 1:
+                    where.append("task_type = ?")
+                    params.append(types[0])
+                else:
+                    placeholders = ",".join("?" * len(types))
+                    where.append(f"task_type IN ({placeholders})")
+                    params.extend(types)
             clause = " WHERE " + " AND ".join(where) if where else ""
             params.append(max(1, min(int(limit or 50), 200)))
             with self._get_conn() as conn:

@@ -137,7 +137,7 @@ class CronScheduler:
         if not job:
             return f"[CRON] 任务 {job_id} 不存在"
         logger.info("[CRON] run_now: %s (%s)", job.get("name"), job_id)
-        return self._execute_job(job)
+        return self._execute_and_push(job)
 
     # ── Ticker ──────────────────────────────────────────────────────
 
@@ -174,7 +174,12 @@ class CronScheduler:
 
     # ── 执行 ────────────────────────────────────────────────────────
 
-    def _execute_and_push(self, job: dict) -> None:
+    def _execute_and_push(self, job: dict) -> str:
+        """完整的执行+推送链路。供 tick 和 run_now 共用。
+
+        流程: TaskCenter 创建 → skill 执行 → TaskCenter 更新 → outbox → iLink 推送
+        Returns: 执行输出的文本
+        """
         job_id = job.get("id", "?")
         job_name = job.get("name", "?")
         skill_name = job.get("skill", "?")
@@ -219,11 +224,12 @@ class CronScheduler:
 
         if is_silent:
             logger.info("[CRON] %s 无新内容，跳过推送", job_name)
-            return
+            return text
         push_cfg = job.get("push", {})
         if not push_cfg.get("enabled", True):
-            return
-        self._push(job, text)
+            return text
+        self._push(job, text, tid)
+        return text
 
     def _execute_job(self, job: dict) -> str:
         """通过 skill 引擎执行。不关心 skill 是脚本还是 AI。"""
@@ -234,7 +240,7 @@ class CronScheduler:
             raise RuntimeError("job 未指定 skill")
         return self._skill_engine.execute(skill_name, job.get("args", {}))
 
-    def _push(self, job: dict, text: str) -> None:
+    def _push(self, job: dict, text: str, task_center_id: int = None) -> None:
         if not self._outbox:
             logger.warning("[CRON] outbox 未注入，跳过推送")
             return
@@ -249,6 +255,7 @@ class CronScheduler:
                 priority="normal",
             )
             push_cfg = job.get("push", {})
+            push_status = "skipped"
             if push_cfg.get("target") == "ilink":
                 from src.wechat.ilink_push import get_ilink_push, format_for_wechat
                 ilink = get_ilink_push()
@@ -259,7 +266,15 @@ class CronScheduler:
                     err = result.get("error", "") if not ok else ""
                     self._outbox.update_push_result(
                         nid, "ilink", "success" if ok else "failed", err)
+                    push_status = "success" if ok else "failed"
                     logger.info("[CRON] 推送 %s: %s",
                                 "成功" if ok else "失败", job_name)
+            # 同步更新 TaskCenter 推送状态
+            if task_center_id and self._task_center:
+                try:
+                    self._task_center.update_push_result(
+                        task_center_id, push_status, "")
+                except Exception as e:
+                    logger.warning("[CRON] task_center push_status 更新失败: %s", e)
         except Exception as e:
             logger.warning("[CRON] 推送失败: %s", e)

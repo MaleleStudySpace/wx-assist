@@ -295,16 +295,28 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
                 ))}
               </select>
               {selectedSkill && (
-                <p className="text-[11px] text-text-muted mt-1.5">
-                  类型: <code className="font-mono">{selectedSkill.type}</code>
+                <div className="mt-1.5">
+                  <p className="text-[11px] text-text-muted">
+                    类型: <code className="font-mono">{selectedSkill.type}</code>
+                  </p>
                   {selectedSkill.args && Object.keys(selectedSkill.args).length > 0 && (
-                    <> · 参数 schema:
-                      <code className="font-mono ml-1">
-                        {Object.keys(selectedSkill.args).join(', ')}
-                      </code>
-                    </>
+                    <div className="mt-1.5 bg-bg-raised/60 border border-border-main rounded-lg p-2 font-mono text-[11px]">
+                      {Object.entries(selectedSkill.args).map(([name, def]) => (
+                        <div key={name} className="py-0.5 flex flex-wrap items-baseline gap-x-2">
+                          <span className="text-brand-green/90 font-semibold">{name}</span>
+                          <span className="text-text-muted">{def.type || 'any'}</span>
+                          {def.required !== false && <span className="text-[#d45656] text-[10px]">必填</span>}
+                          {def.default !== undefined && (
+                            <span className="text-text-muted/70 text-[10px]">默认 {JSON.stringify(def.default)}</span>
+                          )}
+                          {def.description && (
+                            <span className="text-text-muted/70 w-full text-[10px]">{def.description}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   )}
-                </p>
+                </div>
               )}
             </div>
           </div>
@@ -756,6 +768,14 @@ export default function SchedulerPanel({ section = 'tasks', onSectionChange = ()
   const [deleteTask, setDeleteTask] = useState(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('enabled')
+  const [toast, setToast] = useState(null) // { type: 'success'|'error', message }
+
+  useEffect(() => {
+    if (toast) {
+      const t = setTimeout(() => setToast(null), 3000)
+      return () => clearTimeout(t)
+    }
+  }, [toast])
 
   useEffect(() => {
     loadAll()
@@ -849,9 +869,16 @@ export default function SchedulerPanel({ section = 'tasks', onSectionChange = ()
     try {
       const res = await fetch(`${API_BASE}/api/scheduler/tasks/${id}/run`, { method: 'POST' })
       const data = await res.json()
-      if (!data.ok) alert('执行失败: ' + (data.error || '未知错误'))
+      if (data.ok) {
+        const result = data.data?.output || ''
+        const preview = result.length > 120 ? result.slice(0, 120) + '...' : result
+        setToast({ type: 'success', message: `✅ 已执行${preview ? ': ' + preview : ''}` })
+        loadTasks()
+      } else {
+        setToast({ type: 'error', message: '❌ 执行失败: ' + (data.error || '未知错误') })
+      }
     } catch (e) {
-      alert('执行失败: ' + e.message)
+      setToast({ type: 'error', message: '❌ 执行失败: ' + e.message })
     }
   }
 
@@ -881,6 +908,15 @@ export default function SchedulerPanel({ section = 'tasks', onSectionChange = ()
           通用定时调度 · 通过 skill 执行
         </p>
       </div>
+
+      {/* Toast */}
+      {toast && (
+        <div className={`mb-4 px-4 py-2.5 rounded-lg text-xs font-medium transition-all ${
+          toast.type === 'success' ? 'bg-brand-green/15 text-brand-green' : 'bg-[#d45656]/15 text-[#d45656]'
+        }`}>
+          {toast.message}
+        </div>
+      )}
 
       {/* Tasks Section */}
       {section === 'tasks' && (

@@ -6,6 +6,8 @@ import { API_BASE, getWsUrl } from './SharedComponents'
 const TASK_TYPES = {
   group_digest: { label: '群聊摘要', icon: ChatCircleDots, color: 'text-brand-green' },
   oa_digest: { label: '公众号摘要', icon: Newspaper, color: 'text-blue-400' },
+  oa_crawl: { label: 'OA 全文抓取', icon: Newspaper, color: 'text-blue-300' },
+  oa_incremental: { label: 'OA 增量同步', icon: Newspaper, color: 'text-blue-200' },
   cron: { label: '定时任务', icon: Clock, color: 'text-amber-400' },
 }
 
@@ -41,6 +43,7 @@ export default function TaskCenter({ open, onClose }) {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(false)
   const [filter, setFilter] = useState('all')
+  const [typeFilter, setTypeFilter] = useState('all')
   const refreshTimer = useRef(null)
 
   // Fetch tasks
@@ -49,6 +52,10 @@ export default function TaskCenter({ open, onClose }) {
     try {
       const params = new URLSearchParams()
       if (filter !== 'all') params.set('status', filter)
+      if (typeFilter !== 'all') {
+        const typeVal = typeFilter === 'oa' ? 'oa_digest,oa_crawl,oa_incremental' : typeFilter
+        params.set('type', typeVal)
+      }
       params.set('limit', '50')
       const res = await fetch(`${API_BASE}/api/tasks?${params}`)
       const data = await res.json()
@@ -66,7 +73,7 @@ export default function TaskCenter({ open, onClose }) {
       clearInterval(refreshTimer.current)
     }
     return () => clearInterval(refreshTimer.current)
-  }, [open, filter])
+  }, [open, filter, typeFilter])
 
   // WebSocket for task_update events
   useEffect(() => {
@@ -141,7 +148,7 @@ export default function TaskCenter({ open, onClose }) {
           </button>
         </div>
 
-        {/* Filter tabs */}
+        {/* Status filter tabs */}
         <div className="flex gap-1 px-5 py-3 border-b border-border-main shrink-0">
           {filters.map(f => (
             <button
@@ -149,6 +156,28 @@ export default function TaskCenter({ open, onClose }) {
               onClick={() => setFilter(f.key)}
               className={`px-3 py-1 text-xs font-medium rounded-full transition-colors cursor-pointer ${
                 filter === f.key
+                  ? 'bg-brand-green/[0.12] text-brand-green-hover dark:text-brand-green'
+                  : 'text-text-muted hover:text-text-main hover:bg-bg-raised/60'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Type filter tabs */}
+        <div className="flex gap-1 px-5 py-2 border-b border-border-main shrink-0">
+          {[
+            { key: 'all', label: '全部' },
+            { key: 'cron', label: '⏰ 定时任务' },
+            { key: 'oa', label: '📰 公众号' },
+            { key: 'group_digest', label: '💬 群聊' },
+          ].map(f => (
+            <button
+              key={f.key}
+              onClick={() => setTypeFilter(f.key)}
+              className={`px-3 py-1 text-xs font-medium rounded-full transition-colors cursor-pointer ${
+                typeFilter === f.key
                   ? 'bg-brand-green/[0.12] text-brand-green-hover dark:text-brand-green'
                   : 'text-text-muted hover:text-text-main hover:bg-bg-raised/60'
               }`}
