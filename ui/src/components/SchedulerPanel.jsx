@@ -543,7 +543,7 @@ function SkillLibrary({ skills }) {
 function ExecutionHistory() {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState({ status: 'all', search: '' })
+  const [filter, setFilter] = useState({ status: 'all', name: 'all', search: '' })
 
   async function load() {
     setLoading(true)
@@ -558,15 +558,24 @@ function ExecutionHistory() {
 
   useEffect(() => { load() }, [])
 
+  // 任务名列表（去重排序）
+  const taskNames = useMemo(() => {
+    const names = new Set(tasks.map(t => t.group_name).filter(Boolean))
+    return Array.from(names).sort()
+  }, [tasks])
+
   const filtered = useMemo(() => {
     let result = tasks
     if (filter.status !== 'all') {
       result = result.filter(t => t.status === filter.status)
     }
+    if (filter.name !== 'all') {
+      result = result.filter(t => t.group_name === filter.name)
+    }
     if (filter.search.trim()) {
       const q = filter.search.toLowerCase()
       result = result.filter(t => {
-        const haystack = `${t.group_name || ''} ${t.progress || ''} ${t.result || ''} ${t.error || ''}`.toLowerCase()
+        const haystack = `${t.progress || ''} ${t.result || ''} ${t.error || ''}`.toLowerCase()
         return haystack.includes(q)
       })
     }
@@ -587,37 +596,54 @@ function ExecutionHistory() {
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-3">
-        {[
-          { id: 'all', label: '全部' },
-          { id: 'completed', label: '✅ 成功' },
-          { id: 'failed', label: '❌ 失败' },
-          { id: 'running', label: '⏳ 运行中' },
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setFilter(f => ({ ...f, status: tab.id }))}
-            className={`text-xs px-3 py-1.5 rounded-full transition-colors cursor-pointer
-              ${filter.status === tab.id
-                ? 'bg-brand-green/15 text-brand-green font-medium'
-                : 'bg-bg-raised text-text-muted hover:text-text-main'}`}
+      <div className="space-y-2 mb-3">
+        {/* 筛选行 1：状态 + 任务名 */}
+        <div className="flex items-center gap-2">
+          {[
+            { id: 'all', label: '全部' },
+            { id: 'completed', label: '✅ 成功' },
+            { id: 'failed', label: '❌ 失败' },
+            { id: 'running', label: '⏳ 运行中' },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setFilter(f => ({ ...f, status: tab.id }))}
+              className={`text-xs px-3 py-1.5 rounded-full transition-colors cursor-pointer
+                ${filter.status === tab.id
+                  ? 'bg-brand-green/15 text-brand-green font-medium'
+                  : 'bg-bg-raised text-text-muted hover:text-text-main'}`}
+            >
+              {tab.label}
+            </button>
+          ))}
+          <select
+            value={filter.name}
+            onChange={(e) => setFilter(f => ({ ...f, name: e.target.value }))}
+            className="bg-bg-raised border border-border-main rounded-full px-3 py-1.5 text-xs text-text-main
+              focus:outline-none focus:border-brand-green cursor-pointer max-w-[200px]"
           >
-            {tab.label}
+            <option value="all">全部定时任务</option>
+            {taskNames.map(name => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+          <button
+            onClick={load}
+            className="text-xs px-3 py-1.5 rounded-full bg-bg-raised text-text-muted hover:text-text-main transition-colors cursor-pointer ml-auto"
+          >
+            刷新
           </button>
-        ))}
-        <input
-          value={filter.search}
-          onChange={(e) => setFilter(f => ({ ...f, search: e.target.value }))}
-          placeholder="🔍 按定时任务名搜索..."
-          className="flex-1 bg-bg-raised border border-border-main rounded-full px-3 py-1.5 text-xs text-text-main
-            focus:outline-none focus:border-brand-green"
-        />
-        <button
-          onClick={load}
-          className="text-xs px-3 py-1.5 rounded-full bg-bg-raised text-text-muted hover:text-text-main transition-colors cursor-pointer"
-        >
-          刷新
-        </button>
+        </div>
+        {/* 筛选行 2：结果搜索 */}
+        <div className="flex items-center gap-2">
+          <input
+            value={filter.search}
+            onChange={(e) => setFilter(f => ({ ...f, search: e.target.value }))}
+            placeholder="🔍 搜索执行结果（输出/错误信息）..."
+            className="w-full bg-bg-raised border border-border-main rounded-full px-3 py-1.5 text-xs text-text-main
+              focus:outline-none focus:border-brand-green"
+          />
+        </div>
       </div>
 
       {loading ? (
