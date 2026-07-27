@@ -205,7 +205,71 @@ function KeywordAlertCard({ onTabChange }) {
   )
 }
 
-/* ── Scheduled Tasks Card — vertical list, scrollable ─── */
+/* ── CronScheduler Task Card — skill 定时任务 ─── */
+function CronTasksCard() {
+  const [tasks, setTasks] = useState(null)
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/scheduler/tasks`)
+      .then(r => r.json())
+      .then(d => { if (d.ok) setTasks(d.data || []) })
+      .catch(() => {})
+  }, [])
+
+  if (!tasks) return null
+  if (tasks.length === 0) return (
+    <div className="text-center py-6 text-xs text-text-muted">
+      暂无 skill 定时任务
+    </div>
+  )
+
+  const enabled = tasks.filter(t => t.enabled !== false)
+  const hasErrors = tasks.filter(t => (t.error_count || 0) > 0)
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-text-main font-semibold">{tasks.length} 个任务</span>
+        {enabled.length > 0 && (
+          <span className="text-xs font-mono font-bold text-brand-green bg-brand-green/[0.08] px-1.5 py-px rounded">{enabled.length} 启用</span>
+        )}
+        {hasErrors.length > 0 && (
+          <span className="text-xs font-mono font-bold text-[#d45656] bg-[#d45656]/[0.08] px-1.5 py-px rounded">{hasErrors.length} 有失败</span>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        {tasks.slice(0, 8).map((task, i) => (
+          <div key={task.id || i}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl border border-border-main/30 border-l-2 border-l-brand-green/40 bg-bg-raised/40"
+          >
+            <Clock size={12} className="text-brand-green shrink-0" weight="fill" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm text-text-main font-semibold truncate">{task.name || task.skill}</span>
+                <code className="text-[10px] font-mono text-text-muted bg-bg-raised px-1 py-px rounded">{task.skill}</code>
+              </div>
+              <div className="text-[11px] text-text-muted mt-0.5">
+                <code className="font-mono">{task.cron?.replace(/\n/g, ' / ')}</code>
+                {task.last_run && <> · 上次 {task.last_run.slice(11, 16)}</>}
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {(task.error_count || 0) > 0 && (
+                <span className="text-[10px] font-mono text-[#d45656]">{task.error_count}❌</span>
+              )}
+              <span className={`w-1.5 h-1.5 rounded-full ${task.enabled !== false ? 'bg-brand-green' : 'bg-text-muted/30'}`} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {tasks.length > 8 && (
+        <p className="text-xs text-text-muted/60 text-center">还有 {tasks.length - 8} 个任务...</p>
+      )}
+    </div>
+  )
+}
 function ScheduledTasksCard() {
   const [data, setData] = useState(null)
 
@@ -528,8 +592,19 @@ export default function Dashboard({ status, onTabChange }) {
             <Clock size={15} className="text-text-muted" weight="fill" />
             <h3 className="text-[14px] font-semibold text-text-main">定时任务</h3>
           </div>
-          <div className="px-6 pb-4 overflow-y-auto scrollbar-thin">
+          <div className="px-6 pb-4 overflow-y-auto scrollbar-thin space-y-4">
+            {/* OA/Digest 定时任务 */}
             <ScheduledTasksCard />
+
+            <hr className="border-border-main/60" />
+
+            {/* CronScheduler skill 定时任务 */}
+            <div>
+              <p className="text-[11px] font-medium text-text-muted/70 uppercase tracking-wider mb-2 flex items-center gap-1">
+                <Cube size={12} /> Skill 定时任务
+              </p>
+              <CronTasksCard />
+            </div>
           </div>
         </motion.div>
       </div>

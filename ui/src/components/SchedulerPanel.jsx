@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Clock, Play, Trash, Plus, Pencil, Pause, Eye, EyeSlash, X, CaretDown, CaretUp, ChatCircleText } from '@phosphor-icons/react'
+import { Clock, Play, Trash, Plus, Pencil, Pause, Eye, EyeSlash, X, CaretDown, CaretUp, ChatCircleText, Spinner } from '@phosphor-icons/react'
 import { Toggle, Input, API_BASE } from './SharedComponents'
 import { CRON_PRESETS, validateCronExpr, getNextTriggers, formatLocalTime } from '../utils/cron'
 
@@ -37,7 +37,7 @@ function ArgsDisplay({ args }) {
 }
 
 // ── Task card ─────────────────────────────────────────────────────
-function TaskCard({ task, skills, onToggle, onDelete, onRunNow, onEdit, onCopy }) {
+function TaskCard({ task, skills, onToggle, onDelete, onRunNow, onEdit, onCopy, runningNow }) {
   const [expanded, setExpanded] = useState(false)
   const skill = skills.find(s => s.name === task.skill)
 
@@ -72,11 +72,16 @@ function TaskCard({ task, skills, onToggle, onDelete, onRunNow, onEdit, onCopy }
           </span>
           <Toggle enabled={task.enabled !== false} onChange={() => onToggle(task.id, task.enabled === false)} />
           <button
-            onClick={(e) => { e.stopPropagation(); onRunNow(task.id) }}
-            className="p-1.5 rounded-full text-text-muted hover:text-brand-green hover:bg-brand-green-light/20 transition-colors cursor-pointer"
-            title="立即执行"
+            onClick={(e) => { e.stopPropagation(); if (!runningNow?.has(task.id)) onRunNow(task.id) }}
+            disabled={runningNow?.has(task.id)}
+            className={`p-1.5 rounded-full transition-colors cursor-pointer disabled:cursor-wait ${
+              runningNow?.has(task.id)
+                ? 'text-brand-green bg-brand-green-light/20 animate-pulse'
+                : 'text-text-muted hover:text-brand-green hover:bg-brand-green-light/20'
+            }`}
+            title={runningNow?.has(task.id) ? '执行中...' : '立即执行'}
           >
-            <Play size={14} weight="fill" />
+            {runningNow?.has(task.id) ? <Spinner size={14} className="animate-spin" /> : <Play size={14} weight="fill" />}
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onEdit(task) }}
@@ -307,7 +312,7 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
           {initial?.id && (
             <span className="text-[11px] text-text-muted truncate">
               {initial.last_run
-                ? <>上次 {formatLocalTime(initial.last_run)}</>
+                ? <>上次 {(() => { try { return formatLocalTime(new Date(initial.last_run)) } catch { return initial.last_run } })()}</>
                 : '从未执行'}
               · 成功 <span className="text-brand-green">{initial.run_count || 0}</span>
               {(initial.error_count || 0) > 0 && (
@@ -378,7 +383,7 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
             value={argsJson}
             onChange={(e) => { setArgsJson(e.target.value); setTouched(true) }}
             onBlur={() => setTouched(true)}
-            rows={4}
+            rows={6}
             placeholder='{"key": "value"}'
             className={`w-full bg-bg-raised border rounded-lg px-3 py-2 text-xs text-text-main font-mono
               focus:outline-none focus:ring-1 focus:ring-brand-green/30 resize-none
@@ -426,7 +431,7 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
             />
             {!cronError && nextTriggers.length > 0 && (
               <span className="shrink-0 text-xs text-brand-green bg-brand-green/[0.06] rounded-lg px-3 py-2 flex items-center">
-                ⚡ {nextTriggers.slice(0, 2).map(formatLocalTime).join(' · ')}
+                ⚡ 下次执行: {nextTriggers.slice(0, 2).map(formatLocalTime).join(' · ')}
               </span>
             )}
           </div>
@@ -833,9 +838,13 @@ function ExecutionHistory() {
 
                 {/* 任务配置 */}
                 <div>
-                  <div className="text-[11px] font-medium text-text-muted/70 uppercase tracking-wider mb-1">任务配置</div>
+                  <div className="text-[11px] font-medium text-text-muted/70 uppercase tracking-wider mb-1">调用请求</div>
                   <pre className="bg-bg-raised/60 border border-border-main rounded-lg p-3 text-xs font-mono text-text-secondary whitespace-pre-wrap leading-relaxed">
-                    {JSON.stringify({ task_type: detail.task_type, group_id: detail.group_id, source: detail.source }, null, 2)}
+                    {detail.config ? (
+                      (() => { try { return JSON.stringify(JSON.parse(detail.config), null, 2) } catch { return detail.config } })()
+                    ) : (
+                      '(无配置快照)'
+                    )}
                   </pre>
                 </div>
 
@@ -909,6 +918,7 @@ export default function SchedulerPanel({ section = 'tasks', onSectionChange = ()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('enabled')
   const [toast, setToast] = useState(null) // { type: 'success'|'error', message }
+  const [runningNow, setRunningNow] = useState(new Set())
 
   useEffect(() => {
     if (toast) {
@@ -1006,13 +1016,14 @@ export default function SchedulerPanel({ section = 'tasks', onSectionChange = ()
   }
 
   async function handleRunNow(id) {
+    setRunningNow(prev => new Set(prev).add(id))
     try {
       const res = await fetch(`${API_BASE}/api/scheduler/tasks/${id}/run`, { method: 'POST' })
       const data = await res.json()
       if (data.ok) {
         const result = data.data?.output || ''
         const preview = result.length > 120 ? result.slice(0, 120) + '...' : result
-        setToast({ type: 'success', message: `✅ 已执行${preview ? ': ' + preview : ''}` })
+        setToast({ type: 'success', message: `✅ 执行完成${preview ? ': ' + preview : ''}` })
         loadTasks()
       } else {
         setToast({ type: 'error', message: '❌ 执行失败: ' + (data.error || '未知错误') })
@@ -1020,6 +1031,7 @@ export default function SchedulerPanel({ section = 'tasks', onSectionChange = ()
     } catch (e) {
       setToast({ type: 'error', message: '❌ 执行失败: ' + e.message })
     }
+    setRunningNow(prev => { const next = new Set(prev); next.delete(id); return next })
   }
 
   function handleEdit(task) {
@@ -1135,6 +1147,7 @@ export default function SchedulerPanel({ section = 'tasks', onSectionChange = ()
                   onRunNow={handleRunNow}
                   onEdit={handleEdit}
                   onCopy={handleCopy}
+                  runningNow={runningNow}
                 />
               ))}
             </div>
