@@ -55,8 +55,6 @@ export function Toggle({ enabled, onChange }) {
         ${enabled ? 'bg-brand-green-light border-brand-green/30' : 'bg-bg-raised border-border-main'}`}
     >
       <motion.span
-        layout
-        transition={{ type: 'spring', stiffness: 500, damping: 28 }}
         className="absolute top-0.5 left-0.5 w-4.5 h-4.5 rounded-full shadow-sm"
         animate={{
           x: enabled ? 20 : 0,

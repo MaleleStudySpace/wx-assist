@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Clock, Play, Trash, Plus, Pencil, Pause, Eye, EyeSlash, X, CaretDown, CaretUp, ChatCircleText } from '@phosphor-icons/react'
 import { Toggle, Input, API_BASE } from './SharedComponents'
@@ -175,6 +175,7 @@ function TaskCard({ task, skills, onToggle, onDelete, onRunNow, onEdit, onCopy }
 
 // ── Task creator / editor ─────────────────────────────────────────
 function TaskForm({ skills, initial, onSave, onCancel }) {
+  const formRef = useRef(null)
   const [name, setName] = useState(initial?.name || '')
   const [skill, setSkill] = useState(initial?.skill || (skills[0]?.name || ''))
   const [cronExpr, setCronExpr] = useState(initial?.cron || '0 8 * * *')
@@ -186,6 +187,11 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
   const [argsError, setArgsError] = useState('')
   const [parsedArgs, setParsedArgs] = useState({})
   const [touched, setTouched] = useState(false)
+
+  // 挂载后自动滚动到表单
+  useEffect(() => {
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [])
 
   const selectedSkill = useMemo(
     () => skills.find(s => s.name === skill),
@@ -248,6 +254,7 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
 
   return (
     <motion.div
+      ref={formRef}
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
       className="border border-brand-green/30 rounded-xl bg-bg-card overflow-hidden mb-6"
@@ -335,7 +342,9 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
               ${cronError ? 'border-[#d45656]' : 'border-border-main focus:border-brand-green'}`}
           />
           <p className="text-[11px] text-text-muted mt-1.5">
-            格式: <code className="font-mono">分 时 日 月 周</code> · 周日=0 · 支持多行、*/N、N-M、N,M,K
+            多行格式，每行一个触发时间（任一匹配即触发）<br />
+            每行 5 字段：<code className="font-mono">分 时 日 月 周</code> · 周日=0<br />
+            单字段支持：<code className="font-mono">*/N</code>（步进）<code className="font-mono">N-M</code>（范围）<code className="font-mono">N,M,K</code>（列表）
           </p>
           {cronError ? (
             <p className="text-xs text-[#d45656] mt-1.5">⚠ {cronError}</p>
@@ -878,6 +887,7 @@ export default function SchedulerPanel({ section = 'tasks', onSectionChange = ()
         <>
           {showForm && (
             <TaskForm
+              key={editingTask?.id || 'new'}
               skills={skills}
               initial={editingTask}
               onSave={handleSave}
