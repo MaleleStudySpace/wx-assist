@@ -6,6 +6,7 @@ import { API_BASE, getWsUrl } from './SharedComponents'
 const TASK_TYPES = {
   group_digest: { label: '群聊摘要', icon: ChatCircleDots, color: 'text-brand-green' },
   oa_digest: { label: '公众号摘要', icon: Newspaper, color: 'text-blue-400' },
+  cron: { label: '定时任务', icon: Clock, color: 'text-amber-400' },
 }
 
 const STATUS_STYLES = {
