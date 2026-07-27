@@ -202,6 +202,8 @@ class CronScheduler:
             elapsed = time.monotonic() - t0
             logger.info("[CRON] 完成: %s (%.2fs) len=%d",
                         job_name, elapsed, len(text))
+            logger.info("[CRON] 输出: %s\n%s",
+                        job_name, text[:2000])
             if tid:
                 self._task_center.complete_task(
                     tid, result=text[:200] if text != SILENT else "")

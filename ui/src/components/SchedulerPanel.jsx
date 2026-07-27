@@ -199,11 +199,8 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
   )
 
   // 解析 args（独立 useEffect，避免 render 期内 setState 导致死循环）
+  // 注意：解析不依赖 touched，否则编辑模式初始值不显示
   useEffect(() => {
-    if (!touched) {
-      setArgsError('')
-      return
-    }
     if (!argsJson.trim()) {
       setParsedArgs({})
       setArgsError('')
@@ -222,8 +219,10 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
       setParsedArgs({})
       setArgsError(`JSON 解析失败: ${e.message}`)
     }
-  }, [argsJson, touched])
+  }, [argsJson])
 
+  // touched 后才显示校验错误（避免首次打开就一片红）
+  const displayError = touched ? argsError : ''
   const cronError = touched ? validateCronExpr(cronExpr) : ''
   const nameError = touched && !name.trim() ? '任务名称不能为空' : ''
 
@@ -238,66 +237,42 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
 
   const canSave = name.trim() && skill && !cronError && !argsError
 
-  // 参数输入模式：有 schema 时逐字段渲染
-  function onArgFieldChange(fieldName, value) {
-    setTouched(true)
-    try {
-      const cur = argsJson.trim() ? JSON.parse(argsJson) : {}
-      cur[fieldName] = value
-      setArgsJson(JSON.stringify(cur, null, 2))
-    } catch {
-      // JSON 当前有语法错误时暂不更新
-    }
-  }
-
-  // 新建时切换 skill 自动填充参数默认值
-  useEffect(() => {
-    if (initial?.id) return
-    const schema = selectedSkill?.args
-    if (!schema || Object.keys(schema).length === 0) return
-    const defaults = {}
-    for (const [key, def] of Object.entries(schema)) {
-      if (def.default !== undefined) defaults[key] = def.default
-    }
-    setArgsJson(JSON.stringify(defaults, null, 2))
-  }, [skill])
-
-  // ── 参数输入组件（用于 schema 逐个字段） ────────────────────────
-  function ArgFields() {
+  // 参数参考表（展示 skill 期望的 args schema）
+  function ArgsRefTable() {
     const schema = selectedSkill?.args
     if (!schema || Object.keys(schema).length === 0) return null
     return (
-      <div className="space-y-2.5">
-        {Object.entries(schema).map(([name, def]) => {
-          const val = parsedArgs?.[name]
-          const isNum = def.type === 'integer' || def.type === 'number'
-          const displayVal = val === null || val === undefined ? '' : String(val)
-          return (
-            <div key={name}>
-              <label className="text-xs text-text-muted flex items-baseline gap-1 mb-1">
-                <code className="font-mono text-brand-green/90 text-[12px]">{name}</code>
-                <span className="text-text-muted/60 font-mono text-[10px]">{def.type || 'any'}</span>
-                {def.required !== false && <span className="text-[#d45656] text-[10px]">必填</span>}
-                {def.default !== undefined && <span className="text-text-muted/50 text-[10px]">默认 {JSON.stringify(def.default)}</span>}
-              </label>
-              <input
-                type={isNum ? 'number' : 'text'}
-                value={displayVal}
-                onChange={(e) => {
-                  const raw = e.target.value
-                  onArgFieldChange(name, isNum && raw !== '' ? Number(raw) : raw)
-                }}
-                placeholder={def.description || name}
-                className="w-full bg-bg-raised border border-border-main rounded-lg px-3 py-2 text-sm text-text-main font-mono
-                  focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/20
-                  placeholder:text-text-muted/40"
-              />
-              {def.description && (
-                <p className="text-[11px] text-text-muted/60 mt-0.5">{def.description}</p>
-              )}
-            </div>
-          )
-        })}
+      <div className="bg-bg-raised/60 border border-border-main rounded-lg overflow-hidden">
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="border-b border-border-main">
+              <th className="text-left font-medium text-text-muted/70 px-3 py-1.5 w-[100px]">名称</th>
+              <th className="text-left font-medium text-text-muted/70 px-3 py-1.5 w-[60px]">类型</th>
+              <th className="text-left font-medium text-text-muted/70 px-3 py-1.5 w-[50px]"></th>
+              <th className="text-left font-medium text-text-muted/70 px-3 py-1.5 w-[80px]">默认值</th>
+              <th className="text-left font-medium text-text-muted/70 px-3 py-1.5">说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Object.entries(schema).map(([name, def]) => (
+              <tr key={name} className="border-b border-border-main/50 last:border-b-0">
+                <td className="px-3 py-1.5">
+                  <code className="font-mono text-brand-green/90 font-semibold">{name}</code>
+                </td>
+                <td className="px-3 py-1.5 text-text-muted font-mono">{def.type || 'any'}</td>
+                <td className="px-3 py-1.5">
+                  {def.required !== false
+                    ? <span className="text-[#d45656] text-[10px] font-medium">必填</span>
+                    : <span className="text-text-muted/50 text-[10px]">可选</span>}
+                </td>
+                <td className="px-3 py-1.5 text-text-muted font-mono">
+                  {def.default !== undefined ? JSON.stringify(def.default) : '—'}
+                </td>
+                <td className="px-3 py-1.5 text-text-muted/80">{def.description || ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     )
   }
@@ -388,34 +363,33 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
           </div>
         )}
 
-        {/* 参数：schema 感知 */}
-        {selectedSkill?.args && Object.keys(selectedSkill.args).length > 0 ? (
+        {/* 参数参考表 + JSON 文本域 */}
+        {selectedSkill?.args && Object.keys(selectedSkill.args).length > 0 && (
           <div>
-            <label className="block text-xs text-text-muted mb-2">配置参数</label>
-            <ArgFields />
-          </div>
-        ) : (
-          <div>
-            <label className="block text-xs text-text-muted mb-1">
-              参数 <span className="text-text-muted/60 font-normal">· JSON</span>
-            </label>
-            <textarea
-              value={argsJson}
-              onChange={(e) => { setArgsJson(e.target.value); setTouched(true) }}
-              onBlur={() => setTouched(true)}
-              rows={3}
-              placeholder='{"key": "value"}'
-              className={`w-full bg-bg-raised border rounded-lg px-3 py-2 text-xs text-text-main font-mono
-                focus:outline-none focus:ring-1 focus:ring-brand-green/30 resize-none
-                ${argsError ? 'border-[#d45656]' : 'border-border-main focus:border-brand-green'}`}
-            />
-            {argsError ? (
-              <p className="text-xs text-[#d45656] mt-1">⚠ {argsError}</p>
-            ) : (
-              <p className="text-[11px] text-text-muted/60 mt-0.5">此 skill 无预设参数说明，按需传入 JSON 对象</p>
-            )}
+            <label className="block text-xs text-text-muted mb-1.5">参数说明</label>
+            <ArgsRefTable />
           </div>
         )}
+        <div>
+          <label className="block text-xs text-text-muted mb-1">
+            参数值 <span className="text-text-muted/60 font-normal">· JSON</span>
+          </label>
+          <textarea
+            value={argsJson}
+            onChange={(e) => { setArgsJson(e.target.value); setTouched(true) }}
+            onBlur={() => setTouched(true)}
+            rows={4}
+            placeholder='{"key": "value"}'
+            className={`w-full bg-bg-raised border rounded-lg px-3 py-2 text-xs text-text-main font-mono
+              focus:outline-none focus:ring-1 focus:ring-brand-green/30 resize-none
+              ${displayError ? 'border-[#d45656]' : 'border-border-main focus:border-brand-green'}`}
+          />
+          {displayError ? (
+            <p className="text-xs text-[#d45656] mt-1">⚠ {displayError}</p>
+          ) : (
+            <p className="text-[11px] text-text-muted/60 mt-0.5">按上方参数说明传入 JSON 对象</p>
+          )}
+        </div>
 
         <hr className="border-border-main" />
 
@@ -657,6 +631,7 @@ function ExecutionHistory() {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState({ status: 'all', name: 'all', search: '' })
+  const [detail, setDetail] = useState(null) // 详情弹窗选中的任务
 
   async function load() {
     setLoading(true)
@@ -779,7 +754,8 @@ function ExecutionHistory() {
                   return (
                     <div
                       key={t.id}
-                      className="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-raised/40 hover:bg-bg-raised transition-colors text-xs"
+                      onClick={() => setDetail(t)}
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-raised/40 hover:bg-bg-raised transition-colors text-xs cursor-pointer"
                     >
                       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isFail ? 'bg-[#d45656]' : 'bg-brand-green'}`} />
                       <span className="font-mono text-text-muted w-16 flex-shrink-0">
@@ -807,6 +783,78 @@ function ExecutionHistory() {
           ))}
         </div>
       )}
+
+      {/* 详情弹窗 */}
+      <AnimatePresence>
+        {detail && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            onClick={() => setDetail(null)}
+          >
+            <div className="absolute inset-0 bg-black/50" />
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.12 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative bg-bg-card border border-border-main rounded-xl shadow-xl w-[560px] max-w-full max-h-[85vh] flex flex-col"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-3.5 border-b border-border-main shrink-0">
+                <h3 className="text-sm font-semibold text-text-main">
+                  执行详情 · {detail.group_name || 'task'}
+                </h3>
+                <button onClick={() => setDetail(null)}
+                  className="p-1 rounded-full text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer">
+                  <X size={16} />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="px-5 py-4 overflow-y-auto space-y-4">
+                {/* 元信息 4 宫格 */}
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { label: '状态', val: detail.status === 'completed' ? '✅ 成功' : detail.status === 'failed' ? '❌ 失败' : '⏳ 运行中', cls: detail.status === 'failed' ? 'text-[#d45656]' : detail.status === 'completed' ? 'text-brand-green' : '' },
+                    { label: '耗时', val: (() => { try { if (detail.finished_at && detail.created_at) return `${((new Date(detail.finished_at) - new Date(detail.created_at)) / 1000).toFixed(1)}s` } catch {} return '—' })() },
+                    { label: '触发时间', val: detail.created_at ? detail.created_at.slice(11, 19) : '—' },
+                    { label: '推送状态', val: detail.push_status === 'success' ? '✓ 已推送' : detail.push_status === 'failed' ? '✗ 推送失败' : '—', cls: detail.push_status === 'success' ? 'text-brand-green' : detail.push_status === 'failed' ? 'text-[#d45656]' : '' },
+                  ].map((item, i) => (
+                    <div key={i} className="bg-bg-raised/60 rounded-lg px-3 py-2.5">
+                      <div className="text-[10px] font-medium text-text-muted/70 uppercase tracking-wider mb-0.5">{item.label}</div>
+                      <div className={`text-sm font-medium ${item.cls || 'text-text-main'}`}>{item.val}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* 任务配置 */}
+                <div>
+                  <div className="text-[11px] font-medium text-text-muted/70 uppercase tracking-wider mb-1">任务配置</div>
+                  <pre className="bg-bg-raised/60 border border-border-main rounded-lg p-3 text-xs font-mono text-text-secondary whitespace-pre-wrap leading-relaxed">
+                    {JSON.stringify({ task_type: detail.task_type, group_id: detail.group_id, source: detail.source }, null, 2)}
+                  </pre>
+                </div>
+
+                {/* 执行结果 */}
+                <div>
+                  <div className="text-[11px] font-medium text-text-muted/70 uppercase tracking-wider mb-1">
+                    {detail.status === 'failed' ? '错误信息' : '执行结果'}
+                  </div>
+                  <pre className={`bg-bg-raised/60 border border-border-main rounded-lg p-3 text-xs font-mono whitespace-pre-wrap leading-relaxed max-h-[200px] overflow-y-auto ${
+                    detail.status === 'failed' ? 'text-[#d45656]' : 'text-text-secondary'
+                  }`}>
+                    {(detail.error || detail.result || detail.progress || '(无输出)')}
+                  </pre>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
