@@ -14,6 +14,7 @@ Skill = 一个可执行的能力单元，存储在 data/skills/{name}/SKILL.md �
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import yaml
@@ -155,11 +156,15 @@ class SkillEngine:
             else:
                 cmd_args.extend([f"--{k}", str(v)])
 
+        # 子进程强制 UTF-8（Windows GBK 下中文/特殊字符不会炸）
+        import os as _os
         result = subprocess.run(
             [sys.executable, str(script_path)] + cmd_args,
             capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             timeout=timeout,
             creationflags=creationflags,
+            env={**_os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
         )
         stdout = (result.stdout or "").strip()
         stderr = (result.stderr or "").strip()
