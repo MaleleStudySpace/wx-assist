@@ -96,3 +96,4 @@ dist/
 .env -马东东登录态
 .gitignore
 wx-assist.exe
+wx-assist_no_rag.exe
