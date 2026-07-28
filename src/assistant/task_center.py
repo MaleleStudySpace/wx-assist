@@ -27,10 +27,11 @@ PRAGMA busy_timeout=5000;
 
 CREATE TABLE IF NOT EXISTS task_center (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_type       TEXT NOT NULL,           -- 'group_digest' | 'oa_digest'
+    task_type       TEXT NOT NULL,           -- 'group_digest' | 'oa_digest' | 'cron'
     source          TEXT NOT NULL,           -- 'scheduler' | 'manual'
     group_id        TEXT NOT NULL,
     group_name      TEXT NOT NULL,
+    config          TEXT DEFAULT '',         -- JSON: 执行时的完整任务配置快照
     status          TEXT NOT NULL DEFAULT 'pending',  -- pending | running | completed | failed
     progress        TEXT DEFAULT '',         -- semantic progress text
     result          TEXT DEFAULT '',         -- completion summary (truncated digest)
@@ -73,6 +74,13 @@ class TaskCenter:
         try:
             with sqlite3.connect(str(self._db_path)) as conn:
                 conn.executescript(BASE_SCHEMA)
+                # Schema migration: add config column if missing
+                cols = {row[1] for row in conn.execute("PRAGMA table_info(task_center)").fetchall()}
+                if "config" not in cols:
+                    try:
+                        conn.execute("ALTER TABLE task_center ADD COLUMN config TEXT DEFAULT ''")
+                    except sqlite3.OperationalError:
+                        pass
                 conn.commit()
             # Mark any leftover running tasks as failed (bot restarted)
             self._mark_stale_running_failed()
@@ -103,15 +111,16 @@ class TaskCenter:
     # ── Core CRUD ─────────────────────────────────────────────────────
 
     def create_task(self, task_type: str, source: str,
-                    group_id: str, group_name: str) -> Optional[int]:
+                    group_id: str, group_name: str,
+                    config: str = "") -> Optional[int]:
         """Insert a new task with status='pending'. Returns task ID or None on failure."""
         try:
             with self._get_conn() as conn:
                 cur = conn.execute(
                     "INSERT INTO task_center "
-                    "(task_type, source, group_id, group_name, status, progress, created_at) "
-                    "VALUES (?, ?, ?, ?, 'pending', '准备中', ?)",
-                    (task_type, source, group_id, group_name, _now()),
+                    "(task_type, source, group_id, group_name, config, status, progress, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, 'pending', '准备中', ?)",
+                    (task_type, source, group_id, group_name, config, _now()),
                 )
                 conn.commit()
                 tid = cur.lastrowid

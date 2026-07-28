@@ -125,10 +125,12 @@ class CronScheduler:
     def delete_job(self, job_id: str) -> bool:
         with self._lock:
             before = len(self._jobs)
+            deleted_job = next((j for j in self._jobs if j.get("id") == job_id), None)
             self._jobs = [j for j in self._jobs if j.get("id") != job_id]
             if len(self._jobs) < before:
                 _save_jobs(self._jobs)
-                logger.info("[CRON] 删除: %s", job_id)
+                name = deleted_job.get("name") if deleted_job else "unknown"
+                logger.info("[CRON] 删除: %s (%s)", name, job_id)
                 return True
         return False
 
@@ -187,8 +189,16 @@ class CronScheduler:
         tid = None
         if self._task_center:
             try:
+                import json
+                job_config = json.dumps({
+                    "skill": job.get("skill"),
+                    "cron": job.get("cron"),
+                    "args": job.get("args"),
+                    "push": job.get("push"),
+                    "chat_id": job.get("chat_id", ""),
+                }, ensure_ascii=False)
                 tid = self._task_center.create_task(
-                    "cron", "scheduler", job_id, job_name)
+                    "cron", "scheduler", job_id, job_name, config=job_config)
                 if tid:
                     self._task_center.update_task(
                         tid, status="running", progress="执行中")

@@ -205,6 +205,44 @@ function KeywordAlertCard({ onTabChange }) {
   )
 }
 
+/* ── Mini stats badge for the timer card header ─── */
+function DashboardTaskStats({ url, label }) {
+  const [data, setData] = useState(null)
+
+  useEffect(() => {
+    fetch(url)
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          const tasks = d.data || d.tasks || []
+          setData(tasks)
+        }
+      })
+      .catch(() => {})
+  }, [url])
+
+  if (!data) {
+    return <span className="text-xs text-text-muted">{label}: ...</span>
+  }
+
+  const total = data.length || data.total || 0
+  const enabled = data.filter ? data.filter(t => t.enabled !== false).length : 0
+  const hasErrors = data.filter ? data.filter(t => (t.error_count || 0) > 0).length : 0
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm font-bold text-text-main">{total}</span>
+      <span className="text-xs text-text-muted">{label}</span>
+      {enabled > 0 && (
+        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-brand-green/15 text-brand-green">{enabled} 启用</span>
+      )}
+      {hasErrors > 0 && (
+        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#d45656]/15 text-[#d45656]">{hasErrors} 失败</span>
+      )}
+    </div>
+  )
+}
+
 /* ── CronScheduler Task Card — skill 定时任务 ─── */
 function CronTasksCard() {
   const [tasks, setTasks] = useState(null)
@@ -223,51 +261,37 @@ function CronTasksCard() {
     </div>
   )
 
-  const enabled = tasks.filter(t => t.enabled !== false)
-  const hasErrors = tasks.filter(t => (t.error_count || 0) > 0)
-
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-text-main font-semibold">{tasks.length} 个任务</span>
-        {enabled.length > 0 && (
-          <span className="text-xs font-mono font-bold text-brand-green bg-brand-green/[0.08] px-1.5 py-px rounded">{enabled.length} 启用</span>
-        )}
-        {hasErrors.length > 0 && (
-          <span className="text-xs font-mono font-bold text-[#d45656] bg-[#d45656]/[0.08] px-1.5 py-px rounded">{hasErrors.length} 有失败</span>
-        )}
-      </div>
-
       <div className="space-y-1.5">
         {tasks.slice(0, 8).map((task, i) => (
           <div key={task.id || i}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl border border-border-main/30 border-l-2 border-l-brand-green/40 bg-bg-raised/40"
-          >
-            <Clock size={12} className="text-brand-green shrink-0" weight="fill" />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="text-sm text-text-main font-semibold truncate">{task.name || task.skill}</span>
-                <code className="text-[10px] font-mono text-text-muted bg-bg-raised px-1 py-px rounded">{task.skill}</code>
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl border border-border-main/30 border-l-2 border-l-brand-green/40 bg-bg-raised/40"
+            >
+              <Clock size={12} className="text-brand-green shrink-0" weight="fill" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm text-text-main font-semibold truncate">{task.name || task.skill}</span>
+                  <code className="text-[10px] font-mono text-text-muted bg-bg-raised px-1 py-px rounded">{task.skill}</code>
+                </div>
+                <div className="text-[11px] text-text-muted mt-0.5">
+                  <code className="font-mono">{task.cron?.replace(/\n/g, ' / ')}</code>
+                  {task.last_run && <> · 上次 {task.last_run.slice(11, 16)}</>}
+                </div>
               </div>
-              <div className="text-[11px] text-text-muted mt-0.5">
-                <code className="font-mono">{task.cron?.replace(/\n/g, ' / ')}</code>
-                {task.last_run && <> · 上次 {task.last_run.slice(11, 16)}</>}
+              <div className="flex items-center gap-1.5 shrink-0">
+                {(task.error_count || 0) > 0 && (
+                  <span className="text-[10px] font-mono text-[#d45656]">{task.error_count}❌</span>
+                )}
+                <span className={`w-1.5 h-1.5 rounded-full ${task.enabled !== false ? 'bg-brand-green' : 'bg-text-muted/30'}`} />
               </div>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {(task.error_count || 0) > 0 && (
-                <span className="text-[10px] font-mono text-[#d45656]">{task.error_count}❌</span>
-              )}
-              <span className={`w-1.5 h-1.5 rounded-full ${task.enabled !== false ? 'bg-brand-green' : 'bg-text-muted/30'}`} />
-            </div>
-          </div>
-        ))}
+          ))}
+        </div>
+        {tasks.length > 8 && (
+          <p className="text-xs text-text-muted/60 text-center">还有 {tasks.length - 8} 个任务...</p>
+        )}
       </div>
-
-      {tasks.length > 8 && (
-        <p className="text-xs text-text-muted/60 text-center">还有 {tasks.length - 8} 个任务...</p>
-      )}
-    </div>
   )
 }
 function ScheduledTasksCard() {
@@ -287,27 +311,11 @@ function ScheduledTasksCard() {
     </div>
   )
 
-  const enabledCount = data.tasks.filter(t => t.enabled).length
-
   return (
-    <div className="space-y-3">
-      {/* Summary row */}
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-text-main font-semibold">{data.total} 个任务</span>
-        {enabledCount > 0 && (
-          <span className="text-xs font-mono font-bold text-brand-green bg-brand-green/[0.08] px-1.5 py-px rounded">{enabledCount} 启用</span>
-        )}
-        {data.total - enabledCount > 0 && (
-          <span className="text-xs font-mono text-text-muted bg-bg-raised px-1.5 py-px rounded">{data.total - enabledCount} 禁用</span>
-        )}
-      </div>
-
-      {/* Vertical scrollable list */}
-      <div className="space-y-1.5">
-        {data.tasks.map((task, i) => (
-          <TaskRow key={i} task={task} index={i} />
-        ))}
-      </div>
+    <div className="space-y-1.5">
+      {data.tasks.map((task, i) => (
+        <TaskRow key={i} task={task} index={i} />
+      ))}
     </div>
   )
 }
@@ -593,6 +601,12 @@ export default function Dashboard({ status, onTabChange }) {
             <h3 className="text-[14px] font-semibold text-text-main">定时任务</h3>
           </div>
           <div className="px-6 pb-4 overflow-y-auto scrollbar-thin space-y-4">
+            {/* 统计栏 */}
+            <div className="flex items-center gap-4 px-4 py-3 bg-bg-raised/60 rounded-xl flex-wrap">
+              <DashboardTaskStats url={`${API_BASE}/api/scheduled-tasks`} label="摘要任务" />
+              <DashboardTaskStats url={`${API_BASE}/api/scheduler/tasks`} label="Skill 定时任务" />
+            </div>
+
             {/* OA/Digest 定时任务 */}
             <ScheduledTasksCard />
 

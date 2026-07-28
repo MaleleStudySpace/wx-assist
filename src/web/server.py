@@ -1125,7 +1125,7 @@ def _handle_ws_upgrade(headers, conn):
         "Connection: Upgrade\r\n"
         f"Sec-WebSocket-Accept: {accept}\r\n\r\n".encode()
     )
-    logger.info("WS upgrade accepted")
+    logger.info("WebSocket 连接已建立: %s", conn.getpeername())
     return True
 
 
@@ -1343,7 +1343,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          "/api/ilink/bind",
                          "/api/ilink/unbind",
                          "/api/ilink/test-push",
-                         "/api/wechat-data-dir/detect") or (
+                         "/api/wechat-data-dir/detect",
+                         "/api/agent/test",
+                         "/api/skills/sample") or (
                              self.path.startswith("/api/assistant/notifications/")
                              and (self.path.endswith("/ack") or self.path.endswith("/ignore"))
                          ) or (
@@ -1475,6 +1477,26 @@ class _UIHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/stop":
             _stop_bot()
             self.send_json({"ok": True})
+            return
+
+        # ── API: Agent 本地测试（不走 iLink）─────────────────────────
+        if self.path == "/api/agent/test" and self.command == "POST":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length)) if length else {}
+                message = body.get("message", "").strip()
+                if not message:
+                    self.send_json({"ok": False, "error": "message 不能为空"})
+                    return
+                if _agent_engine is None:
+                    self.send_json({"ok": False, "error": "Agent 引擎未初始化"})
+                    return
+                # 同步执行，不走 iLink 推送
+                result = _agent_engine.run(message)
+                self.send_json({"ok": True, "result": result})
+            except Exception as e:
+                logger.warning("[AGENT-TEST] 执行失败: %s", e)
+                self.send_json({"ok": False, "error": str(e)})
             return
 
         # ── API: Load config ───────────────────────────────────────────

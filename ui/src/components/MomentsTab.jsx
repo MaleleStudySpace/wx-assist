@@ -24,7 +24,7 @@ function SnsPostCard({ post, avatarCache }) {
   return (
     <div className="border border-border-main rounded-xl overflow-hidden bg-bg-card hover:border-text-muted/20 transition-colors">
       <div
-        className="p-4 cursor-pointer"
+        className="p-5 cursor-pointer"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="flex items-start gap-3">
@@ -46,9 +46,9 @@ function SnsPostCard({ post, avatarCache }) {
               <span className="text-sm font-medium text-text-main">
                 {post.nickname || post.username || '未知用户'}
               </span>
-              <span className="text-xs text-text-muted font-mono">{timeStr}</span>
+              <span className="text-sm text-text-muted font-mono">{timeStr}</span>
             </div>
-            <p className="text-xs text-text-muted mt-1 leading-relaxed whitespace-pre-wrap">
+            <p className="text-sm text-text-secondary mt-1.5 leading-relaxed whitespace-pre-wrap">
               {expanded ? post.content : contentPreview}
               {!expanded && (post.content || '').length > 100 && '...'}
             </p>
@@ -107,22 +107,22 @@ function SnsPostCard({ post, avatarCache }) {
             )}
             <div className="flex items-center gap-3 mt-2">
               {post.like_count > 0 && (
-                <span className="text-xs text-text-muted flex items-center gap-1">
+                <span className="text-sm text-text-muted flex items-center gap-1.5">
                   <Heart size={10} weight="fill" className="text-red-400" /> {post.like_count}
                 </span>
               )}
               {post.comment_count > 0 && (
-                <span className="text-xs text-text-muted flex items-center gap-1">
+                <span className="text-sm text-text-muted flex items-center gap-1.5">
                   <ChatCircle size={10} /> {post.comment_count}
                 </span>
               )}
               {hasMedia && (
-                <span className="text-xs text-text-muted flex items-center gap-1">
+                <span className="text-sm text-text-muted flex items-center gap-1.5">
                   <Eye size={10} /> {post.media_list.length}张
                 </span>
               )}
               {hasLocation && (
-                <span className="text-xs text-text-muted flex items-center gap-1">
+                <span className="text-sm text-text-muted flex items-center gap-1.5">
                   <MapPin size={10} /> {post.location}
                 </span>
               )}

@@ -5322,6 +5322,19 @@ def handle_skill_list(params, config):
     return {"ok": True, "data": eng.list_skills()}
 
 
+def handle_skill_create_sample(params, config):
+    """POST /api/skills/sample — 创建两个示例 skill"""
+    eng = _get_skill_engine()
+    if not eng:
+        return {"ok": False, "error": "Skill 引擎未就绪"}
+    try:
+        created = eng.create_sample_skills()
+        return {"ok": True, "data": created}
+    except Exception as e:
+        logger.warning("[API] /api/skills/sample 失败: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
 # ── API Router ─────────────────────────────────────────────────────────
 
 def handle_api_request(path: str, params: dict, config: AssistantConfig, body: dict = None):
@@ -5433,6 +5446,11 @@ def handle_api_request(path: str, params: dict, config: AssistantConfig, body: d
 
     # ── Skill ─────────────────────────────────────────────────────────
     if path == "/api/skills":
+        _sample = params.get("sample")
+        _method = params.get("_method")
+        if _sample or _method == "POST":
+            logger.info("[API] Creating sample skills (sample=%s, method=%s)", _sample, _method)
+            return handle_skill_create_sample(params, config)
         return handle_skill_list(params, config)
 
     # ── 推送记录 ─────────────────────────────────────────────────────────

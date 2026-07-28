@@ -503,7 +503,9 @@ class ToolExecutor:
                              "周日=0。支持 */15(步进)、1-5(范围)、1,3,5(列表)、多行(多个触发时间)。"
                              "例：'0 8 * * *'=每天8点，'0 9 * * 1-5'=工作日9点。"},
                     "args": {"type": "object",
-                             "description": "传给 skill 的参数（字典），可选"},
+                             "description": "传给 skill 的参数（字典），可选。"
+                                            "键名必须匹配 skill 定义中的参数名，"
+                                            "先用 list_skills 查看各 skill 的参数定义"},
                     "push_target": {"type": "string", "enum": ["ilink", ""],
                                     "description": "推送方式，ilink=推送到微信"},
                 },
@@ -1357,18 +1359,48 @@ class ToolExecutor:
             name="execute_skill",
             description="立即执行一个 skill，并返回结果。"
                        "skill 可执行脚本或 AI 任务。"
-                       "先用 list_skills 查看可用 skill。该操作需要用户确认。",
+                       "先用 list_skills 查看可用 skill 和它的参数名和类型。",
             parameters={
                 "type": "object",
                 "properties": {
                     "name": {"type": "string",
                              "description": "skill 名称"},
                     "args": {"type": "object",
-                             "description": "参数（字典），可选"},
+                             "description": "参数字典，键名必须匹配 skill 定义中的参数名。"
+                                            "先用 list_skills 查看各 skill 的参数定义"},
                 },
                 "required": ["name"],
             },
             handler=self._handle_execute_skill,
+        )
+
+        r.register(
+            name="create_skill",
+            description="创建 ai 类型的 skill（技能）。"
+                       "用户说'创建一个每天早报的 skill'、'帮我写个定时的 skill' 时调用。"
+                       "该操作需要用户确认。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "skill 名称，英文，字母数字下划线 2-32 字符",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "描述这个 skill 做什么",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "AI 执行时的指令，写清楚具体步骤",
+                    },
+                    "args_schema": {
+                        "type": "object",
+                        "description": "参数定义（可选），如 {\"city\": {\"type\": \"string\", \"description\": \"城市名\"}}",
+                    },
+                },
+                "required": ["name", "description", "prompt"],
+            },
             requires_confirm=True,
         )
 
@@ -1382,10 +1414,18 @@ class ToolExecutor:
             return "暂无可用 skill"
         lines = [f"📋 Skill ({len(skills)} 个):"]
         for s in skills:
-            lines.append(
-                f"  - {s.get('name', '?')}: "
-                f"{s.get('description', '')[:60]}"
-            )
+            name = s.get("name", "?")
+            desc = s.get("description", "")[:60]
+            args = s.get("args", {})
+            if args:
+                arg_infos = ", ".join(
+                    f"{k}({v.get('type', '?')})"
+                    for k, v in args.items()
+                )
+                lines.append(f"  - {name}: {desc}")
+                lines.append(f"    参数: {arg_infos}")
+            else:
+                lines.append(f"  - {name}: {desc}")
         return "\n".join(lines)
 
     def _handle_execute_skill(self, name: str, args: dict = None) -> str:
@@ -1401,3 +1441,18 @@ class ToolExecutor:
         except Exception as e:
             logger.warning("[SkillTool] execute_skill 失败: name=%s — %s", name, e)
             return f"❌ Skill 执行失败: {e}"
+
+    def _handle_create_skill(self, name: str, description: str, prompt: str,
+                              args_schema: dict = None) -> str:
+        """create_skill 工具的处理方法。"""
+        logger.info("[SkillTool] create_skill — name=%s description=%s",
+                    name, description[:50])
+        if not self._skill_engine:
+            logger.warning("[SkillTool] create_skill 失败: skill_engine 未就绪")
+            return "Skill 系统未就绪"
+        try:
+            result = self._skill_engine.create_skill(name, description, prompt, args_schema)
+            return f"✅ Skill '{name}' 创建成功！路径: {result['path']}"
+        except Exception as e:
+            logger.warning("[SkillTool] create_skill 失败: name=%s — %s", name, e)
+            return f"❌ 创建 Skill 失败: {e}"

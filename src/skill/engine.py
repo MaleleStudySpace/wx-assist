@@ -112,7 +112,7 @@ class SkillEngine:
 
         if skill_type == "script":
             return self._execute_script(meta, args)
-        elif skill_type == "agent":
+        elif skill_type in ("agent", "ai"):
             return self._execute_agent(meta, args)
         else:
             raise SkillError(f"不支持的 skill 类型: {skill_type}")
@@ -194,3 +194,174 @@ class SkillEngine:
 
         logger.info("[SKILL] exec agent: %s", meta.get("name"))
         return self._agent_engine.run_once(prompt, system_override=system)
+
+    def _build_skill_dir(self, name: str) -> Path:
+        """创建 skill 目录并返回路径。"""
+        d = SKILL_DIR / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "scripts").mkdir(exist_ok=True)
+        return d
+
+    def _write_skill_md(self, path: Path, meta: dict):
+        """写 SKILL.md（YAML frontmatter）。"""
+        lines = ["---"]
+        for k, v in meta.items():
+            if k.startswith("_") or v is None:
+                continue
+            if isinstance(v, dict):
+                lines.append(f"{k}:")
+                for sk, sv in v.items():
+                    lines.append(f"  {sk}: {json.dumps(sv, ensure_ascii=False)}")
+            else:
+                lines.append(f"{k}: {json.dumps(v, ensure_ascii=False)}")
+        lines.append("---")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def create_sample_skills(self) -> list[dict]:
+        """创建两个示例 skill：weather（script）+ skill-creator（ai）。
+
+        Returns:
+            list[dict]: 创建的 skill 元数据列表。
+        """
+        created = []
+
+        # ── 1. weather (script) ──────────────────────────────────────
+        weather_meta = {
+            "name": "weather",
+            "type": "script",
+            "description": "天气预报 — 查询指定城市的天气情况",
+            "command": "weather.py",
+            "timeout": 15,
+            "args": {
+                "location": {
+                    "type": "string",
+                    "required": True,
+                    "description": "城市名，如 北京、上海、Tokyo",
+                },
+                "days": {
+                    "type": "integer",
+                    "default": 2,
+                    "description": "预报天数（1-3）",
+                },
+            },
+        }
+        skill_dir = self._build_skill_dir("weather")
+        self._write_skill_md(skill_dir / "SKILL.md", weather_meta)
+
+        # 写 scripts/weather.py
+        weather_py = r'''"""天气查询 — wttr.in，零配置免费，无需 API key。"""
+import json, sys, urllib.request
+
+def main():
+    args = _parse_args()
+    location = args.get("location", "北京")
+    days = min(max(int(args.get("days", 2)), 1), 3)
+
+    url = f"https://wttr.in/{urllib.request.quote(location)}?format=j1&lang=zh"
+    req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        print("[SILENT]")
+        sys.exit(0)
+
+    current = data["current_condition"][0]
+    output = [
+        f"\U0001f324 {location} 天气",
+        "━" * 20,
+        f"现在：{current['temp_C']}°C（体感 {current['FeelsLikeC']}°C）",
+        f"状况：{current['lang_zh'][0]['value']}",
+        f"湿度：{current['humidity']}% · 风速：{current['windspeedKmph']}km/h",
+    ]
+
+    for day in data["weather"][:days]:
+        date = day["date"]
+        hi = day["maxtempC"]
+        lo = day["mintempC"]
+        desc = day["hourly"][0]["lang_zh"][0]["value"]
+        output.append(f"\n{date}：{desc} {lo}~{hi}°C")
+
+    print("\n".join(output))
+
+def _parse_args():
+    args = {}
+    i = 1
+    while i < len(sys.argv):
+        if sys.argv[i].startswith("--"):
+            key = sys.argv[i][2:]
+            val = sys.argv[i + 1] if i + 1 < len(sys.argv) else True
+            args[key] = val
+            i += 2
+        else:
+            i += 1
+    return args
+
+if __name__ == "__main__":
+    main()
+'''
+        (skill_dir / "scripts" / "weather.py").write_text(weather_py, encoding="utf-8")
+        created.append({"name": "weather", "type": "script", "description": weather_meta["description"]})
+        logger.info("[SKILL] 示例 weather 已创建")
+
+        # ── 2. skill-creator (ai) ───────────────────────────────────
+        creator_meta = {
+            "name": "skill-creator",
+            "type": "ai",
+            "description": "技能生成器 — 对话引导你创建新的 ai 类型 skill",
+            "timeout": 120,
+            "args": {
+                "idea": {
+                    "type": "string",
+                    "required": True,
+                    "description": "描述你想创建的 skill 功能，越详细越好",
+                },
+            },
+            "prompt": (
+                "你是技能创造助手。用户会告诉你他想要一个什么样的 skill。\n"
+                "你的任务：\n"
+                "1. 分析用户需求，帮他设计合理的 skill 名称、描述、参数\n"
+                "2. 把设计好的内容通过 create_skill 工具创建出来\n"
+                "3. 创建成功后告诉用户 skill 已可用，可以去配置定时任务\n\n"
+                "create_skill 工具的参数：\n"
+                "- name: skill名称（字母数字下划线，2-32字符）\n"
+                "- description: 描述\n"
+                "- prompt: 执行时 AI 要遵循的指令\n"
+                "- args: 参数定义（可选）\n\n"
+                "注意：\n"
+                "- name 用英文，如 daily-news\n"
+                "- prompt 要写清楚 AI 执行时的具体步骤\n"
+                "- 只创建 type: ai 的 skill"
+            ),
+        }
+        skill_dir2 = self._build_skill_dir("skill-creator")
+        self._write_skill_md(skill_dir2 / "SKILL.md", creator_meta)
+        created.append({"name": "skill-creator", "type": "ai", "description": creator_meta["description"]})
+        logger.info("[SKILL] 示例 skill-creator 已创建")
+
+        return created
+
+    def create_skill(self, name: str, description: str, prompt: str,
+                     args_schema: dict = None) -> dict:
+        """创建 ai 类型的 skill（供 create_skill 工具调用）。"""
+        import re
+        if not re.match(r'^[a-z0-9][a-z0-9_-]{1,31}$', name):
+            raise SkillError(f"skill 名 '{name}' 非法：只能包含字母数字下划线，2-32 字符")
+
+        skill_dir = SKILL_DIR / name
+        if (skill_dir / "SKILL.md").exists():
+            raise SkillError(f"Skill '{name}' 已存在")
+
+        meta = {
+            "name": name,
+            "type": "ai",
+            "description": description,
+            "timeout": 60,
+            "args": args_schema or {},
+            "prompt": prompt,
+        }
+        self._write_skill_md(skill_dir / "SKILL.md", meta)
+        logger.info("[SKILL] create_skill: %s", name)
+        return {"name": name, "type": "ai", "path": str(skill_dir / "SKILL.md")}

@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Clock, Play, Trash, Plus, Pencil, Pause, Eye, EyeSlash, X, CaretDown, CaretUp, ChatCircleText, Spinner } from '@phosphor-icons/react'
 import { Toggle, Input, API_BASE } from './SharedComponents'
 import { CRON_PRESETS, validateCronExpr, getNextTriggers, formatLocalTime } from '../utils/cron'
+import SkillLibrary from './SkillLibrary'
 
 // ── Status helpers ─────────────────────────────────────────────────
 const STATUS_STYLES = {
@@ -58,13 +59,13 @@ function TaskCard({ task, skills, onToggle, onDelete, onRunNow, onEdit, onCopy, 
             </code>
             {skill && <span className="ml-1">· {skill.description?.slice(0, 40)}</span>}
             <span className="ml-1">·</span>
-            <code className="font-mono text-[11px] text-text-secondary">
+            <code className="font-mono text-sm text-text-secondary">
               {task.cron?.replace(/\n/g, ' / ')}
             </code>
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="hidden sm:inline text-[11px] text-text-muted font-mono">
+          <span className="hidden sm:inline text-sm text-text-muted font-mono">
             执行 <strong className="text-text-main">{task.run_count || 0}</strong>
             {' · '}失败 <strong className={(task.error_count || 0) > 0 ? 'text-[#d45656]' : 'text-text-main'}>
               {task.error_count || 0}
@@ -109,37 +110,37 @@ function TaskCard({ task, skills, onToggle, onDelete, onRunNow, onEdit, onCopy, 
             transition={{ duration: 0.2 }}
             className="overflow-hidden border-t border-border-main"
           >
-            <div className="p-4 space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
+            <div className="p-4 space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <div className="text-text-muted mb-1">任务 ID</div>
+                  <div className="text-text-muted mb-1 text-xs text-xs">任务 ID</div>
                   <code className="font-mono text-text-secondary">{task.id}</code>
                 </div>
                 <div>
-                  <div className="text-text-muted mb-1">创建时间</div>
+                  <div className="text-text-muted mb-1 text-xs text-xs">创建时间</div>
                   <span className="text-text-secondary">{task.created_at || '—'}</span>
                 </div>
                 <div>
-                  <div className="text-text-muted mb-1">推送目标</div>
+                  <div className="text-text-muted mb-1 text-xs text-xs">推送目标</div>
                   <span className="text-text-secondary">
                     {task.push?.enabled === false ? '不推送' : (task.push?.target || 'iLink')}
                   </span>
                 </div>
                 <div>
-                  <div className="text-text-muted mb-1">上次执行</div>
+                  <div className="text-text-muted mb-1 text-xs text-xs">上次执行</div>
                   <span className="text-text-secondary">{task.last_run || '—'}</span>
                 </div>
               </div>
 
               <div>
-                <div className="text-text-muted mb-1">Cron 表达式</div>
+                <div className="text-text-muted mb-1 text-xs text-xs">Cron 表达式</div>
                 <pre className="bg-bg-raised/60 border border-border-main rounded-lg p-2 text-xs font-mono text-brand-green/90 whitespace-pre-wrap">
                   {task.cron}
                 </pre>
               </div>
 
               <div>
-                <div className="text-text-muted mb-1">参数 (args)</div>
+                <div className="text-text-muted mb-1 text-xs text-xs">参数 (args)</div>
                 <ArgsDisplay args={task.args} />
               </div>
 
@@ -331,14 +332,14 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
         {/* Row: 名称 + Skill */}
         <div className="flex gap-3">
           <div className="flex-1 min-w-0">
-            <label className="block text-xs text-text-muted mb-1.5">
+            <label className="block text-xs text-text-muted mb-1 text-xs.5">
               任务名称 <span className="text-[#d45656]">*</span>
             </label>
             <Input value={name} onChange={setName} placeholder="例：36氪早报" />
             {nameError && <p className="text-xs text-[#d45656] mt-1">{nameError}</p>}
           </div>
           <div className="flex-1 min-w-0">
-            <label className="block text-xs text-text-muted mb-1.5">
+            <label className="block text-xs text-text-muted mb-1 text-xs.5">
               执行 Skill <span className="text-[#d45656]">*</span>
             </label>
             <select
@@ -371,12 +372,12 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
         {/* 参数参考表 + JSON 文本域 */}
         {selectedSkill?.args && Object.keys(selectedSkill.args).length > 0 && (
           <div>
-            <label className="block text-xs text-text-muted mb-1.5">参数说明</label>
+            <label className="block text-xs text-text-muted mb-1 text-xs.5">参数说明</label>
             <ArgsRefTable />
           </div>
         )}
         <div>
-          <label className="block text-xs text-text-muted mb-1">
+          <label className="block text-xs text-text-muted mb-1 text-xs">
             参数值 <span className="text-text-muted/60 font-normal">· JSON</span>
           </label>
           <textarea
@@ -457,10 +458,10 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
 
         {/* 投递设置 */}
         <div>
-          <label className="block text-xs text-text-muted mb-1">投递方式</label>
+          <label className="block text-xs text-text-muted mb-1 text-xs">投递方式</label>
           <div className="flex items-center justify-between py-2.5">
             <div className="flex flex-col gap-0.5">
-              <span className="text-xs text-text-main font-medium">推送到微信</span>
+              <span className="text-sm text-text-main font-medium">推送到微信</span>
               <span className="text-[11px] text-text-muted/60">执行结果通过 iLink 推送</span>
             </div>
             <Toggle enabled={pushEnabled} onChange={setPushEnabled} />
@@ -468,7 +469,7 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
           <hr className="border-border-main my-0" />
           <div className="flex items-center justify-between py-2.5">
             <div className="flex flex-col gap-0.5">
-              <span className="text-xs text-text-main font-medium">{initial?.id ? '启用' : '创建后立即启用'}</span>
+              <span className="text-sm text-text-main font-medium">{initial?.id ? '启用' : '创建后立即启用'}</span>
               <span className="text-[11px] text-text-muted/60">暂停时不会触发调度</span>
             </div>
             <Toggle enabled={enabled} onChange={setEnabled} />
@@ -496,204 +497,7 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
   )
 }
 
-// ── Skill library ──────────────────────────────────────────────────
-function SkillLibrary({ skills }) {
-  const [selectedSkill, setSelectedSkill] = useState(skills[0]?.name || '')
-  const [search, setSearch] = useState('')
-
-  const filteredSkills = useMemo(() => {
-    if (!search.trim()) return skills
-    const q = search.toLowerCase()
-    return skills.filter(s =>
-      s.name.toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q)
-    )
-  }, [skills, search])
-
-  const selected = useMemo(
-    () => skills.find(s => s.name === selectedSkill),
-    [skills, selectedSkill]
-  )
-
-  useEffect(() => {
-    if (!selectedSkill && skills[0]) setSelectedSkill(skills[0].name)
-    if (selected && !skills.find(s => s.name === selectedSkill)) {
-      setSelectedSkill(skills[0]?.name || '')
-    }
-  }, [skills])
-
-  if (!skills.length) {
-    return (
-      <div className="text-center py-12">
-        <div className="text-text-muted text-sm">暂无可用 skill</div>
-        <p className="text-xs text-text-muted/70 mt-2">
-          在 <code className="font-mono px-1.5 py-0.5 bg-bg-raised rounded">data/skills/</code> 目录下创建 SKILL.md
-        </p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-3">
-      {/* 左侧列表 */}
-      <div className="border border-border-main rounded-xl bg-bg-card overflow-hidden">
-        <div className="p-2 border-b border-border-main">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="🔍 搜索 skill..."
-            className="w-full bg-bg-raised border border-border-main rounded-full px-3 py-1.5 text-xs text-text-main
-              focus:outline-none focus:border-brand-green"
-          />
-        </div>
-        <div className="max-h-[500px] overflow-y-auto p-2">
-          {filteredSkills.map(s => (
-            <button
-              key={s.name}
-              onClick={() => setSelectedSkill(s.name)}
-              className={`w-full text-left p-2.5 rounded-lg mb-1 transition-colors cursor-pointer
-                ${selectedSkill === s.name
-                  ? 'bg-brand-green-light/15 border border-brand-green/30'
-                  : 'hover:bg-bg-raised border border-transparent'
-                }`}
-            >
-              <div className={`text-[13px] font-medium ${selectedSkill === s.name ? 'text-brand-green' : 'text-text-main'}`}>
-                {s.name}
-                <span className={`ml-1.5 inline-block text-[10px] px-1.5 py-0.5 rounded font-medium
-                  ${s.type === 'script' ? 'bg-brand-green/15 text-brand-green' : 'bg-[#a78bfa]/20 text-[#a78bfa]'}`}>
-                  {s.type}
-                </span>
-              </div>
-              {s.description && (
-                <div className="text-[11px] text-text-muted mt-1 line-clamp-2">
-                  {s.description}
-                </div>
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* 右侧详情 */}
-      <div className="border border-border-main rounded-xl bg-bg-card p-5">
-        {selected ? (
-          <>
-            <div className="flex items-center gap-2 mb-4">
-              <h3 className="text-base font-semibold text-text-main">{selected.name}</h3>
-              <span className={`text-[10px] px-2 py-0.5 rounded font-medium
-                ${selected.type === 'script'
-                  ? 'bg-brand-green/15 text-brand-green'
-                  : 'bg-[#a78bfa]/20 text-[#a78bfa]'}`}>
-                {selected.type}
-              </span>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              {selected.description && (
-                <div>
-                  <div className="text-text-muted mb-1">描述</div>
-                  <div className="text-text-secondary">{selected.description}</div>
-                </div>
-              )}
-
-              {selected.args && Object.keys(selected.args).length > 0 && (
-                <div>
-                  <div className="text-text-muted mb-1">参数 schema</div>
-                  <div className="bg-bg-raised/60 border border-border-main rounded-lg p-2.5 font-mono">
-                    {Object.entries(selected.args).map(([name, def]) => (
-                      <div key={name} className="py-1">
-                        <span className="text-brand-green/90">{name}</span>
-                        <span className="text-text-muted ml-2">{def.type || 'any'}</span>
-                        {def.required && <span className="text-[#d45656] ml-1 text-[10px]">必填</span>}
-                        {def.default !== undefined && (
-                          <span className="text-text-muted ml-2 text-[10px]">= {JSON.stringify(def.default)}</span>
-                        )}
-                        {def.description && (
-                          <div className="text-text-muted/70 text-[11px] mt-0.5">{def.description}</div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <div className="text-text-muted mb-1">路径</div>
-                <code className="font-mono text-text-secondary">
-                  data/skills/{selected.name}/SKILL.md
-                </code>
-              </div>
-            </div>
-
-            {/* ── Skill 开发指南 ── */}
-            <hr className="border-border-main my-4" />
-            <details className="group cursor-pointer">
-              <summary className="text-xs font-semibold text-text-muted hover:text-text-main transition-colors select-none">
-                 📖 Skill 开发指南
-              </summary>
-              <div className="mt-3 text-xs space-y-3 text-text-secondary leading-relaxed">
-                <p><strong className="text-text-main">Skill</strong> = 一个可执行的能力单元。放在 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised text-brand-green/90">data/skills/</code> 下，每项一个目录。</p>
-
-                <div>
-                  <p className="text-text-main font-medium mb-1">目录结构</p>
-                  <pre className="bg-bg-raised/60 border border-border-main rounded-lg p-2.5 font-mono text-[11px] leading-relaxed">
-data/skills/&#123;skill-name&#125;/
-├── SKILL.md        ← 元数据定义（YAML frontmatter + Markdown 说明）
-├── scripts/        ← script 类型的脚本目录
-└── examples/       ← 可选：使用示例
-                  </pre>
-                </div>
-
-                <div>
-                  <p className="text-text-main font-medium mb-1">SKILL.md 格式</p>
-                  <pre className="bg-bg-raised/60 border border-border-main rounded-lg p-2.5 font-mono text-[11px] leading-relaxed">
----
-name: my-skill           # 唯一标识，字母数字下划线
-type: script             # script(子进程) | agent(AI 执行)
-description: 做什么用的    # 简短描述
-command: myscript.py     # script 类型必填：可执行文件名
-timeout: 30              # 超时秒数（默认 30）
-args:
-  param1:
-    type: string         # string | integer | boolean
-    required: true
-    description: 参数说明
-  param2:
-    type: integer
-    default: 10
-    description: 可选参数
----
-# 更详细说明（Markdown）
-                  </pre>
-                </div>
-
-                <div>
-                  <p className="text-text-main font-medium mb-1">两种类型</p>
-                  <div className="bg-bg-raised/60 border border-border-main rounded-lg p-2.5 space-y-2">
-                    <div>
-                      <span className="inline-block px-1.5 py-0.5 rounded bg-brand-green/15 text-brand-green font-mono text-[10px] mr-1">script</span>
-                      执行 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised">scripts/</code> 下的脚本。脚本从 stdin 接收参数（<code className="font-mono px-1 py-0.5 rounded bg-bg-raised">--key value</code>），stdout 输出结果。<br />
-                      输出 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised text-[#d45656]">[SILENT]</code> 表示无新内容，跳过推送。
-                    </div>
-                    <div>
-                      <span className="inline-block px-1.5 py-0.5 rounded bg-[#a78bfa]/20 text-[#a78bfa] font-mono text-[10px] mr-1">agent</span>
-                      由 AI 根据 prompt 执行。SKILL.md 的 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised">prompt</code> 字段定义 AI 的行为指令。
-                    </div>
-                  </div>
-                </div>
-
-                <p className="text-text-muted/60 text-[11px]">创建后重启 bot 自动加载。<span className="text-text-secondary">CRUD 操作热更新，无需重启。</span></p>
-              </div>
-            </details>
-          </>
-        ) : (
-          <div className="text-center py-12 text-text-muted text-sm">
-            选择左侧 skill 查看详情
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+// ── Skill library (moved to SkillLibrary.jsx)
 
 // ── Execution history ──────────────────────────────────────────────
 function ExecutionHistory() {
@@ -765,7 +569,7 @@ function ExecutionHistory() {
             <button
               key={tab.id}
               onClick={() => setFilter(f => ({ ...f, status: tab.id }))}
-              className={`text-xs px-3 py-1.5 rounded-full transition-colors cursor-pointer
+              className={`text-sm px-4 py-2 rounded-lg transition-colors cursor-pointer
                 ${filter.status === tab.id
                   ? 'bg-brand-green/15 text-brand-green font-medium'
                   : 'bg-bg-raised text-text-muted hover:text-text-main'}`}
@@ -776,7 +580,7 @@ function ExecutionHistory() {
           <select
             value={filter.name}
             onChange={(e) => setFilter(f => ({ ...f, name: e.target.value }))}
-            className="bg-bg-raised border border-border-main rounded-full px-3 py-1.5 text-xs text-text-main
+            className="bg-bg-raised border border-border-main rounded-lg px-4 py-2.5 text-sm text-text-main
               focus:outline-none focus:border-brand-green cursor-pointer max-w-[200px]"
           >
             <option value="all">全部定时任务</option>
@@ -786,7 +590,7 @@ function ExecutionHistory() {
           </select>
           <button
             onClick={load}
-            className="text-xs px-3 py-1.5 rounded-full bg-bg-raised text-text-muted hover:text-text-main transition-colors cursor-pointer ml-auto"
+            className="text-sm px-4 py-2 rounded-lg bg-bg-raised text-text-muted hover:text-text-main transition-colors cursor-pointer ml-auto"
           >
             刷新
           </button>
@@ -797,7 +601,7 @@ function ExecutionHistory() {
             value={filter.search}
             onChange={(e) => setFilter(f => ({ ...f, search: e.target.value }))}
             placeholder="🔍 搜索执行结果（输出/错误信息）..."
-            className="w-full bg-bg-raised border border-border-main rounded-full px-3 py-1.5 text-xs text-text-main
+            className="w-full bg-bg-raised border border-border-main rounded-lg px-4 py-2.5 text-sm text-text-main
               focus:outline-none focus:border-brand-green"
           />
         </div>
@@ -813,10 +617,10 @@ function ExecutionHistory() {
         <div className="space-y-4">
           {grouped.map(([day, dayTasks]) => (
             <div key={day}>
-              <div className="text-xs font-semibold text-text-muted mb-2 pb-1.5 border-b border-border-main">
+              <div className="text-sm font-semibold text-text-main mb-3 pb-2 border-b border-border-main">
                 📅 {day}
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-3">
                 {dayTasks.map(t => {
                   const isFail = t.status === 'failed'
                   const snippet = t.error || t.result || t.progress || '(无输出)'
@@ -824,26 +628,33 @@ function ExecutionHistory() {
                     <div
                       key={t.id}
                       onClick={() => setDetail(t)}
-                      className="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-raised/40 hover:bg-bg-raised transition-colors text-xs cursor-pointer"
+                      className="border border-border-main rounded-xl px-4 py-4 bg-bg-card hover:border-border-strong transition-all cursor-pointer"
                     >
-                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isFail ? 'bg-[#d45656]' : 'bg-brand-green'}`} />
-                      <span className="font-mono text-text-muted w-16 flex-shrink-0">
-                        {t.created_at?.slice(11, 19) || '--:--:--'}
-                      </span>
-                      <span className="text-text-main flex-shrink-0 max-w-[120px] truncate">
-                        {t.group_name || 'task'}
-                      </span>
-                      <span className={`flex-1 truncate font-mono ${isFail ? 'text-[#d45656]' : 'text-text-secondary'}`}>
-                        {snippet.slice(0, 120)}
-                      </span>
-                      <span className="text-text-muted text-[10px] flex-shrink-0">
-                        {t.finished_at && t.created_at && (() => {
-                          try {
-                            const ms = new Date(t.finished_at) - new Date(t.created_at)
-                            return `${(ms / 1000).toFixed(1)}s`
-                          } catch { return '' }
-                        })()}
-                      </span>
+                      <div className="flex items-start gap-3">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 mt-1.5 ${isFail ? 'bg-[#d45656]' : 'bg-brand-green'}`}
+                          style={isFail ? {} : { boxShadow: '0 0 6px rgba(45,212,160,0.35)' }} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-sm font-semibold text-text-main truncate">{t.group_name || 'task'}</span>
+                              <span className="text-xs font-mono text-text-muted whitespace-nowrap bg-bg-raised/60 px-2 py-0.5 rounded">
+                                {t.created_at?.slice(11, 19) || '--:--:--'}
+                              </span>
+                            </div>
+                            <span className="text-xs text-text-muted font-mono whitespace-nowrap bg-bg-raised/60 px-2 py-0.5 rounded">
+                              {t.finished_at && t.created_at && (() => {
+                                try {
+                                  const ms = new Date(t.finished_at) - new Date(t.created_at)
+                                  return `${(ms / 1000).toFixed(1)}s`
+                                } catch { return '' }
+                              })()}
+                            </span>
+                          </div>
+                          <p className={`text-sm mt-2 leading-relaxed line-clamp-2 ${isFail ? 'text-[#d45656]' : 'text-text-secondary'}`}>
+                            {snippet.slice(0, 200)}
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   )
                 })}
@@ -873,7 +684,7 @@ function ExecutionHistory() {
               className="relative bg-bg-card border border-border-main rounded-xl shadow-xl w-[560px] max-w-full max-h-[85vh] flex flex-col"
             >
               {/* Header */}
-              <div className="flex items-center justify-between px-5 py-3.5 border-b border-border-main shrink-0">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-border-main shrink-0">
                 <h3 className="text-sm font-semibold text-text-main">
                   执行详情 · {detail.group_name || 'task'}
                 </h3>
@@ -884,16 +695,16 @@ function ExecutionHistory() {
               </div>
 
               {/* Body */}
-              <div className="px-5 py-4 overflow-y-auto space-y-4">
+              <div className="px-6 py-5 overflow-y-auto space-y-5">
                 {/* 元信息 4 宫格 */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-4">
                   {[
                     { label: '状态', val: detail.status === 'completed' ? '✅ 成功' : detail.status === 'failed' ? '❌ 失败' : '⏳ 运行中', cls: detail.status === 'failed' ? 'text-[#d45656]' : detail.status === 'completed' ? 'text-brand-green' : '' },
                     { label: '耗时', val: (() => { try { if (detail.finished_at && detail.created_at) return `${((new Date(detail.finished_at) - new Date(detail.created_at)) / 1000).toFixed(1)}s` } catch {} return '—' })() },
                     { label: '触发时间', val: detail.created_at ? detail.created_at.slice(11, 19) : '—' },
                     { label: '推送状态', val: detail.push_status === 'success' ? '✓ 已推送' : detail.push_status === 'failed' ? '✗ 推送失败' : '—', cls: detail.push_status === 'success' ? 'text-brand-green' : detail.push_status === 'failed' ? 'text-[#d45656]' : '' },
                   ].map((item, i) => (
-                    <div key={i} className="bg-bg-raised/60 rounded-lg px-3 py-2.5">
+                    <div key={i} className="bg-bg-raised/60 rounded-lg px-4 py-3">
                       <div className="text-[10px] font-medium text-text-muted/70 uppercase tracking-wider mb-0.5">{item.label}</div>
                       <div className={`text-sm font-medium ${item.cls || 'text-text-main'}`}>{item.val}</div>
                     </div>
@@ -902,8 +713,8 @@ function ExecutionHistory() {
 
                 {/* 任务配置 */}
                 <div>
-                  <div className="text-[11px] font-medium text-text-muted/70 uppercase tracking-wider mb-1">调用请求</div>
-                  <pre className="bg-bg-raised/60 border border-border-main rounded-lg p-3 text-xs font-mono text-text-secondary whitespace-pre-wrap leading-relaxed">
+                  <div className="text-xs font-semibold text-text-muted/80 uppercase tracking-wider mb-1.5">调用请求</div>
+                  <pre className="bg-bg-raised/60 border border-border-main rounded-lg p-4 text-sm font-mono text-text-secondary whitespace-pre-wrap leading-relaxed">
                     {detail.config ? (
                       (() => { try { return JSON.stringify(JSON.parse(detail.config), null, 2) } catch { return detail.config } })()
                     ) : (
@@ -914,7 +725,7 @@ function ExecutionHistory() {
 
                 {/* 执行结果 */}
                 <div>
-                  <div className="text-[11px] font-medium text-text-muted/70 uppercase tracking-wider mb-1">
+                  <div className="text-xs font-semibold text-text-muted/80 uppercase tracking-wider mb-1.5">
                     {detail.status === 'failed' ? '错误信息' : '执行结果'}
                   </div>
                   <pre className={`bg-bg-raised/60 border border-border-main rounded-lg p-3 text-xs font-mono whitespace-pre-wrap leading-relaxed max-h-[200px] overflow-y-auto ${
@@ -1164,7 +975,7 @@ export default function SchedulerPanel({ section = 'tasks', onSectionChange = ()
               <button
                 key={f.id}
                 onClick={() => setStatusFilter(f.id)}
-                className={`text-xs px-3 py-1.5 rounded-full transition-colors cursor-pointer
+                className={`text-sm px-4 py-2 rounded-lg transition-colors cursor-pointer
                   ${statusFilter === f.id
                     ? 'bg-brand-green/15 text-brand-green font-medium'
                     : 'bg-bg-raised text-text-muted hover:text-text-main'}`}
@@ -1220,7 +1031,7 @@ export default function SchedulerPanel({ section = 'tasks', onSectionChange = ()
       )}
 
       {/* Skills Tab */}
-      {section === 'skills' && <SkillLibrary skills={skills} />}
+      {section === 'skills' && <SkillLibrary skills={skills} onRefresh={loadAll} />}
 
       {/* History Section */}
       {section === 'history' && <ExecutionHistory />}

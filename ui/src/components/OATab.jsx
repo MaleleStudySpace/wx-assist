@@ -139,7 +139,7 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
     <div ref={cardRef} className={`border rounded-xl overflow-hidden bg-bg-card transition-colors
       ${isRunning ? 'border-brand-green/40 shadow-[0_0_12px_rgba(24,226,153,0.08)]' : 'border-border-main hover:border-text-muted/20'}`}>
       <div
-        className="flex items-center gap-3 p-4 cursor-pointer hover:bg-bg-raised/50 transition-colors"
+        className="flex items-center gap-3 p-5 cursor-pointer hover:bg-bg-raised/50 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="w-9 h-9 rounded-lg bg-brand-green-light/30 flex items-center justify-center text-brand-green">
@@ -148,18 +148,18 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-text-main">{group.name}</p>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-xs text-text-muted">{accountEntries.length} 个公众号</span>
-            <span className="text-xs text-text-muted">·</span>
-            <span className="text-xs text-text-muted">{scheduleLabel}</span>
+            <span className="text-sm text-text-muted">{accountEntries.length} 个公众号</span>
+            <span className="text-sm text-text-muted">·</span>
+            <span className="text-sm text-text-muted">{scheduleLabel}</span>
             {templateInfo && (
               <>
-                <span className="text-xs text-text-muted">·</span>
+                <span className="text-sm text-text-muted">·</span>
                 <span className="text-xs text-brand-green/70">{templateInfo.label}</span>
               </>
             )}
             {group.push_target === 'ilink' && (
               <>
-                <span className="text-xs text-text-muted">·</span>
+                <span className="text-sm text-text-muted">·</span>
                 <span className="text-xs text-status-success flex items-center gap-0.5">
                   <Bell size={10} weight="fill" />推送
                 </span>
@@ -223,7 +223,7 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
             {digest && digest.text && (
               <div className="mt-3 pt-3 border-t border-border-main">
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs text-text-muted font-medium">最近摘要</p>
+                  <p className="text-sm text-text-muted font-medium">最近摘要</p>
                   <button
                     onClick={() => setShowDigest(!showDigest)}
                     className="text-xs text-brand-green hover:underline cursor-pointer"
@@ -232,19 +232,19 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
                   </button>
                 </div>
                 {showDigest && (
-                  <div className="p-3 rounded-lg bg-bg-raised border border-border-main text-xs text-text-main leading-relaxed whitespace-pre-wrap max-h-64 overflow-y-auto">
+                  <div className="p-3 rounded-lg bg-bg-raised border border-border-main text-sm text-text-main leading-relaxed whitespace-pre-wrap max-h-64 overflow-y-auto">
                     {digest.text}
                   </div>
                 )}
                 {!showDigest && (
-                  <p className="text-xs text-text-muted line-clamp-2">{digest.text}</p>
+                  <p className="text-sm text-text-muted line-clamp-2">{digest.text}</p>
                 )}
               </div>
             )}
 
             {accountEntries.length > 0 && (
               <div className="mt-3 pt-3 border-t border-border-main">
-                <p className="text-xs text-text-muted mb-2">包含公众号</p>
+                <p className="text-sm text-text-muted mb-2">包含公众号</p>
                 <div className="flex flex-wrap gap-1.5">
                   {accountEntries.map((entry, i) => (
                     <button
@@ -353,7 +353,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
 
       {/* Row 1: Name */}
       <div>
-        <label className="block text-xs text-text-muted mb-1.5">
+        <label className="block text-sm text-text-muted mb-1.5">
           分组名称 <span className="text-brand-green">*</span>
         </label>
         <Input value={name} onChange={setName} placeholder="例如：科技资讯、每日必读" />
@@ -362,7 +362,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
       {/* Row 2: Accounts — search box always visible, dropdown on focus */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <label className="text-xs text-text-muted">
+          <label className="text-sm text-text-muted">
             公众号列表 <span className="text-brand-green">*</span>
             {selectedAccounts.length > 0 && (
               <span className="ml-1.5 text-brand-green">已选 {selectedAccounts.length} 个</span>
@@ -410,14 +410,14 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
               onFocus={() => setShowAccountPicker(true)}
               onBlur={() => setTimeout(() => setShowAccountPicker(false), 200)}
               placeholder="搜索公众号..."
-              className="w-full bg-transparent pl-9 pr-3 py-2 text-xs text-text-main
+              className="w-full bg-transparent pl-9 pr-3 py-2 text-sm text-text-main
                 placeholder:text-text-muted focus:outline-none"
             />
           </div>
           {showAccountPicker && (
             <div className="max-h-48 overflow-y-auto border-t border-border-main">
               {sortedAccounts.length === 0 ? (
-                <p className="text-xs text-text-muted py-4 text-center">
+                <p className="text-sm text-text-muted py-4 text-center">
                   {accountSearch ? '没有匹配的公众号' : '暂无公众号数据'}
                 </p>
               ) : (
@@ -440,8 +440,8 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs text-text-main truncate">{acc.nickname || acc.username}</p>
-                        <p className="text-xs text-text-muted font-mono truncate">{acc.username}</p>
+                        <p className="text-sm text-text-main truncate">{acc.nickname || acc.username}</p>
+                        <p className="text-sm text-text-muted font-mono truncate">{acc.username}</p>
                       </div>
                     </button>
                   )
@@ -456,7 +456,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Schedule */}
         <div>
-          <label className="block text-xs text-text-muted mb-2">执行时间</label>
+          <label className="block text-sm text-text-muted mb-2">执行时间</label>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-2">
             {CRON_PRESETS.map((preset, idx) => {
               const isActive = preset.cron && cronExpr === preset.cron
@@ -477,7 +477,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
             })}
           </div>
           <div>
-            <p className="text-xs text-text-muted mb-1">自定义 Cron（分钟 小时 日 月 周）</p>
+            <p className="text-sm text-text-muted mb-1">自定义 Cron（分钟 小时 日 月 周）</p>
             <textarea
               value={cronExpr}
               onChange={e => setCronExpr(e.target.value)}
@@ -490,13 +490,13 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
             {validateCronExpr(cronExpr) && (
               <p className="text-xs text-status-error font-medium mt-1">{validateCronExpr(cronExpr)}</p>
             )}
-            <p className="text-xs text-text-muted mt-1">多行格式，每行一个时间点。例：<code className="text-text-muted">0 9 * * 1-5</code> = 工作日9点</p>
+            <p className="text-sm text-text-muted mt-1">多行格式，每行一个时间点。例：<code className="text-text-muted">0 9 * * 1-5</code> = 工作日9点</p>
           </div>
         </div>
 
         {/* Template */}
         <div>
-          <label className="block text-xs text-text-muted mb-2">摘要模板</label>
+          <label className="block text-sm text-text-muted mb-2">摘要模板</label>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-2">
             {TEMPLATES.map(t => (
               <button
@@ -526,7 +526,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
             const needsTruncate = preview.length > 60
             return (
               <div className="mt-1 flex gap-2 items-start">
-                <div className={`flex-1 min-w-0 text-xs text-text-muted p-2 rounded-lg bg-bg-raised border border-border-main leading-relaxed
+                <div className={`flex-1 min-w-0 text-sm text-text-muted p-2 rounded-lg bg-bg-raised border border-border-main leading-relaxed
                   ${!templateExpanded && needsTruncate ? 'line-clamp-2' : ''}
                   ${templateExpanded && needsTruncate ? 'max-h-32 overflow-y-auto' : ''}`}>
                   {!templateExpanded && needsTruncate ? preview.slice(0, 60) + '...' : preview}
@@ -553,14 +553,14 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
               >
                 {/* 默认 System Prompt 预览（只读） */}
                 <div>
-                  <label className="text-xs text-text-muted mb-1 block">当前默认 System Prompt（只读参考）</label>
-                  <div className="p-2 rounded-lg bg-bg-inset border border-border-main text-xs text-text-muted max-h-28 overflow-y-auto whitespace-pre-wrap">
+                  <label className="text-sm text-text-muted mb-1 block">当前默认 System Prompt（只读参考）</label>
+                  <div className="p-2 rounded-lg bg-bg-inset border border-border-main text-sm text-text-muted max-h-28 overflow-y-auto whitespace-pre-wrap">
                     {DEFAULT_CUSTOM_PROMPT}
                   </div>
                 </div>
                 {/* 自定义 Prompt 输入框（可编辑） */}
                 <div>
-                  <label className="text-xs text-text-muted font-medium mb-1 block">自定义 Prompt（保存后完全替代默认，仅影响当前分组）</label>
+                  <label className="text-sm text-text-muted font-medium mb-1 block">自定义 Prompt（保存后完全替代默认，仅影响当前分组）</label>
                   <textarea
                     value={customPrompt}
                     onChange={(e) => setCustomPrompt(e.target.value)}
@@ -582,7 +582,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Lookback */}
         <div>
-          <label className="block text-xs text-text-muted mb-2">时间范围</label>
+          <label className="block text-sm text-text-muted mb-2">时间范围</label>
           <div className="flex gap-2 mb-2">
             <button
               onClick={() => setLookbackMode('auto')}
@@ -624,7 +624,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
               </span>
             </div>
           )}
-          <p className="text-xs text-text-muted mt-1">
+          <p className="text-sm text-text-muted mt-1">
             {lookbackMode === 'auto'
               ? '定时间隔 + 1h 缓冲'
               : '获取多长时间内的文章'}
@@ -633,14 +633,14 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
 
         {/* Push to WeChat — prominent card-style toggle */}
         <div>
-          <label className="block text-xs text-text-muted mb-2">推送设置</label>
+          <label className="block text-sm text-text-muted mb-2">推送设置</label>
           <div className={`flex items-center justify-between gap-3 p-3 rounded-lg border transition-colors
             ${pushTarget ? 'border-brand-green/30 bg-brand-green-light/10' : 'border-border-main bg-bg-raised'}`}>
             <div className="flex items-center gap-2.5">
               <Export size={18} className={pushTarget ? 'text-brand-green' : 'text-text-muted'} />
               <div>
                 <p className="text-sm font-medium text-text-main">推送到微信</p>
-                <p className="text-xs text-text-muted">摘要自动推送至私聊</p>
+                <p className="text-sm text-text-muted">摘要自动推送至私聊</p>
               </div>
             </div>
             <Toggle enabled={pushTarget} onChange={setPushTarget} />
@@ -703,10 +703,10 @@ function MonitorGroupCard({ group, accounts, onEdit, onDelete, onToggle }) {
             <p className="text-sm font-medium text-text-main truncate">{group.name || '未命名关注'}</p>
           </div>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-xs text-text-muted">{accountNames.length} 个公众号</span>
+            <span className="text-sm text-text-muted">{accountNames.length} 个公众号</span>
             {group.push_target === 'ilink' && (
               <>
-                <span className="text-xs text-text-muted">·</span>
+                <span className="text-sm text-text-muted">·</span>
                 <span className="text-xs px-1.5 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">通知</span>
               </>
             )}
@@ -798,14 +798,14 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
 
       {/* Name */}
       <div>
-        <label className="block text-xs text-text-muted mb-1.5">关注名称 <span className="text-amber-500">*</span></label>
+        <label className="block text-sm text-text-muted mb-1.5">关注名称 <span className="text-amber-500">*</span></label>
         <Input value={name} onChange={setName} placeholder="例如：科技动态、行业快讯" />
       </div>
 
       {/* Account picker */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <label className="text-xs text-text-muted">
+          <label className="text-sm text-text-muted">
             关注公众号 <span className="text-amber-500">*</span>
             {selectedAccounts.length > 0 && (
               <span className="ml-1.5 text-amber-500">已选 {selectedAccounts.length} 个</span>
@@ -842,7 +842,7 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
               onChange={(e) => { setAccountSearch(e.target.value); setShowAccountPicker(true) }}
               onFocus={() => setShowAccountPicker(true)}
               placeholder="搜索公众号..."
-              className="w-full bg-transparent pl-9 pr-3 py-2 text-xs text-text-main
+              className="w-full bg-transparent pl-9 pr-3 py-2 text-sm text-text-main
                 placeholder:text-text-muted focus:outline-none"
               onBlur={() => setTimeout(() => setShowAccountPicker(false), 200)}
             />
@@ -850,7 +850,7 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
           {showAccountPicker && (
             <div className="max-h-48 overflow-y-auto border-t border-border-main">
               {sortedAccounts.length === 0 ? (
-                <p className="text-xs text-text-muted py-4 text-center">
+                <p className="text-sm text-text-muted py-4 text-center">
                   {accountSearch ? '没有匹配的公众号' : '暂无公众号数据'}
                 </p>
               ) : (
@@ -873,8 +873,8 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs text-text-main truncate">{acc.nickname || acc.username}</p>
-                        <p className="text-xs text-text-muted font-mono truncate">{acc.username}</p>
+                        <p className="text-sm text-text-main truncate">{acc.nickname || acc.username}</p>
+                        <p className="text-sm text-text-muted font-mono truncate">{acc.username}</p>
                       </div>
                     </button>
                   )
@@ -892,7 +892,7 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
           <Export size={18} className={pushTarget ? 'text-brand-green' : 'text-text-muted'} />
           <div>
             <p className="text-sm font-medium text-text-main">推送到微信</p>
-            <p className="text-xs text-text-muted">新文章即时推送至私聊</p>
+            <p className="text-sm text-text-muted">新文章即时推送至私聊</p>
           </div>
         </div>
         <Toggle enabled={pushTarget} onChange={setPushTarget} />
@@ -955,7 +955,7 @@ function ArticleCard({ article }) {
             >
               {article.title}
             </a>
-            <p className="text-xs text-text-muted mt-1 line-clamp-2">
+            <p className="text-sm text-text-muted mt-1 line-clamp-2">
               {article.digest || ''}
             </p>
             <div className="flex items-center gap-2 mt-1.5">
@@ -965,7 +965,7 @@ function ArticleCard({ article }) {
                 </span>
               )}
               {timeStr && (
-                <span className="text-xs text-text-muted font-mono">{timeStr}</span>
+                <span className="text-sm text-text-muted font-mono">{timeStr}</span>
               )}
             </div>
           </div>
@@ -1254,14 +1254,14 @@ export default function OATab() {
             </button>
           </div>
         </div>
-        <p className="text-xs text-text-muted leading-relaxed pl-4">将公众号按主题分组，AI 定时生成摘要 · 数据来源于本地微信数据库</p>
+        <p className="text-sm text-text-muted leading-relaxed pl-4">将公众号按主题分组，AI 定时生成摘要 · 数据来源于本地微信数据库</p>
       </div>
 
       {/* Refresh button */}
       <div className="mb-3 flex items-center justify-end">
         <button
           onClick={loadData}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer"
           title="刷新公众号列表（需先在微信中打开公众号历史消息）"
         >
           <ArrowsClockwise size={12} />
@@ -1273,8 +1273,8 @@ export default function OATab() {
       {accounts.length > 0 && (
         <div className="mb-5 p-4 rounded-xl border border-border-main bg-bg-card">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs text-text-muted font-medium">已关注公众号 ({accounts.length})</p>
-            <p className="text-xs text-text-muted">点击查看历史文章</p>
+            <p className="text-sm text-text-muted font-medium">已关注公众号 ({accounts.length})</p>
+            <p className="text-sm text-text-muted">点击查看历史文章</p>
           </div>
           {accounts.length > 10 && (
             <div className="relative mb-2">
@@ -1284,7 +1284,7 @@ export default function OATab() {
                 value={accountFilter}
                 onChange={(e) => setAccountFilter(e.target.value)}
                 placeholder="搜索公众号..."
-                className="w-full bg-bg-raised border border-border-main rounded-full pl-9 pr-3 py-1.5 text-xs text-text-main
+                className="w-full bg-bg-raised border border-border-main rounded-full pl-9 pr-3 py-1.5 text-sm text-text-main
                   placeholder:text-text-muted focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15"
               />
               {accountFilter && (
@@ -1323,7 +1323,7 @@ export default function OATab() {
               </button>
             )}
             {accountFilter && accounts.filter(acc => (acc.nickname || acc.username).toLowerCase().includes(accountFilter.toLowerCase())).length === 0 && (
-              <p className="text-xs text-text-muted py-1">没有匹配的公众号</p>
+              <p className="text-sm text-text-muted py-1">没有匹配的公众号</p>
             )}
           </div>
         </div>
@@ -1343,7 +1343,7 @@ export default function OATab() {
                 <div className="flex items-center gap-2">
                   <Globe size={14} className="text-brand-green" />
                   <span className="text-sm font-medium text-text-main">{selectedAccount.nickname || selectedAccount.username}</span>
-                  <span className="text-xs text-text-muted">的历史文章</span>
+                  <span className="text-sm text-text-muted">的历史文章</span>
                 </div>
                 <button
                   onClick={() => { setSelectedAccount(null); setAccountArticles([]) }}
@@ -1420,8 +1420,8 @@ export default function OATab() {
               className="mb-4"
             >
               <div className="flex items-center justify-between mb-2">
-                <p className="text-xs text-text-muted">搜索结果 ({searchResults.length})</p>
-                <button onClick={() => setSearchResults([])} className="text-xs text-text-muted hover:text-text-main cursor-pointer">
+                <p className="text-sm text-text-muted">搜索结果 ({searchResults.length})</p>
+                <button onClick={() => setSearchResults([])} className="text-sm text-text-muted hover:text-text-main cursor-pointer">
                   清除
                 </button>
               </div>
@@ -1440,7 +1440,7 @@ export default function OATab() {
         <div className="flex items-center justify-between mb-2.5">
           <div className="flex items-center gap-2">
             <Bell size={14} className="text-amber-500/80" />
-            <p className="text-xs text-text-muted font-medium">
+            <p className="text-sm text-text-muted font-medium">
               即时提醒 ({monitorGroups.length})
             </p>
           </div>
@@ -1479,8 +1479,8 @@ export default function OATab() {
         {monitorGroups.length === 0 ? (
           <div className="border border-dashed border-border-main rounded-xl bg-bg-raised/30 p-4 text-center">
             <Bell size={20} className="mx-auto mb-2 text-amber-500/30" />
-            <p className="text-xs text-text-muted mb-1">公众号新文章即时提醒</p>
-            <p className="text-xs text-text-muted/60 mb-2.5">关注公众号发新文章后，推送通知到微信</p>
+            <p className="text-sm text-text-muted mb-1">公众号新文章即时提醒</p>
+            <p className="text-sm text-text-muted/60 mb-2.5">关注公众号发新文章后，推送通知到微信</p>
             <button
               onClick={() => { setEditingMonitor(null); setShowMonitorEditor(true) }}
               className="px-4 py-1.5 rounded-full text-xs font-semibold bg-amber-500 text-white
@@ -1531,7 +1531,7 @@ export default function OATab() {
       {/* Groups */}
       <div className="mb-2">
         <div className="flex items-center justify-between">
-          <p className="text-xs text-text-muted font-medium">
+          <p className="text-sm text-text-muted font-medium">
             AI 摘要 ({groups.length})
           </p>
           {groups.length > 0 && (
@@ -1553,7 +1553,7 @@ export default function OATab() {
         <div className="text-center py-12 border border-dashed border-border-main rounded-xl bg-bg-raised/30">
           <Sparkle size={32} className="mx-auto mb-3 text-brand-green/30" />
           <p className="text-sm text-text-muted">还没有摘要任务</p>
-          <div className="mt-3 space-y-1.5 text-xs text-text-muted max-w-xs mx-auto">
+          <div className="mt-3 space-y-1.5 text-sm text-text-muted max-w-xs mx-auto">
             <p><span className="text-brand-green/80">1.</span> 新建分组，给关注的公众号分类（如"科技资讯"）</p>
             <p><span className="text-brand-green/80">2.</span> 选择摘要模板和执行时间</p>
             <p><span className="text-brand-green/80">3.</span> AI 按时生成该分组所有公众号的内容摘要</p>

@@ -165,8 +165,8 @@ function NestedChatCard({ record, itemId }) {
         onClick={(e) => { e.stopPropagation(); setExpanded(!expanded) }}
       >
         <ChatsCircle size={10} className="text-brand-green" weight="fill" />
-        <span className="text-xs text-brand-green font-medium truncate flex-1">{title}</span>
-        <span className="text-xs text-text-muted">{subRecords.length}条</span>
+        <span className="text-sm text-brand-green font-medium truncate flex-1">{title}</span>
+        <span className="text-sm text-text-muted">{subRecords.length}条</span>
         <CaretDown size={10} className={`text-text-muted transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </div>
 
@@ -174,9 +174,9 @@ function NestedChatCard({ record, itemId }) {
       {!expanded && previewLines.length > 0 && (
         <div className="px-2.5 py-1.5 bg-bg-card/50 space-y-0.5">
           {previewLines.map((line, i) => (
-            <p key={i} className="text-xs text-text-muted leading-relaxed truncate">{line}</p>
+            <p key={i} className="text-sm text-text-muted leading-relaxed truncate">{line}</p>
           ))}
-          {hasMore && <p className="text-xs text-text-muted">...</p>}
+          {hasMore && <p className="text-sm text-text-muted">...</p>}
         </div>
       )}
 
@@ -202,7 +202,7 @@ function NestedChatCard({ record, itemId }) {
                     </div>
                     <div className="flex-1 min-w-0">
                       <span className="text-xs text-brand-green font-medium">{sub.src_name || '未知'}</span>
-                      {sub.time && <span className="text-xs text-text-muted ml-1">{sub.time}</span>}
+                      {sub.time && <span className="text-sm text-text-muted ml-1">{sub.time}</span>}
 
                       {/* Text */}
                       {sub.desc && subType === 1 && (
@@ -226,14 +226,14 @@ function NestedChatCard({ record, itemId }) {
                                 const p = e.target.parentElement
                                 if (p && !p.querySelector('.img-fb')) {
                                   const fb = document.createElement('div')
-                                  fb.className = 'img-fb flex items-center gap-1 px-2 py-1 rounded-md bg-bg-card text-xs text-text-muted'
+                                  fb.className = 'img-fb flex items-center gap-1 px-2 py-1 rounded-md bg-bg-card text-sm text-text-muted'
                                   fb.innerHTML = '[图片]'
                                   p.appendChild(fb)
                                 }
                               }}
                             />
                           ) : (
-                            <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-bg-card text-xs text-text-muted">
+                            <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-bg-card text-sm text-text-muted">
                               <Image size={10} className="opacity-40" /> [图片]
                             </div>
                           )}
@@ -250,13 +250,13 @@ function NestedChatCard({ record, itemId }) {
                               compact
                             />
                           ) : (
-                            <span className="text-xs text-text-muted">[语音]</span>
+                            <span className="text-sm text-text-muted">[语音]</span>
                           )}
                         </div>
                       )}
                       {/* File */}
                       {subType === 8 && (
-                        <div className="mt-0.5 flex items-center gap-1 px-2 py-1 rounded-md bg-bg-card text-xs text-text-muted max-w-[90%]">
+                        <div className="mt-0.5 flex items-center gap-1 px-2 py-1 rounded-md bg-bg-card text-sm text-text-muted max-w-[90%]">
                           <File size={10} className="opacity-40" />
                           {sub.file_name || '文件'}
                           {sub.file_type && <span className="text-text-muted">.{sub.file_type}</span>}
@@ -377,12 +377,12 @@ function FavCard({ item }) {
               />
             </div>
           ) : item.content && !isImage ? (
-            <p className="text-xs text-text-muted truncate mt-0.5">
+            <p className="text-sm text-text-muted truncate mt-0.5">
               {item.content.slice(0, 60)}...
             </p>
           ) : null}
         </div>
-        <div className="text-xs text-text-muted font-mono">
+        <div className="text-sm text-text-muted font-mono">
           {timeStr}
         </div>
       </div>
@@ -465,7 +465,7 @@ function FavCard({ item }) {
             <div className="flex items-center gap-2 px-3 py-2 border-b border-border-main bg-bg-card">
               <ChatsCircle size={14} className="text-brand-green" weight="fill" />
               <span className="text-xs font-medium text-text-main">聊天记录</span>
-              <span className="text-xs text-text-muted">{item.chat_records.length}条消息</span>
+              <span className="text-sm text-text-muted">{item.chat_records.length}条消息</span>
             </div>
             <div className="px-3 py-3 space-y-3 max-h-80 overflow-y-auto">
               {item.chat_records.map((record, idx) => {
@@ -483,7 +483,7 @@ function FavCard({ item }) {
                       <div className="flex items-baseline gap-1.5">
                         <span className="text-xs text-brand-green font-medium">{record.src_name || '未知'}</span>
                         {record.time && (
-                          <span className="text-xs text-text-muted">{record.time}</span>
+                          <span className="text-sm text-text-muted">{record.time}</span>
                         )}
                       </div>
                       {/* Text message */}
@@ -507,14 +507,14 @@ function FavCard({ item }) {
                                 const parent = e.target.parentElement
                                 if (parent && !parent.querySelector('.img-fallback')) {
                                   const fb = document.createElement('div')
-                                  fb.className = 'img-fallback flex items-center gap-1 px-2 py-1.5 rounded-lg bg-bg-card text-xs text-text-muted'
+                                  fb.className = 'img-fallback flex items-center gap-1 px-2 py-1.5 rounded-lg bg-bg-card text-sm text-text-muted'
                                   fb.innerHTML = '[图片]'
                                   parent.appendChild(fb)
                                 }
                               }}
                             />
                           ) : (
-                            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-card text-xs text-text-muted">
+                            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-card text-sm text-text-muted">
                               <Image size={12} className="opacity-50" />
                               [图片]
                             </div>
@@ -532,13 +532,13 @@ function FavCard({ item }) {
                               compact
                             />
                           ) : (
-                            <span className="text-xs text-text-muted">[语音]</span>
+                            <span className="text-sm text-text-muted">[语音]</span>
                           )}
                         </div>
                       )}
                       {/* File message */}
                       {recordType === 8 && (
-                        <div className="mt-1 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-card text-xs text-text-muted max-w-[85%]">
+                        <div className="mt-1 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-card text-sm text-text-muted max-w-[85%]">
                           <File size={12} className="opacity-50" />
                           <span>{record.file_name || record.desc || '文件'}</span>
                           {record.file_type && <span className="text-text-muted">.{record.file_type}</span>}
@@ -566,7 +566,7 @@ function FavCard({ item }) {
             className="px-4 pb-4 overflow-hidden"
           >
             <div className="pt-3 border-t border-border-main">
-              <p className="text-xs text-text-muted whitespace-pre-wrap leading-relaxed">
+              <p className="text-sm text-text-muted whitespace-pre-wrap leading-relaxed">
                 {item.content}
               </p>
             </div>
@@ -1107,7 +1107,7 @@ export default function FavoritesTab() {
       </AnimatePresence>
 
       {/* Results count */}
-      <div className="text-xs text-text-muted mb-4 font-mono">
+      <div className="text-sm text-text-muted mb-4 font-mono">
         共 {filteredFavorites.length} 条收藏
       </div>
 

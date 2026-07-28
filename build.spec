@@ -84,6 +84,7 @@ a = Analysis(
         'src.utils', 'src.utils.logging_config', 'src.utils.llm_logger',
         'src.guard', 'src.guard.content_filter',
         'src.scheduler', 'src.scheduler.cron_scheduler',
+        'src.skill', 'src.skill.engine',
         'dotenv', 'anthropic', 'openai', 'pydantic',
         'ddgs', 'duckduckgo_search',
         'psutil', 'pyperclip',

@@ -97,8 +97,12 @@ class ContentCache:
     # ══════════════════════════════════════════════════════════════
 
     def _init_tables(self):
-        """创建四张缓存表。启动时调用一次，失败则 Bot 初始化失败。"""
-        ddl = """
+        """创建四张缓存表 + 索引。启动时调用一次，失败则 Bot 初始化失败。
+
+        注意：建表和建索引分两步，中间插入 _migrate_tables 自动补充缺少的列，
+        避免旧数据库因缺少列导致 CREATE INDEX 失败。
+        """
+        table_ddl = """
         CREATE TABLE IF NOT EXISTS oa_accounts (
             gh_id           TEXT PRIMARY KEY,
             display_name    TEXT NOT NULL DEFAULT '',
@@ -120,8 +124,6 @@ class ContentCache:
             llm_summary_ok  INTEGER DEFAULT 0,
             cached_at       INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_oa_gh_id ON oa_cache(gh_id);
-        CREATE INDEX IF NOT EXISTS idx_oa_pub_time ON oa_cache(pub_time);
 
         CREATE TABLE IF NOT EXISTS sns_cache (
             post_id         TEXT PRIMARY KEY,
@@ -138,8 +140,6 @@ class ContentCache:
             raw_xml         TEXT DEFAULT '',
             cached_at       INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_sns_username ON sns_cache(username);
-        CREATE INDEX IF NOT EXISTS idx_sns_create_time ON sns_cache(create_time);
 
         CREATE TABLE IF NOT EXISTS fav_cache (
             fav_id           INTEGER PRIMARY KEY,
@@ -150,22 +150,159 @@ class ContentCache:
             link             TEXT DEFAULT '',
             from_user        TEXT DEFAULT '',
             update_time      INTEGER DEFAULT 0,
-            chat_records_json TEXT DEFAULT '',  -- 完整解析的嵌套聊天记录
+            chat_records_json TEXT DEFAULT '',
             media_json       TEXT DEFAULT '',
-            clean_text       TEXT DEFAULT '',   -- 展平所有文字（含嵌套），供 RAG 用
+            clean_text       TEXT DEFAULT '',
             cached_at        INTEGER NOT NULL
         );
+        """
+        index_ddl = """
+        CREATE INDEX IF NOT EXISTS idx_oa_gh_id ON oa_cache(gh_id);
+        CREATE INDEX IF NOT EXISTS idx_oa_pub_time ON oa_cache(pub_time);
+        CREATE INDEX IF NOT EXISTS idx_sns_username ON sns_cache(username);
+        CREATE INDEX IF NOT EXISTS idx_sns_create_time ON sns_cache(create_time);
         CREATE INDEX IF NOT EXISTS idx_fav_type ON fav_cache(type);
         CREATE INDEX IF NOT EXISTS idx_fav_update_time ON fav_cache(update_time);
         """
         conn = self._get_conn()
         try:
-            conn.executescript(ddl)
+            # 第 1 步：建表（旧表已存在则跳过）
+            conn.executescript(table_ddl)
+            conn.commit()
+            conn.close()
+
+            # 第 2 步：自动补充旧表缺少的列（内部自己管理连接）
+            self._migrate_tables()
+
+            # 第 3 步：建索引（此时所有列已就绪）
+            conn = self._get_conn()
+            conn.executescript(index_ddl)
             conn.commit()
             logger.info("[CACHE] 四张缓存表已就绪")
         except Exception as e:
-            logger.warning("[CACHE] 建表失败: %s", e)
+            logger.warning("[CACHE] 建表/建索引失败: %s", e)
             raise
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # ── 自动表迁移 ────────────────────────────────────────────────
+    # 每次启动时检查并补充旧数据库可能缺少的列。
+    # 方法：对比 DDL 定义的目标列和 PRAGMA table_info 的实际列，
+    # 缺少的列自动 ALTER TABLE ADD COLUMN。
+    # 后续 DDL 新增列后会自动迁移，无需手动维护 migration 列表。
+
+    @staticmethod
+    def _parse_ddl_columns(ddl: str) -> dict[str, list[tuple[str, str]]]:
+        """从 CREATE TABLE DDL 中提取每张表的列定义。
+        Returns:
+            {table_name: [(col_name, col_def), ...]}
+        """
+        tables = {}
+        # 匹配 CREATE TABLE IF NOT EXISTS xxx ( ... );
+        pattern = re.compile(
+            r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\("
+            r"(.*?)\);",
+            re.DOTALL | re.IGNORECASE,
+        )
+        for m in pattern.finditer(ddl):
+            tname = m.group(1)
+            body = m.group(2)
+            cols = []
+            for line in body.split(","):
+                line = line.strip()
+                if not line or line.upper().startswith("PRIMARY KEY"):
+                    continue
+                parts = line.split(None, 1)
+                if parts and not parts[0].upper().startswith(("INDEX", "FOREIGN", "CONSTRAINT")):
+                    col_name = parts[0].strip()
+                    col_def = parts[1].strip() if len(parts) > 1 else ""
+                    cols.append((col_name, col_def))
+            tables[tname] = cols
+        return tables
+
+    def _migrate_tables(self):
+        """自动迁移：用 PRAGMA table_info 对比 DDL，补充旧库缺少的列。"""
+        ddl = """
+        CREATE TABLE IF NOT EXISTS oa_accounts (
+            gh_id           TEXT PRIMARY KEY,
+            display_name    TEXT NOT NULL DEFAULT '',
+            avatar_url      TEXT DEFAULT '',
+            last_updated    INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS oa_cache (
+            url             TEXT PRIMARY KEY,
+            gh_id           TEXT NOT NULL,
+            title           TEXT NOT NULL DEFAULT '',
+            digest          TEXT NOT NULL DEFAULT '',
+            cover_url       TEXT DEFAULT '',
+            source_name     TEXT NOT NULL DEFAULT '',
+            pub_time        INTEGER DEFAULT 0,
+            full_content    TEXT DEFAULT '',
+            content_status  INTEGER DEFAULT 0,
+            llm_summary     TEXT DEFAULT '',
+            llm_summary_ok  INTEGER DEFAULT 0,
+            cached_at       INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sns_cache (
+            post_id         TEXT PRIMARY KEY,
+            username        TEXT NOT NULL,
+            nickname        TEXT DEFAULT '',
+            clean_content   TEXT DEFAULT '',
+            create_time     INTEGER DEFAULT 0,
+            like_count      INTEGER DEFAULT 0,
+            comment_count   INTEGER DEFAULT 0,
+            location_name   TEXT DEFAULT '',
+            media_json      TEXT DEFAULT '',
+            likes_json      TEXT DEFAULT '',
+            comments_json   TEXT DEFAULT '',
+            raw_xml         TEXT DEFAULT '',
+            cached_at       INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS fav_cache (
+            fav_id           INTEGER PRIMARY KEY,
+            type             INTEGER DEFAULT 0,
+            type_name        TEXT DEFAULT '',
+            title            TEXT DEFAULT '',
+            description      TEXT DEFAULT '',
+            link             TEXT DEFAULT '',
+            from_user        TEXT DEFAULT '',
+            update_time      INTEGER DEFAULT 0,
+            chat_records_json TEXT DEFAULT '',
+            media_json       TEXT DEFAULT '',
+            clean_text       TEXT DEFAULT '',
+            cached_at        INTEGER NOT NULL
+        );
+        """
+        target_cols = self._parse_ddl_columns(ddl)
+
+        conn = self._get_conn()
+        try:
+            for table, desired in target_cols.items():
+                # 获取当前表的列
+                try:
+                    existing = {
+                        r[1]
+                        for r in conn.execute(
+                            "PRAGMA table_info(%s)" % table
+                        ).fetchall()
+                    }
+                except sqlite3.OperationalError:
+                    continue  # 表不存在，跳过
+                for col_name, col_def in desired:
+                    if col_name not in existing:
+                        sql = "ALTER TABLE %s ADD COLUMN %s %s" % (
+                            table, col_name, col_def
+                        )
+                        conn.execute(sql)
+                        logger.info(
+                            "[CACHE] 迁移: %s.%s 列已添加", table, col_name
+                        )
+            conn.commit()
+        except Exception as e:
+            logger.warning("[CACHE] 表迁移失败: %s", e)
         finally:
             conn.close()
 
@@ -338,22 +475,26 @@ class ContentCache:
             })
         if accounts:
             self.batch_upsert("oa_accounts", accounts)
-            logger.info("[CACHE] OA 账号同步: %d 个", len(accounts))
+            names_str = ", ".join(a.get("display_name", a["gh_id"]) for a in accounts[:5])
+            if len(accounts) > 5:
+                names_str += f" ... 共 {len(accounts)} 个"
+            logger.info("[CACHE] OA 账号同步: %s", names_str)
 
     def _sync_oa_articles_full(self, client, task_id=None, task_center=None):
         """全量同步 OA 文章：遍历每个 gh_id，拉最新 50 篇。"""
-        accounts = self.query("SELECT gh_id FROM oa_accounts")
+        accounts = self.query("SELECT gh_id, display_name FROM oa_accounts")
         if not accounts:
             logger.info("[CACHE] OA 文章全量跳过：无 OA 账号")
             return
         total_new = 0
         for i, row in enumerate(accounts):
             gh_id = row["gh_id"]
+            name = row["display_name"] or gh_id
             try:
                 new = self._sync_oa_gh(client, gh_id)
                 total_new += new
             except Exception as e:
-                logger.warning("[CACHE] OA 文章同步 %s 失败: %s", gh_id, e)
+                logger.warning("[CACHE] OA 文章同步 %s 失败: %s", name, e)
             if task_id and (i + 1) % 5 == 0:
                 _update_task(task_center, task_id,
                              f"第 {i+1}/{len(accounts)} 个公众号")
@@ -440,7 +581,7 @@ class ContentCache:
         if client is None:
             logger.warning("[CACHE] WCDB 不可用, OA 同步跳过")
             return 0
-        accounts = self.query("SELECT gh_id FROM oa_accounts")
+        accounts = self.query("SELECT gh_id, display_name FROM oa_accounts")
         if not accounts:
             return 0
         total = 0
@@ -449,6 +590,7 @@ class ContentCache:
             existing = self._get_existing_oa_urls()
             for row in accounts:
                 gh_id = row["gh_id"]
+                name = row["display_name"] or gh_id
                 try:
                     from src.assistant.oa_parser import fetch_oa_articles
                     articles = fetch_oa_articles(client, gh_id, limit=10)
@@ -463,9 +605,9 @@ class ContentCache:
                         self.batch_upsert("oa_cache", new)
                         total += len(new)
                 except Exception as e:
-                    logger.warning("[CACHE] OA 增量 %s 失败: %s", gh_id, e)
+                    logger.warning("[CACHE] OA 增量 %s 失败: %s", name, e)
             if total:
-                logger.info("[CACHE] OA 增量合并: 新增 %d 篇文章", total)
+                logger.info("[CACHE] OA 增量合并: %d 篇文章", total)
                 tid = _create_task(task_center, "cache_oa_incremental", "", "OA增量同步")
                 _complete_task(task_center, tid, f"OA 增量: 新增 {total} 篇")
         except Exception as e:
