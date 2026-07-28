@@ -1376,8 +1376,8 @@ class ToolExecutor:
 
         r.register(
             name="create_skill",
-            description="创建 ai 类型的 skill。需要先通过 skill-creator 设计好方案并由用户确认后才能调用。"
-                       "设计好的方案中包含 name(名称)、description(描述)、prompt(指令)等参数，提取后传入此工具。",
+            description="创建 ai 类型的 skill。用户提供完整的 name(名称)、description(描述)、prompt(指令)后调用此工具创建。"
+                       "建议先用 list_skills 查看是否有 skill-creator，有的话用它设计方案更省心。",
             parameters={
                 "type": "object",
                 "properties": {
