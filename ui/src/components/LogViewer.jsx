@@ -477,7 +477,7 @@ export default function LogViewer() {
                 >
                   {log.level}
                 </span>
-                <span className="text-text-main break-all select-all font-mono">{renderHighlightedMsg(log.msg)}</span>
+                <span className="text-text-main break-all whitespace-pre-wrap select-all font-mono">{renderHighlightedMsg(log.msg)}</span>
               </motion.div>
             )
           })

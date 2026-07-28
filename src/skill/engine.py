@@ -156,10 +156,21 @@ class SkillEngine:
             else:
                 cmd_args.extend([f"--{k}", str(v)])
 
+        # 决定可执行文件和前置参数
+        # 在 PyInstaller EXE 中 sys.executable 指向 exe 本身，
+        # 需传 --run-script 让 desktop.py 跳过互斥锁检查，
+        # 直接把脚本跑完就退出。
+        if getattr(sys, "frozen", False):
+            executable = sys.executable
+            base_args = ["--run-script", str(script_path)]
+        else:
+            executable = sys.executable
+            base_args = [str(script_path)]
+
         # 子进程强制 UTF-8（Windows GBK 下中文/特殊字符不会炸）
         import os as _os
         result = subprocess.run(
-            [sys.executable, str(script_path)] + cmd_args,
+            [executable] + base_args + cmd_args,
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             timeout=timeout,
@@ -186,10 +197,10 @@ class SkillEngine:
             prompt += "\n\n## 参数\n" + json.dumps(args, ensure_ascii=False, indent=2)
 
         system = (
-            "你是定时任务助手。根据用户的 prompt 执行任务。"
+            "根据用户的需求执行任务。"
             " 如果需要外部数据，可以调用提供的工具。"
-            " 如果没有新内容需要推送，请只回复 [SILENT]。"
-            " 其他情况正常输出推送内容。"
+            " 如果没有新内容需要输出，请只回复 [SILENT]。"
+            " 其他情况正常输出结果。"
         )
 
         logger.info("[SKILL] exec agent: %s", meta.get("name"))
@@ -310,7 +321,7 @@ if __name__ == "__main__":
         creator_meta = {
             "name": "skill-creator",
             "type": "ai",
-            "description": "技能生成器 — 对话引导你创建新的 ai 类型 skill",
+            "description": "技能设计助手 — 帮你设计 ai 类型 skill 的方案",
             "timeout": 120,
             "args": {
                 "idea": {
@@ -320,20 +331,20 @@ if __name__ == "__main__":
                 },
             },
             "prompt": (
-                "你是技能创造助手。用户会告诉你他想要一个什么样的 skill。\n"
+                "你是技能设计助手。用户会告诉你他想要一个什么样的 skill。\n"
                 "你的任务：\n"
-                "1. 分析用户需求，帮他设计合理的 skill 名称、描述、参数\n"
-                "2. 把设计好的内容通过 create_skill 工具创建出来\n"
-                "3. 创建成功后告诉用户 skill 已可用，可以去配置定时任务\n\n"
-                "create_skill 工具的参数：\n"
-                "- name: skill名称（字母数字下划线，2-32字符）\n"
-                "- description: 描述\n"
-                "- prompt: 执行时 AI 要遵循的指令\n"
-                "- args: 参数定义（可选）\n\n"
+                "1. 分析用户需求，设计合理的 skill 名称、描述、prompt、参数\n"
+                "2. 把设计方案输出给用户审核（不要调用 create_skill 创建）\n\n"
+                "输出格式（严格按照此格式，让后续流程能自动提取）：\n"
+                "【设计方案】\n"
+                "名称：xxx（英文，字母数字下划线 2-32 字符）\n"
+                "描述：xxx\n"
+                "指令：xxx（AI 执行时的完整步骤，务必写清楚）\n"
+                "参数：xxx（如 {\"city\": {\"type\": \"string\", \"description\": \"城市名\"}}，无需参数就写无）\n\n"
                 "注意：\n"
-                "- name 用英文，如 daily-news\n"
-                "- prompt 要写清楚 AI 执行时的具体步骤\n"
-                "- 只创建 type: ai 的 skill"
+                "- 只设计 type: ai 的 skill\n"
+                "- 指令要具体到执行步骤，不要笼统\n"
+                "- 用户审核通过后，自然会调用 create_skill 帮你创建"
             ),
         }
         skill_dir2 = self._build_skill_dir("skill-creator")

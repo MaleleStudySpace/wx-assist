@@ -133,14 +133,24 @@ def _signal_handler(signum, frame):
 
 def main():
     # ── Set CWD to app home directory ──────────────────────────────
-    # Regardless of how the app is launched (double-click EXE / CLI /
-    # shortcut), fix the current working directory to the application
-    # directory so all relative paths (data/, .env, etc.) resolve
-    # correctly and data survives across sessions.
     if getattr(sys, "frozen", False):
         os.chdir(str(Path(sys.executable).resolve().parent))
     else:
         os.chdir(str(PROJECT_ROOT))
+
+    # ── Skill script execution mode (EXE builds only) ──────────────
+    # EXE 模式 skill 脚本在子进程跑: [wx-assist.exe, --run-script, weather.py, args...]
+    # desktop.py 检测到 --run-script 后直接 exec 脚本并退出,
+    # 不走互斥锁 / 全量启动, 避免启动第二个 wx-assist 实例弹框。
+    # 注意: CWD 已在上面设置, 所以脚本内的相对路径 data/ 等能正确解析。
+    if getattr(sys, "frozen", False) and len(sys.argv) >= 3 and sys.argv[1] == "--run-script":
+        script_path = sys.argv[2]
+        script_args = sys.argv[3:]
+        sys.argv = [script_path] + script_args
+        with open(script_path, encoding="utf-8") as _f:
+            _code = compile(_f.read(), script_path, "exec")
+        exec(_code, {"__name__": "__main__", "__file__": str(script_path)})
+        sys.exit(0)
 
     # ── Single-instance mutex (EXE only, source mode allows multi) ─
     # Creates a Windows named mutex so double-clicking the EXE twice

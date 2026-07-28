@@ -1401,7 +1401,6 @@ class ToolExecutor:
                 },
                 "required": ["name", "description", "prompt"],
             },
-            requires_confirm=True,
         )
 
     def _handle_list_skills(self) -> str:
