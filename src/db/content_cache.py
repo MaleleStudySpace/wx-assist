@@ -88,6 +88,7 @@ class ContentCache:
         """每次调用新连接，WAL 模式。"""
         conn = sqlite3.connect(self._db_path)
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.row_factory = sqlite3.Row
         return conn
@@ -644,7 +645,7 @@ class ContentCache:
     def _fetch_one_content(self):
         """抓取一篇待抓取的文章全文。"""
         row = self.query_one(
-            "SELECT url FROM oa_cache WHERE content_status=0 LIMIT 1"
+            "SELECT url, title FROM oa_cache WHERE content_status=0 LIMIT 1"
         )
         if not row:
             # 没有待抓取文章时，重置任务状态
@@ -662,9 +663,10 @@ class ContentCache:
             )
 
         url = row["url"]
+        title = row["title"]
         try:
             from src.assistant.oa_reader import fetch_article_content
-            content = fetch_article_content(url, timeout=15)
+            content = fetch_article_content(url, timeout=15, title=title)
             if content:
                 import html, re
                 content = html.unescape(content)

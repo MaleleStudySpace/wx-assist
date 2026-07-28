@@ -218,7 +218,7 @@ class OAMonitorEngine:
                 # ── Layer 2: HTTP 抓取（15s timeout）──
                 if not article_text and art.url and "mp.weixin.qq.com" in art.url:
                     try:
-                        fetched = fetch_article_content(art.url, timeout=15)
+                        fetched = fetch_article_content(art.url, timeout=15, title=title)
                         if fetched:
                             article_text = fetched
                             content_source = "http"

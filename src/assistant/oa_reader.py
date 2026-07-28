@@ -71,7 +71,7 @@ class WeChatArticleExtractor(HTMLParser):
         return self.sections
 
 
-def fetch_article_content(url: str, timeout: int = 15) -> str:
+def fetch_article_content(url: str, timeout: int = 15, title: str = "") -> str:
     """Fetch a WeChat article and extract its main text content.
 
     Args:
@@ -96,7 +96,7 @@ def fetch_article_content(url: str, timeout: int = 15) -> str:
         html = resp.text
         logger.debug("[OA-READER] Fetch %s: status=%d, html_len=%d", url[:80], resp.status_code, len(html))
     except Exception as e:
-        logger.error("[OA-READER] Failed to fetch article: %s", e)
+        logger.error("[OA-READER] Failed to fetch article「%s」: %s", title or url[:60], e)
         return ""
 
     # Method 1: Regex extract #js_content

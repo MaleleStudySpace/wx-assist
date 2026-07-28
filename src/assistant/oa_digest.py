@@ -506,7 +506,7 @@ class OADigestService:
             if not scrape_full or not art.url or "mp.weixin.qq.com" not in art.url:
                 return art, "", "skip"
             try:
-                content = fetch_article_content(art.url, timeout=15)
+                content = fetch_article_content(art.url, timeout=15, title=art.title)
                 return art, content, "ok" if content else "empty"
             except Exception as e:
                 return art, "", f"error: {e}"
