@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Clock, Play, Trash, Plus, Pencil, Pause, Eye, EyeSlash, X, CaretDown, CaretUp, ChatCircleText, Spinner } from '@phosphor-icons/react'
+import { Clock, Play, Trash, Plus, Pencil, Pause, Eye, EyeSlash, X, CaretDown, CaretUp, ChatCircleText, Spinner, ArrowsClockwise } from '@phosphor-icons/react'
 import { Toggle, Input, API_BASE } from './SharedComponents'
 import { CRON_PRESETS, validateCronExpr, getNextTriggers, formatLocalTime } from '../utils/cron'
 import SkillLibrary from './SkillLibrary'
@@ -180,7 +180,7 @@ function TaskCard({ task, skills, onToggle, onDelete, onRunNow, onEdit, onCopy, 
 }
 
 // ── Task creator / editor ─────────────────────────────────────────
-function TaskForm({ skills, initial, onSave, onCancel }) {
+function TaskForm({ skills, initial, onSave, onCancel, onRefresh }) {
   const formRef = useRef(null)
   const [name, setName] = useState(initial?.name || '')
   const [skill, setSkill] = useState(initial?.skill || (skills[0]?.name || ''))
@@ -342,20 +342,33 @@ function TaskForm({ skills, initial, onSave, onCancel }) {
             <label className="block text-xs text-text-muted mb-1 text-xs.5">
               执行 Skill <span className="text-[#d45656]">*</span>
             </label>
-            <select
-              value={skill}
-              onChange={(e) => setSkill(e.target.value)}
-              disabled={!skills.length}
-              className="w-full bg-bg-raised border border-border-main rounded-full px-4 py-2.5 text-sm text-text-main
-                focus:outline-none focus:border-brand-green cursor-pointer disabled:opacity-50"
-            >
-              {!skills.length && <option>(暂无 skill)</option>}
-              {skills.map(s => (
-                <option key={s.name} value={s.name}>
-                  {s.name} · {s.description?.slice(0, 50)}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-2">
+              <select
+                value={skill}
+                onChange={(e) => setSkill(e.target.value)}
+                disabled={!skills.length}
+                className="flex-1 bg-bg-raised border border-border-main rounded-full px-4 py-2.5 text-sm text-text-main
+                  focus:outline-none focus:border-brand-green cursor-pointer disabled:opacity-50"
+              >
+                {!skills.length && <option>(暂无 skill)</option>}
+                {skills.map(s => (
+                  <option key={s.name} value={s.name}>
+                    {s.name} · {s.description?.slice(0, 50)}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={onRefresh}
+                title="刷新 skill 列表"
+                className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full
+                  bg-bg-raised border border-border-main text-text-muted
+                  hover:text-brand-green hover:border-brand-green/30
+                  transition-all cursor-pointer"
+              >
+                <ArrowsClockwise size={16} />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -955,6 +968,7 @@ export default function SchedulerPanel({ section = 'tasks', onSectionChange = ()
               initial={editingTask}
               onSave={handleSave}
               onCancel={() => { setShowForm(false); setEditingTask(null) }}
+              onRefresh={loadAll}
             />
           )}
 
