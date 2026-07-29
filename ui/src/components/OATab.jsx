@@ -864,10 +864,8 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
                 <p className="text-sm text-text-muted py-4 text-center">
                   {accountSearch ? '没有匹配的公众号' : '暂无公众号数据'}
                 </p>
-              ) : (
-                <>
-                  {/* ② 全选/取消全选 */}
-                  <button
+              ) : [
+                  <button key="select-all"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={toggleSelectAll}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors cursor-pointer
@@ -886,12 +884,11 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
                       {sortedAccounts.every(a => selectedAccounts.includes(a.username))
                         ? '取消全选' : '全选所有'}
                     </span>
-                  </button>
-                  {sortedAccounts.map(acc => {
+                  </button>,
+                  ...sortedAccounts.map(acc => {
                     const isSelected = selectedAccounts.includes(acc.username)
                   return (
-                    <button
-                      key={acc.username}
+                    <button key={acc.username}
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => toggleAccount(acc.username)}
                       className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors cursor-pointer
@@ -912,7 +909,7 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
                     </button>
                   )
                 })
-              </>)}
+              ]}
             </div>
           )}
         </div>

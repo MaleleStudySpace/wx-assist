@@ -263,6 +263,7 @@ class HttpClient(MCPClient):
         url = self.config["url"]
         headers = self.config.get("headers", {})
         headers.setdefault("Content-Type", "application/json")
+        headers.setdefault("Accept", "application/json, text/event-stream")
 
         body = {"jsonrpc": "2.0", "id": self._next_id(), "method": method}
         if params is not None:
@@ -274,7 +275,18 @@ class HttpClient(MCPClient):
         try:
             r = requests.post(url, json=body, headers=headers, timeout=timeout)
             r.raise_for_status()
-            resp = r.json()
+            # SSE (Streamable HTTP) 响应解析
+            ct = r.headers.get("Content-Type", "")
+            if "text/event-stream" in ct:
+                resp = None
+                for line in r.text.split("\n"):
+                    if line.startswith("data: "):
+                        resp = json.loads(line[6:])
+                        break
+                if resp is None:
+                    raise RuntimeError("{}: {} SSE 响应缺少 data 字段".format(self.name, method))
+            else:
+                resp = r.json()
         except requests.Timeout:
             raise TimeoutError("{}: {} HTTP 超时 ({}s)".format(self.name, method, timeout))
         except requests.ConnectionError as e:
