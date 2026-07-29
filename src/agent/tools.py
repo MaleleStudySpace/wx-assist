@@ -1376,8 +1376,10 @@ class ToolExecutor:
 
         r.register(
             name="create_skill",
-            description="创建 ai 类型的 skill。用户提供完整的 name(名称)、description(描述)、prompt(指令)后调用此工具创建。"
-                       "建议先用 list_skills 查看是否有 skill-creator，有的话用它设计方案更省心。",
+            description="创建 AI 类型的 skill。先用 list_skills 查看是否有 skill-designer，"
+                       "如果存在则优先用它辅助设计 skill 的 name、description、prompt，"
+                       "设计好后再用此工具创建。如果不存在，直接提供 name(英文名)、"
+                       "description(描述)、prompt(完整AI指令) 三个参数调用即可。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -1401,6 +1403,7 @@ class ToolExecutor:
                 "required": ["name", "description", "prompt"],
             },
             handler=self._handle_create_skill,
+            requires_confirm=True,
         )
 
     def _handle_list_skills(self) -> str:

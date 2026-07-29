@@ -317,9 +317,9 @@ if __name__ == "__main__":
         created.append({"name": "weather", "type": "script", "description": weather_meta["description"]})
         logger.info("[SKILL] 示例 weather 已创建")
 
-        # ── 2. skill-creator (ai) ───────────────────────────────────
+        # ── 2. skill-designer (ai) ──────────────────────────────────
         creator_meta = {
-            "name": "skill-creator",
+            "name": "skill-designer",
             "type": "ai",
             "description": "技能设计助手 — 帮你设计 ai 类型 skill 的方案",
             "timeout": 120,
@@ -347,10 +347,10 @@ if __name__ == "__main__":
                 "- 用户审核通过后，自然会调用 create_skill 帮你创建"
             ),
         }
-        skill_dir2 = self._build_skill_dir("skill-creator")
+        skill_dir2 = self._build_skill_dir("skill-designer")
         self._write_skill_md(skill_dir2 / "SKILL.md", creator_meta)
-        created.append({"name": "skill-creator", "type": "ai", "description": creator_meta["description"]})
-        logger.info("[SKILL] 示例 skill-creator 已创建")
+        created.append({"name": "skill-designer", "type": "ai", "description": creator_meta["description"]})
+        logger.info("[SKILL] 示例 skill-designer 已创建")
 
         return created
 
