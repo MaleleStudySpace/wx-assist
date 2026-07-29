@@ -262,6 +262,8 @@ function ServerModal({ mode, initial, onSave, onClose }) {
   const [saving, setSaving] = useState(false)
   const [savePhase, setSavePhase] = useState('')
   const [error, setError] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState(null)
 
   // 从表单字段构建配置对象
   const buildConfig = () => {
@@ -302,45 +304,72 @@ function ServerModal({ mode, initial, onSave, onClose }) {
     try {
       const raw = JSON.parse(jsonText)
 
-      // 自动检测格式: {"server-name": {"command": ...}} (Claude Code 风格)
-      let d = raw
-      if (!raw.name && !raw.transport && !raw.command && !raw.url) {
-        const keys = Object.keys(raw)
-        if (keys.length === 1 && raw[keys[0]] && typeof raw[keys[0]] === 'object') {
-          d = raw[keys[0]]
-          d.name = keys[0]
+      // ── 解包: 从多种标准格式中提取配置 ──
+      let config = raw
+
+      // 1) mcpServers 格式 (Claude Code / Claude Desktop 标准)
+      if (!config.name && !config.command && !config.url &&
+          config.mcpServers && typeof config.mcpServers === 'object') {
+        const keys = Object.keys(config.mcpServers)
+        if (keys.length === 0) {
+          setError('mcpServers 为空')
+          return
+        }
+        if (keys.length > 1) {
+          setError('mcpServers 中包含多个服务器，请逐个添加（仅取第一个）')
+        }
+        config = config.mcpServers[keys[0]]
+        config.name = keys[0]
+      }
+
+      // 2) 单层嵌套格式 {"server-name": {"command": ..., ...}}
+      if (!config.name && !config.command && !config.url) {
+        const keys = Object.keys(config)
+        if (keys.length === 1 && typeof config[keys[0]] === 'object') {
+          const inner = config[keys[0]]
+          inner.name = keys[0]
+          config = inner
         }
       }
 
-      // 字段映射: type → transport
-      if (d.type && !d.transport) d.transport = d.type
+      // 字段映射: type → transport (兼容旧格式)
+      if (config.type && !config.transport) config.transport = config.type
 
-      // 校验必填
+      // 3) 推断 transport (标准 MCP 配置不写 transport)
+      if (!config.transport) {
+        if (config.command) config.transport = 'stdio'
+        else if (config.url) config.transport = 'http'
+      }
+
+      // ── 校验必填 ──
       const missing = []
-      if (!d.name) missing.push('name')
-      if ((!d.transport || (d.transport !== 'stdio' && d.transport !== 'http'))) missing.push('transport')
+      if (!config.name) missing.push('name')
+      if (!config.transport) missing.push('transport (无法从 command/url 推断)')
+      if (config.transport === 'stdio' && !config.command) missing.push('command')
+      if (config.transport === 'http' && !config.url) missing.push('url')
       if (missing.length > 0) {
-        setError('JSON 缺少必填字段: ' + missing.join(', ') + '\n预期格式: {"name":"xxx","transport":"stdio","command":"npx",...}')
+        setError('缺少必填字段: ' + missing.join(', '))
         return
       }
 
-      setName(d.name || '')
-      setDesc(d.description || '')
-      setTransport(d.transport || 'stdio')
-      setTimeout_(d.timeout || 30)
-      setAutoRestart(d.auto_restart !== false)
-      if (d.transport === 'stdio' || d.command) {
-        setCmd(d.command || '')
-        setArgs((d.args || []).join(', '))
+      // ── 填入表单 ──
+      setName(config.name || '')
+      setDesc(config.description || '')
+      setTransport(config.transport || 'stdio')
+      setTimeout_(config.timeout || 30)
+      setAutoRestart(config.auto_restart !== false)
+      if (config.transport === 'stdio' || config.command) {
+        setCmd(config.command || '')
+        setArgs((config.args || []).join(', '))
         setUrl('')
         setHeaders('')
       } else {
-        setUrl(d.url || '')
-        setHeaders(d.headers ? JSON.stringify(d.headers, null, 1) : '')
+        setUrl(config.url || '')
+        setHeaders(config.headers ? JSON.stringify(config.headers, null, 1) : '')
         setCmd('')
         setArgs('')
       }
-      setEnv(d.env ? JSON.stringify(d.env, null, 1) : '')
+      setEnv(config.env ? JSON.stringify(config.env, null, 1) : '')
       setError('')
       setJsonMode(false)
     } catch (e) {
@@ -375,6 +404,35 @@ function ServerModal({ mode, initial, onSave, onClose }) {
     onClose()
   }
 
+  const handleTestConnection = async () => {
+    if (!url.trim()) { setTestResult({ok: false, error: '请先填写 URL'}); return }
+    setTesting(true)
+    setTestResult(null)
+    let headersObj = {}
+    if (headers.trim()) {
+      try { headersObj = JSON.parse(headers) } catch (e) {
+        setTestResult({ok: false, error: 'Headers JSON 格式错误'})
+        setTesting(false)
+        return
+      }
+    }
+    try {
+      const r = await fetch(`${API_BASE}/api/mcp/test`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url: url.trim(), headers: headersObj, timeout: Number(timeout) || 10}),
+      })
+      const d = await r.json()
+      setTestResult(d.ok
+        ? {ok: true, tools_count: d.tools_count}
+        : {ok: false, error: d.error || '连接失败'})
+    } catch (e) {
+      setTestResult({ok: false, error: e.message})
+    } finally {
+      setTesting(false)
+    }
+  }
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -393,8 +451,8 @@ function ServerModal({ mode, initial, onSave, onClose }) {
           <h2 className="text-base font-semibold text-text-main">{isEdit ? '编辑服务器' : '添加服务器'}</h2>
           <div className="flex items-center gap-2">
             <button onClick={toggleJsonMode}
-              className="text-[11px] font-mono px-2.5 py-1 rounded-lg bg-bg-raised border border-border-main text-text-muted hover:text-text-main transition-colors cursor-pointer">
-              {jsonMode ? '📋 表单' : '{ } JSON'}
+              className="text-[12px] font-mono px-3 py-1.5 rounded-lg bg-bg-raised border border-border-main text-text-muted hover:text-text-main hover:bg-bg-main transition-all cursor-pointer">
+              {jsonMode ? '📋 表单模式' : '{ } JSON 粘贴'}
             </button>
             <button onClick={onClose} className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer">
               <X size={18} />
@@ -411,14 +469,25 @@ function ServerModal({ mode, initial, onSave, onClose }) {
               <textarea value={jsonText} onChange={e => setJsonText(e.target.value)} rows={14}
                 className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-3 text-sm font-mono text-text-main placeholder:text-text-muted/40
                   focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all resize-none"
-                placeholder={'可用格式:\n{\n  "name": "my-server",\n  "transport": "stdio",\n  "command": "npx",\n  "args": ["-y", "@xxx/mcp"],\n  "env": {"KEY": "val"}\n}\n\n也支持 Claude Code 格式:\n{"my-server": {"command": "npx", ...}}'}
+                placeholder={'支持多种格式，自动解析到表单：\n\n1. mcpServers 标准 (推荐):\n{\n  "mcpServers": {\n    "my-server": {\n      "command": "npx",\n      "args": ["-y", "@xxx/mcp"],\n      "env": {"KEY": "val"}\n    }\n  }\n}\n\n2. HTTP 远程:\n{\n  "mcpServers": {\n    "my-server": {\n      "url": "https://example.com/mcp"\n    }\n  }\n}\n\n3. Claude Code 单层:\n{\n  "my-server": {\n    "command": "npx",\n    "args": ["-y", "@xxx/mcp"]\n  }\n}\n\n4. 平铺格式:\n{\n  "name": "my-server",\n  "command": "npx"\n}'}
               />
             </>
           ) : (
             <>
+              {/* 醒目提示: JSON 粘贴入口 */}
+              <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-brand-green-light/30 dark:bg-brand-green-light/20 border border-brand-green/20">
+                <span className="text-[13px] text-text-secondary leading-relaxed">
+                  📋 可粘贴 MCP 标准 JSON 配置（Claude Code / mcpServers 格式），自动解析到表单
+                </span>
+                <button onClick={toggleJsonMode}
+                  className="shrink-0 text-[12px] font-semibold text-brand-green hover:text-brand-green-hover transition-colors cursor-pointer bg-transparent border-none p-0 underline underline-offset-2 whitespace-nowrap">
+                  切换到 JSON
+                </button>
+              </div>
+
               <div className="flex rounded-xl bg-bg-raised border border-border-main p-0.5">
                 {['stdio', 'http'].map(t => (
-                  <button key={t} onClick={() => setTransport(t)}
+                  <button key={t} onClick={() => { setTransport(t); setTestResult(null) }}
                     className={`flex-1 px-4 py-2 rounded-[10px] text-sm font-medium transition-all cursor-pointer
                       ${transport === t
                         ? 'bg-bg-main text-text-main shadow-sm border border-border-main'
@@ -472,6 +541,26 @@ function ServerModal({ mode, initial, onSave, onClose }) {
                       className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm font-mono text-text-muted placeholder:text-text-muted/60
                         focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all resize-none" />
                   </Field>
+                  {/* 测试连接按钮 */}
+                  <div className="flex items-center gap-3">
+                    <button onClick={handleTestConnection} disabled={testing || !url.trim()}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12px] font-medium
+                        bg-bg-raised border border-border-main text-text-muted hover:text-text-main
+                        hover:border-border-strong disabled:opacity-40 transition-all cursor-pointer">
+                      {testing ? (
+                        <><Spinner size={13} className="animate-spin" /> 连接中…</>
+                      ) : (
+                        '🔌 测试连接'
+                      )}
+                    </button>
+                    {testResult && (
+                      <span className={`text-[12px] ${testResult.ok ? 'text-brand-green' : 'text-status-error'}`}>
+                        {testResult.ok
+                          ? `✓ 连接成功，发现 ${testResult.tools_count} 个工具`
+                          : `✗ ${testResult.error}`}
+                      </span>
+                    )}
+                  </div>
                 </div>
               )}
 

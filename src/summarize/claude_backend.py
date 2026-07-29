@@ -97,11 +97,12 @@ class ClaudeSummarizer(AbstractSummarizer):
         return response.content[0].text or "..."
 
     def _call_chat_api_stream(self, system_prompt: str,
-                               messages: list[dict]) -> Iterator[str]:
+                               messages: list[dict],
+                               max_tokens: int = 2000) -> Iterator[str]:
         """Stream chat API response, yielding token strings."""
         with self.client.messages.stream(
             model=self.model,
-            max_tokens=2000,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=messages,
         ) as stream:

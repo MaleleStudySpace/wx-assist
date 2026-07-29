@@ -194,7 +194,7 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         """DeepSeek-specific: uses chat.completions.create() with system role."""
         api_messages = [{"role": "system", "content": system_prompt}] + messages
         params = self._merge_params(
-            {"model": self.model, "max_tokens": 400, "messages": api_messages},
+            {"model": self.model, "max_tokens": 4096, "messages": api_messages},
             self.extra_body,
         )
         response = self.client.chat.completions.create(**params)
@@ -262,12 +262,13 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         return content
 
     def _call_chat_api_stream(self, system_prompt: str,
-                               messages: list[dict]) -> Iterator[str]:
+                               messages: list[dict],
+                               max_tokens: int = 2000) -> Iterator[str]:
         """Stream chat API response, yielding token strings."""
         from typing import Iterator as _Iter
         api_messages = [{"role": "system", "content": system_prompt}] + messages
         params = self._merge_params(
-            {"model": self.model, "max_tokens": 2000,
+            {"model": self.model, "max_tokens": max_tokens,
              "messages": api_messages, "stream": True},
             self.extra_body,
         )
@@ -287,7 +288,7 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         """Agent chat with tool calling via OpenAI-compatible API."""
         api_messages = [{"role": "system", "content": system_prompt}] + messages
         params = self._merge_params(
-            {"model": self.model, "max_tokens": 2000,
+            {"model": self.model, "max_tokens": 4096,
              "messages": api_messages,
              "tools": tools, "tool_choice": "auto"},
             self.extra_body,

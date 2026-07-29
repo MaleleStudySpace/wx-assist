@@ -758,6 +758,8 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
   const [name, setName] = useState(group?.name || '')
   const [selectedAccounts, setSelectedAccounts] = useState(group?.accounts || [])
   const [pushTarget, setPushTarget] = useState(group?.push_target === 'ilink')
+  const [customPrompt, setCustomPrompt] = useState(group?.custom_prompt || '')
+  const [promptExpanded, setPromptExpanded] = useState(false)
   const [accountSearch, setAccountSearch] = useState('')
   const [showAccountPicker, setShowAccountPicker] = useState(false)
 
@@ -767,12 +769,21 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
     return (acc.nickname || '').toLowerCase().includes(q) || (acc.username || '').toLowerCase().includes(q)
   })
 
-  const sortedAccounts = [...filteredAccounts].sort((a, b) => {
-    const aSel = selectedAccounts.includes(a.username) ? 0 : 1
-    const bSel = selectedAccounts.includes(b.username) ? 0 : 1
-    if (aSel !== bSel) return aSel - bSel
-    return (a.nickname || a.username).localeCompare(b.nickname || b.username)
-  })
+  const sortedAccounts = [...filteredAccounts].sort((a, b) =>
+    (a.nickname || a.username).localeCompare(b.nickname || b.username),
+  )
+
+  // ── Select all logic ──
+  function toggleSelectAll() {
+    const allUsernames = sortedAccounts.map(a => a.username)
+    // 如果所有可见账号都已选中 → 取消全选；否则全选
+    const allSelected = allUsernames.every(u => selectedAccounts.includes(u))
+    setSelectedAccounts(prev =>
+      allSelected
+        ? prev.filter(u => !allUsernames.includes(u))
+        : [...new Set([...prev, ...allUsernames])]
+    )
+  }
 
   function toggleAccount(username) {
     setSelectedAccounts(prev =>
@@ -854,8 +865,30 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
                   {accountSearch ? '没有匹配的公众号' : '暂无公众号数据'}
                 </p>
               ) : (
-                sortedAccounts.map(acc => {
-                  const isSelected = selectedAccounts.includes(acc.username)
+                <>
+                  {/* ② 全选/取消全选 */}
+                  <button
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={toggleSelectAll}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors cursor-pointer
+                      border-b border-border-main/50 text-text-muted hover:text-text-main hover:bg-bg-raised/60"
+                  >
+                    <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors
+                      ${sortedAccounts.every(a => selectedAccounts.includes(a.username))
+                        ? 'bg-brand-green border-brand-green' : 'border-border-main'}`}>
+                      {sortedAccounts.every(a => selectedAccounts.includes(a.username)) && (
+                        <svg viewBox="0 0 12 12" className="w-2.5 h-2.5 text-bg-main" fill="currentColor">
+                          <path d="M10.28 2.28L4.5 8.06 1.72 5.28l-.72.72L4.5 9.5l6.5-6.5z"/>
+                        </svg>
+                      )}
+                    </div>
+                    <span className="text-xs font-medium">
+                      {sortedAccounts.every(a => selectedAccounts.includes(a.username))
+                        ? '取消全选' : '全选所有'}
+                    </span>
+                  </button>
+                  {sortedAccounts.map(acc => {
+                    const isSelected = selectedAccounts.includes(acc.username)
                   return (
                     <button
                       key={acc.username}
@@ -879,7 +912,7 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
                     </button>
                   )
                 })
-              )}
+              </>)}
             </div>
           )}
         </div>
@@ -898,6 +931,36 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
         <Toggle enabled={pushTarget} onChange={setPushTarget} />
       </div>
 
+      {/* ③ 自定义 prompt — 默认收起 */}
+      <div className="border border-border-main rounded-lg overflow-hidden">
+        <button
+          onClick={() => setPromptExpanded(v => !v)}
+          className="w-full flex items-center justify-between px-3.5 py-2.5 text-sm text-text-muted
+            hover:text-text-main transition-colors cursor-pointer"
+        >
+          <span className="flex items-center gap-2">
+            <span className="text-xs">📝</span>
+            自定义提醒 prompt
+          </span>
+          <span className={`text-xs transition-transform duration-200 ${promptExpanded ? 'rotate-90' : ''}`}>▶</span>
+        </button>
+        {promptExpanded && (
+          <div className="border-t border-border-main px-3.5 py-3">
+            <textarea
+              value={customPrompt}
+              onChange={(e) => setCustomPrompt(e.target.value)}
+              placeholder="输入自定义 prompt，留空则使用默认预设"
+              className="w-full bg-bg-raised border border-border-main rounded-lg p-2.5 text-sm text-text-main
+                placeholder:text-text-muted focus:outline-none focus:border-amber-500/50 resize-vertical
+                min-h-[70px] leading-relaxed"
+            />
+            <div className="mt-1.5 text-xs text-text-muted/60">
+              默认 prompt：「请用1-2句话总结以下公众号文章的核心内容」。填写后替代预设。
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Save / Cancel */}
       <div className="flex gap-2 pt-1">
         <button
@@ -905,6 +968,7 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
             name,
             accounts: selectedAccounts,
             push_target: pushTarget ? 'ilink' : '',
+            custom_prompt: customPrompt || undefined,
           })}
           disabled={!name.trim() || selectedAccounts.length === 0}
           className="flex-1 py-2.5 rounded-full bg-amber-500 text-white text-sm font-semibold

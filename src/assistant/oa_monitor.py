@@ -299,7 +299,8 @@ class OAMonitorEngine:
                         title[:30],
                     )
                 else:
-                    prompt = "请用1-2句话总结以下公众号文章的核心内容:\n\n" + article_text
+                    base_prompt = mg.custom_prompt or "请用1-2句话总结以下公众号文章的核心内容"
+                    prompt = f"{base_prompt}\n\n{article_text}"
                     _t0 = _time.monotonic()
 
                     # 后台线程执行 LLM 调用，硬超时 35 秒（httpx 60s + 安全余量）

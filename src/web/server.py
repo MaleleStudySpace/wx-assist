@@ -1361,6 +1361,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          ) or (
                              self.path == "/api/mcp/servers"
                          ) or (
+                             self.path == "/api/mcp/test"
+                         ) or (
                              self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 5
                          ):
             self.do_GET()
@@ -3647,6 +3649,30 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     else:
                         result = {"ok": True, "servers": [], "status": {}}
                     self.send_json(result)
+                    return
+
+                # POST /api/mcp/test — 测试远程 MCP 连接
+                if _method == "POST" and self.path == "/api/mcp/test":
+                    try:
+                        from src.mcp.client import HttpClient as _TestClient
+                        _test_url = _body.get("url", "")
+                        _test_headers = _body.get("headers", {})
+                        _test_timeout = _body.get("timeout", 10)
+                        if not _test_url:
+                            self.send_json({"ok": False, "error": "URL 不能为空"})
+                            return
+                        _test_client = _TestClient({
+                            "name": "_test",
+                            "url": _test_url,
+                            "headers": _test_headers,
+                            "timeout": _test_timeout,
+                        })
+                        _test_client.initialize(timeout=_test_timeout)
+                        _test_tools = _test_client.list_tools(timeout=_test_timeout)
+                        _test_client.close()
+                        self.send_json({"ok": True, "tools_count": len(_test_tools)})
+                    except Exception as e:
+                        self.send_json({"ok": False, "error": str(e)})
                     return
 
                 # POST /api/mcp/servers — 新增 server

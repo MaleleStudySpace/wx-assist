@@ -1108,6 +1108,12 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
     try:
         config = load_config()
         summarizer = create_summarizer(config)
+        # 快速总结禁用 thinking/reasoning，节省时间
+        if hasattr(summarizer, 'extra_body'):
+            summarizer.extra_body = {
+                **(summarizer.extra_body or {}),
+                "thinking": {"type": "disabled"},
+            }
     except Exception as e:
         _fail_task(f"AI 后端初始化失败: {e}")
         _send_sse_headers(wfile)
@@ -1180,7 +1186,8 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
     first_token_received = False
     try:
         for token in summarizer._call_chat_api_stream(
-            system_prompt, [{"role": "user", "content": user_message}]
+            system_prompt, [{"role": "user", "content": user_message}],
+            max_tokens=4096,  # 给 DeepSeek reasoning 预留空间
         ):
             if not first_token_received:
                 first_token_received = True
@@ -1216,6 +1223,16 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
 
     # Log the call
     response_text = "".join(full_response)
+
+    # 空响应兜底：DeepSeek reasoning 吃光 max_tokens 导致 content 为空
+    if not response_text:
+        logger.warning("[SNS_SUMMARIZE] Empty response from AI")
+        _fail_task("AI 返回为空")
+        try:
+            _send_sse_event(wfile, "error", {"message": "⚠️ AI 返回为空，请重试"})
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        return
     latency = (time.monotonic() - stream_start) * 1000
     log_llm_interaction(
         backend=summarizer._backend_name,

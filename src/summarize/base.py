@@ -197,7 +197,8 @@ class AbstractSummarizer(ABC):
 
     @abstractmethod
     def _call_chat_api_stream(self, system_prompt: str,
-                               messages: list[dict]) -> Iterator[str]:
+                               messages: list[dict],
+                               max_tokens: int = 2000) -> Iterator[str]:
         """Stream chat API response, yielding token strings one by one.
 
         Used by the AI Chat feature (favorites & group chat) for SSE

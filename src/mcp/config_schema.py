@@ -76,6 +76,14 @@ def validate_config(configs):
 
     for i, item in enumerate(configs):
         name = item.get("name", "<index {}>".format(i))
+
+        # 推断 transport (兼容不显式指定 transport 的格式)
+        if not item.get("transport"):
+            if item.get("command"):
+                item["transport"] = "stdio"
+            elif item.get("url"):
+                item["transport"] = "http"
+
         transport = item.get("transport", "")
 
         # 检查名称唯一性

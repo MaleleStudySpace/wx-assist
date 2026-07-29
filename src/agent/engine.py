@@ -228,7 +228,7 @@ class AgentEngine:
                             len(action_tcs),
                             [t["function"]["name"] for t in action_tcs])
                 return self._intercept_confirm(system, messages, confirm_tc,
-                                               action_tcs, reasoning or "")
+                                               action_tcs, content or "", reasoning or "")
 
             # ── Execute tools ───────────────────────────────────────
             for tc in action_tcs:
@@ -296,12 +296,17 @@ class AgentEngine:
                            messages: list[dict],
                            confirm_tc: dict,
                            action_tcs: list[dict],
+                           llm_content: str = "",
                            reasoning: str = "") -> str:
         """Intercept a confirm_action call from the LLM.
 
         Saves both the confirm state AND any pending action_tcs.
         On user confirm, action_tcs are executed directly without
         going back to the LLM for re-generation.
+
+        Args:
+            llm_content: The text content from the LLM's response
+                         (may be empty if LLM only returned tool_calls).
 
         Returns:
             Confirmation question text for the user.
@@ -323,7 +328,7 @@ class AgentEngine:
         all_tcs = [confirm_tc] + (action_tcs or [])
         messages.append({
             "role": "assistant",
-            "content": None,
+            "content": llm_content or None,
             "reasoning_content": reasoning,
             "tool_calls": all_tcs,
         })
@@ -389,6 +394,8 @@ class AgentEngine:
                     "content": result,
                 })
 
+            # Append user's confirm message so LLM sees it
+            pending["messages"].extend(fresh_messages)
             self._pending_confirm = None
             # Set bypass for the next ReAct step (post-confirm tool calls)
             self._bypass_confirm = True
@@ -409,6 +416,8 @@ class AgentEngine:
                     "tool_call_id": tc["id"],
                     "content": "用户取消了操作，该操作未执行。",
                 })
+            # Append user's cancel message so LLM sees it
+            pending["messages"].extend(fresh_messages)
             self._pending_confirm = None
             return self._react_loop(pending["system"], pending["messages"])
 
