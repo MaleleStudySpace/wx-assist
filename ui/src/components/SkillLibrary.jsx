@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { ArrowsClockwise } from '@phosphor-icons/react'
 
 // ── Skill 开发指南卡片 ─────────────────────────────────────────────
 function SkillGuideCard({ embedded }) {
@@ -152,9 +153,22 @@ export default function SkillLibrary({ skills, onRefresh }) {
       <div className="flex flex-col gap-3">
         <div className="border border-border-main rounded-xl bg-bg-card overflow-hidden">
           <div className="p-3 border-b border-border-main">
-            <input value={search} onChange={(e) => setSearch(e.target.value)}
-              placeholder="🔍 搜索 skill..."
-              className="w-full bg-bg-raised border border-border-main rounded-lg px-4 py-2.5 text-sm text-text-main focus:outline-none focus:border-brand-green" />
+            <div className="flex items-center gap-2">
+              <input value={search} onChange={(e) => setSearch(e.target.value)}
+                placeholder="🔍 搜索 skill..."
+                className="flex-1 bg-bg-raised border border-border-main rounded-lg px-4 py-2.5 text-sm text-text-main focus:outline-none focus:border-brand-green" />
+              <button
+                type="button"
+                onClick={onRefresh}
+                title="刷新 skill 列表"
+                className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-lg
+                  bg-bg-raised border border-border-main text-text-muted
+                  hover:text-brand-green hover:border-brand-green/30
+                  transition-all cursor-pointer"
+              >
+                <ArrowsClockwise size={16} />
+              </button>
+            </div>
           </div>
           <div className="max-h-[420px] overflow-y-auto p-2">
             {filteredSkills.map(s => (

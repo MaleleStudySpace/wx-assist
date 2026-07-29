@@ -147,6 +147,12 @@ def main():
         script_path = sys.argv[2]
         script_args = sys.argv[3:]
         sys.argv = [script_path] + script_args
+        # Reconfigure stdout/stderr to UTF-8 (EXE inherits GBK from Windows)
+        import io
+        if sys.stdout and hasattr(sys.stdout, "buffer") and sys.stdout.buffer:
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+        if sys.stderr and hasattr(sys.stderr, "buffer") and sys.stderr.buffer:
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
         with open(script_path, encoding="utf-8") as _f:
             _code = compile(_f.read(), script_path, "exec")
         exec(_code, {"__name__": "__main__", "__file__": str(script_path)})
