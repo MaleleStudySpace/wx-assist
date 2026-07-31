@@ -173,6 +173,17 @@ class OAMonitorEngine:
                 logger.debug("OAMonitor: '%s' already alerted (dedup hit)", title[:30])
                 continue
 
+            # Mark as alerted immediately (prevents race within same poll)
+            self._alerted_urls[art.url] = now
+
+            # Format time
+            time_str = ""
+            if art_ts:
+                try:
+                    time_str = datetime.fromtimestamp(art_ts).strftime('%Y-%m-%d %H:%M')
+                except Exception:
+                    time_str = ""
+
             # ── AI 摘要：4 层内容获取链路 + 后台线程 + 35s 超时 ──
             # Layer 1: 本地 oa_cache.full_content
             # Layer 2: HTTP 抓取（oa_reader）— 第一次尝试

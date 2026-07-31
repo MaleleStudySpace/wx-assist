@@ -1046,6 +1046,7 @@ export default function OATab() {
   const [search, setSearch] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [searching, setSearching] = useState(false)
+  const [hasSearched, setHasSearched] = useState(false)  // 是否点击过"搜索"（空状态只在该后才显示）
   const [digestRunning, setDigestRunning] = useState('')
   const [digestProgress, setDigestProgress] = useState('')
   const [lastDigest, setLastDigest] = useState(null)
@@ -1214,6 +1215,7 @@ export default function OATab() {
   async function handleSearch() {
     if (!search.trim()) return
     setSearching(true)
+    setHasSearched(true)
     try {
       const res = await fetch(`${API_BASE}/api/oa/search?q=${encodeURIComponent(search)}`)
       const data = await res.json()
@@ -1246,6 +1248,7 @@ export default function OATab() {
   function clearSearch() {
     setSearch('')
     setSearchResults([])
+    setHasSearched(false)
   }
 
   // ── OA Monitor CRUD ──────────────────────────────────────────────
@@ -1492,7 +1495,7 @@ export default function OATab() {
                 ))}
               </div>
             </motion.div>
-          ) : search.trim() && !searching ? (
+          ) : search.trim() && !searching && hasSearched ? (
             <div className="text-center py-6 text-sm text-text-muted border border-dashed border-border-main rounded-xl bg-bg-card/30">
               <FileText size={24} className="mx-auto mb-2 opacity-30" />
               <p>未找到匹配 "{search}" 的文章</p>

@@ -209,7 +209,7 @@ function ChatRecordCard({ records, talker, myWxid, msgCreateTime }) {
 }
 
 // ── Chat Bubble ──
-function ChatBubble({ msg, talker, myWxid, isGroupChat, onImageClick, isPlaying, onPlayStart, onPlayStop }) {
+function ChatBubble({ msg, talker, myWxid, selfAvatar, isGroupChat, onImageClick, isPlaying, onPlayStart, onPlayStop }) {
   const voiceRef = useRef(null)
   const isSelf = msg.is_self
   const localType = msg.localType
@@ -235,7 +235,7 @@ function ChatBubble({ msg, talker, myWxid, isGroupChat, onImageClick, isPlaying,
     )
   }
 
-  const avatarUrl = isSelf ? '' : (msg.sender_avatar || '')
+  const avatarUrl = isSelf ? (selfAvatar || '') : (msg.sender_avatar || '')
   const avatarName = isSelf ? '我' : (msg.sender_name || msg.sender || '?')
 
   return (
@@ -479,6 +479,7 @@ export default function ChatTab() {
   const [showAntiRevoke, setShowAntiRevoke] = useState(false)   // Show anti-revoke card
   const [restrictedEnabled, setRestrictedEnabled] = useState(false) // Whether restricted features are enabled
   const [myWxid, setMyWxid] = useState('')
+  const [selfAvatar, setSelfAvatar] = useState('')  // 自己的头像（isSelf 消息用，来自 /api/status）
   const [lightboxSrc, setLightboxSrc] = useState(null)    // Image lightbox
   const [autoScroll, setAutoScroll] = useState(true)      // Step 1: auto scroll tracking
   const [currentPlayingVoice, setCurrentPlayingVoice] = useState(null)  // Step 9: voice coordination
@@ -503,6 +504,14 @@ export default function ChatTab() {
   const memberSearchTimerRef = useRef(null)  // Member search debounce
 
   useEffect(() => { loadSessions() }, [])
+
+  // 自己的头像（我发的消息用微信头像显示，同 /api/status 的 avatar_url）
+  useEffect(() => {
+    fetch(`${API_BASE}/api/status`)
+      .then(r => r.json())
+      .then(d => { if (d?.avatar_url) setSelfAvatar(d.avatar_url) })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     async function load() {
@@ -1253,6 +1262,7 @@ export default function ChatTab() {
                             msg={msg}
                             talker={selectedSession.username}
                             myWxid={myWxid}
+                            selfAvatar={selfAvatar}
                             isGroupChat={isGroupChat}
                             onImageClick={(src) => {
                               setLightboxSrc(src)
