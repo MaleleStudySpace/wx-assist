@@ -141,29 +141,32 @@ class TestDigestFiltering(unittest.TestCase):
             group_name="测试群",
             schedule=["12:00"],
             profile=GroupProfile(
-                purpose="测试",
-                description="这是测试群",
-                focus=["重点"],
-                ignore=["闲聊"],
-                style="偏极简",
+                style="行动项优先",
+                custom_prompt="只输出待办",
             ),
+            memory="上次聊了部署方案",
         )
         msgs = [
             {"sender_name": "A", "content": "好消息", "timestamp": 1700000000},
             {"sender_name": "B", "content": "什么消息", "timestamp": 1700000100},
         ]
         prompt = build_digest_prompt(dg, msgs)
-        self.assertIn("测试群", prompt)
+        # 结构：近期记忆 + 最近消息（群信息段已移除）
+        self.assertIn("## 近期记忆", prompt)
+        self.assertIn("上次聊了部署方案", prompt)
+        self.assertIn("## 最近 2 条消息", prompt)
         self.assertIn("好消息", prompt)
         self.assertIn("什么消息", prompt)
-        self.assertIn("偏极简", prompt)
-        self.assertIn("重点", prompt)
+        # 已删除字段不应出现在 prompt 中
+        self.assertNotIn("群简介", prompt)
+        self.assertNotIn("关注点", prompt)
+        self.assertNotIn("忽略内容", prompt)
 
     def test_memory_update_prompt(self):
         prompt = generate_memory_update_prompt("旧记忆", "新摘要内容")
         self.assertIn("旧记忆", prompt)
         self.assertIn("新摘要内容", prompt)
-        self.assertIn("500", prompt)
+        self.assertIn("2000", prompt)
 
 
 if __name__ == "__main__":

@@ -308,7 +308,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
   })
   const [lookback, setLookback] = useState(group?.lookback_hours || 24)
   const [lookbackMode, setLookbackMode] = useState(group?.lookback_mode || 'auto')
-  const [pushTarget, setPushTarget] = useState(group?.push_target === 'ilink')
+  const [pushTarget, setPushTarget] = useState(!group || group?.push_target === 'ilink')
   const [selectedAccounts, setSelectedAccounts] = useState(group?.accounts || [])
   const [accountSearch, setAccountSearch] = useState('')
   const [showAccountPicker, setShowAccountPicker] = useState(false)
@@ -757,7 +757,7 @@ function MonitorGroupCard({ group, accounts, onEdit, onDelete, onToggle }) {
 function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
   const [name, setName] = useState(group?.name || '')
   const [selectedAccounts, setSelectedAccounts] = useState(group?.accounts || [])
-  const [pushTarget, setPushTarget] = useState(group?.push_target === 'ilink')
+  const [pushTarget, setPushTarget] = useState(!group || group?.push_target === 'ilink')
   const [customPrompt, setCustomPrompt] = useState(group?.custom_prompt || '')
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [accountSearch, setAccountSearch] = useState('')

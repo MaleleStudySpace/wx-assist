@@ -453,11 +453,10 @@ class DigestScheduler:
             logger.info("[DIGEST] Step 2/7: unread_only filter for '%s' — %d unread messages",
                          dg.group_name, unread_count)
 
-        # 3. Filter
-        ignore_kw = dg.profile.ignore if dg.profile else []
-        filtered = filter_messages(raw_messages, ignore_kw)
-        logger.info("[DIGEST] Step 3/7: Noise filter for '%s' — %d → %d messages (ignore_kw=%s)",
-                     dg.group_name, len(raw_messages), len(filtered), ignore_kw)
+        # 3. Filter (系统消息/噪音/媒体占位符 — 不再按 profile.ignore 过滤)
+        filtered = filter_messages(raw_messages)
+        logger.info("[DIGEST] Step 3/7: Noise filter for '%s' — %d → %d messages",
+                     dg.group_name, len(raw_messages), len(filtered))
         if not filtered:
             self._tc_complete(task_id, result='无实质内容')
             return
@@ -540,51 +539,54 @@ class DigestScheduler:
             logger.error("[DIGEST] Step 4/7: LLM call failed for '%s': %s", dg.group_name, e)
             digest_text = f"摘要生成失败: {e}"
 
-        # 5. Update memory
-        mem_system_prompt = "你是一个群聊记忆助手，负责记录群聊摘要要点。用中文，≤500字。"
-        try:
-            mem_prompt = generate_memory_update_prompt(dg.memory, digest_text)
-            mem_start = time.monotonic()
-            new_memory = self._summarizer._call_chat_api(
-                mem_system_prompt,
-                [{"role": "user", "content": mem_prompt}],
-            )
-            mem_latency = (time.monotonic() - mem_start) * 1000
-            log_llm_interaction(
-                backend=getattr(self._summarizer, "_backend_name", "unknown"),
-                call_type="group_digest_memory",
-                model=getattr(self._summarizer, "model", "unknown"),
-                system_prompt=mem_system_prompt,
-                user_prompt=mem_prompt,
-                response=new_memory or "",
-                latency_ms=mem_latency,
-                extra={
-                    "group_id": dg.chat_id or dg.group_name,
-                    "group_name": dg.group_name,
-                    "existing_memory_len": len(dg.memory or ""),
-                },
-            )
-            dg.memory = new_memory[:500] if new_memory else dg.memory
-            save_assistant_config(self._config)
-            logger.info("[DIGEST] Step 5/7: Memory updated for '%s' (%d → %d chars)",
-                         dg.group_name, len(dg.memory or ""), len(new_memory or ""))
-        except Exception as e:
-            mem_latency = (time.monotonic() - mem_start) * 1000 if "mem_start" in locals() else 0
-            log_llm_interaction(
-                backend=getattr(self._summarizer, "_backend_name", "unknown"),
-                call_type="group_digest_memory",
-                model=getattr(self._summarizer, "model", "unknown"),
-                system_prompt=mem_system_prompt,
-                user_prompt=generate_memory_update_prompt(dg.memory, digest_text) if dg.memory else "",
-                response=f"[Error: {e}]",
-                latency_ms=mem_latency,
-                extra={
-                    "group_id": dg.chat_id or dg.group_name,
-                    "group_name": dg.group_name,
-                    "error": str(e),
-                },
-            )
-            logger.warning("[DIGEST] Step 5/7: Memory update failed for '%s': %s", dg.group_name, e)
+        # 5. Update memory — 仅在群记忆开关开启时更新
+        if dg.memory_enabled:
+            mem_system_prompt = "你是一个群聊记忆助手，负责记录群聊摘要要点。用中文，≤2000字。"
+            try:
+                mem_prompt = generate_memory_update_prompt(dg.memory, digest_text)
+                mem_start = time.monotonic()
+                new_memory = self._summarizer._call_chat_api(
+                    mem_system_prompt,
+                    [{"role": "user", "content": mem_prompt}],
+                )
+                mem_latency = (time.monotonic() - mem_start) * 1000
+                log_llm_interaction(
+                    backend=getattr(self._summarizer, "_backend_name", "unknown"),
+                    call_type="group_digest_memory",
+                    model=getattr(self._summarizer, "model", "unknown"),
+                    system_prompt=mem_system_prompt,
+                    user_prompt=mem_prompt,
+                    response=new_memory or "",
+                    latency_ms=mem_latency,
+                    extra={
+                        "group_id": dg.chat_id or dg.group_name,
+                        "group_name": dg.group_name,
+                        "existing_memory_len": len(dg.memory or ""),
+                    },
+                )
+                dg.memory = new_memory[:2000] if new_memory else dg.memory
+                save_assistant_config(self._config)
+                logger.info("[DIGEST] Step 5/7: Memory updated for '%s' (%d → %d chars)",
+                             dg.group_name, len(dg.memory or ""), len(new_memory or ""))
+            except Exception as e:
+                mem_latency = (time.monotonic() - mem_start) * 1000 if "mem_start" in locals() else 0
+                log_llm_interaction(
+                    backend=getattr(self._summarizer, "_backend_name", "unknown"),
+                    call_type="group_digest_memory",
+                    model=getattr(self._summarizer, "model", "unknown"),
+                    system_prompt=mem_system_prompt,
+                    user_prompt=generate_memory_update_prompt(dg.memory, digest_text) if dg.memory else "",
+                    response=f"[Error: {e}]",
+                    latency_ms=mem_latency,
+                    extra={
+                        "group_id": dg.chat_id or dg.group_name,
+                        "group_name": dg.group_name,
+                        "error": str(e),
+                    },
+                )
+                logger.warning("[DIGEST] Step 5/7: Memory update failed for '%s': %s", dg.group_name, e)
+        else:
+            logger.debug("[DIGEST] Step 5/7: Memory update skipped for '%s' (memory_enabled=false)", dg.group_name)
 
         # 6. Push to outbox
         mode_label = "未读" if dg.unread_only else f"{dg.lookback_hours}h"

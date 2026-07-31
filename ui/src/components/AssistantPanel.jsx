@@ -325,10 +325,11 @@ export default function AssistantPanel() {
   // Inline editors
   const [showAlertEditor, setShowAlertEditor] = useState(false)
   const [showDigestEditor, setShowDigestEditor] = useState(false)
-  const [alertDraft, setAlertDraft] = useState({ chat_id: '', group_name: '', keywords: [], enabled: true, push_target: '' })
+  const [alertDraft, setAlertDraft] = useState({ chat_id: '', group_name: '', keywords: [], enabled: true, push_target: 'ilink' })
   const [digestDraft, setDigestDraft] = useState({
     chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true,
-    unread_only: false, push_target: '', profile: { summary: '', focus: [], ignore: [], style: '', custom_prompt: '' },
+    unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '',
+    profile: { style: '', custom_prompt: '' },
   })
   const [editorError, setEditorError] = useState('')
   // Push result toast (auto-disappears after 3s)
@@ -827,7 +828,7 @@ export default function AssistantPanel() {
                 <Lightning size={32} className="text-text-muted/30 mx-auto mb-3" />
                 <p className="text-sm text-text-muted">添加联系人以配置关键词提醒</p>
                 <button
-                  onClick={() => { setShowAlertEditor(true); setAlertDraft({ chat_id: '', group_name: '', keywords: [], enabled: true, push_target: '' }); setEditorError('') }}
+                  onClick={() => { setShowAlertEditor(true); setAlertDraft({ chat_id: '', group_name: '', keywords: [], enabled: true, push_target: 'ilink' }); setEditorError('') }}
                   className="mt-4 text-sm text-brand-green-hover hover:underline cursor-pointer font-medium"
                 >+ 添加提醒群</button>
               </div>
@@ -884,7 +885,7 @@ export default function AssistantPanel() {
             {/* 有群时的添加按钮 */}
             {(config.alert_groups?.length > 0 || showAlertEditor) && !showAlertEditor && (
               <button
-                onClick={() => { setShowAlertEditor(true); setAlertDraft({ chat_id: '', group_name: '', keywords: [], enabled: true, push_target: '' }); setEditorError('') }}
+                onClick={() => { setShowAlertEditor(true); setAlertDraft({ chat_id: '', group_name: '', keywords: [], enabled: true, push_target: 'ilink' }); setEditorError('') }}
                 className="w-full py-3.5 text-sm text-text-muted hover:text-brand-green border border-dashed border-border-main hover:border-brand-green/40 rounded-xl transition-all duration-200 cursor-pointer bg-bg-raised/30 hover:bg-brand-green/5"
               >
                 + 添加提醒群
@@ -977,6 +978,12 @@ export default function AssistantPanel() {
                         return { ...prev, [i]: { ...prev[i], profile: { ...profile, ...patch } } }
                       })
                     }}
+                    onMemoryChange={memory => {
+                      setDigestDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || dg), memory } }))
+                    }}
+                    onMemoryEnabledChange={memory_enabled => {
+                      setDigestDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || dg), memory_enabled } }))
+                    }}
                     onUnreadOnlyChange={v => {
                       // Toggle updates draft only — save button persists
                       setDigestDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || dg), unread_only: v } }))
@@ -1034,7 +1041,7 @@ export default function AssistantPanel() {
                 <Clock size={32} className="text-text-muted/30 mx-auto mb-3" />
                 <p className="text-sm text-text-muted">添加联系人以配置定时摘要</p>
                 <button
-                  onClick={() => { setShowDigestEditor(true); setDigestDraft({ chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true, unread_only: false, push_target: '', profile: { summary: '', focus: [], ignore: [], style: '' } }); setEditorError('') }}
+                  onClick={() => { setShowDigestEditor(true); setDigestDraft({ chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true, unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '', profile: { style: '', custom_prompt: '' } }); setEditorError('') }}
                   className="mt-4 text-sm text-brand-green-hover hover:underline cursor-pointer font-medium"
                 >+ 添加摘要群</button>
               </div>
@@ -1090,7 +1097,7 @@ export default function AssistantPanel() {
             {/* 有群时的添加按钮 */}
             {(config.digest_groups?.length > 0 || showDigestEditor) && !showDigestEditor && (
               <button
-                onClick={() => { setShowDigestEditor(true); setDigestDraft({ chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true, unread_only: false, push_target: '', profile: { purpose: '', description: '', focus: [], ignore: [], style: '' } }); setEditorError('') }}
+                onClick={() => { setShowDigestEditor(true); setDigestDraft({ chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true, unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '', profile: { style: '', custom_prompt: '' } }); setEditorError('') }}
                 className="w-full py-3.5 text-sm text-text-muted hover:text-brand-green border border-dashed border-border-main hover:border-brand-green/40 rounded-xl transition-all duration-200 cursor-pointer bg-bg-raised/30 hover:bg-brand-green/5"
               >
                 + 添加摘要群
@@ -1559,7 +1566,7 @@ function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCron
   )
 }
 
-function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onLookbackModeChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onSave, onCancel, defaultSystemPrompt, stylePresets, digestRunning, onRunDigest }) {
+function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onLookbackModeChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onMemoryChange, onMemoryEnabledChange, onSave, onCancel, defaultSystemPrompt, stylePresets, digestRunning, onRunDigest }) {
   const bodyRef = useRef(null)
   // Use draft if available (editing), otherwise use saved values
   const values = draft || dg
@@ -1732,7 +1739,7 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                 >
                   {profileExpanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
                   群档案 Profile
-                  {values.profile && (values.profile.summary || values.profile.focus?.length || values.profile.custom_prompt) ? (
+                  {values.profile && (values.profile.custom_prompt || values.profile.style) ? (
                     <span className="text-xs text-brand-green">· 已填写</span>
                   ) : (
                     <span className="text-xs text-text-muted">· 可选</span>
@@ -1748,21 +1755,26 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                       className="overflow-hidden"
                     >
                       <div className="mt-3 space-y-2.5 pl-4">
-                        {/* 群简介 — merged from purpose + description */}
+                        {/* 群记忆开关 + 可编辑记忆 */}
                         <div>
-                          <label className="text-xs text-text-muted block mb-1">群简介</label>
+                          <div className="flex items-center justify-between gap-3 mb-1">
+                            <label className="text-xs text-text-muted">群记忆</label>
+                            <Toggle
+                              enabled={!!values.memory_enabled}
+                              onChange={onMemoryEnabledChange}
+                            />
+                          </div>
+                          <p className="text-xs text-text-muted mb-1.5">每次摘要后自动浓缩更新；关闭后不再更新。可直接编辑，删除文本保存即清空。</p>
                           <textarea
-                            value={values.profile?.summary || ''}
-                            onChange={e => onProfileChange({ summary: e.target.value })}
-                            placeholder="这个群是做什么的？主要聊什么？"
-                            rows={2}
-                            className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm text-text-main placeholder:text-text-muted/65 resize-none focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                            value={values.memory || ''}
+                            onChange={e => onMemoryChange(e.target.value)}
+                            placeholder="（暂无记忆，第一次摘要后自动生成）"
+                            rows={4}
+                            disabled={!values.memory_enabled}
+                            className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm text-text-main placeholder:text-text-muted/65 resize-none focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all disabled:opacity-45 disabled:cursor-not-allowed"
                           />
+                          <div className="text-right text-[11px] text-text-muted mt-1">{values.memory?.length || 0} / 2000</div>
                         </div>
-                        {/* 关注点 — tag input */}
-                        <ProfileInput label="关注点（逗号分隔）" value={(values.profile?.focus || []).join(', ')} placeholder="新需求, 报价, 截止时间" onChange={v => onProfileChange({ focus: v.split(',').map(s => s.trim()).filter(Boolean) })} />
-                        {/* 忽略内容 — tag input */}
-                        <ProfileInput label="忽略内容（逗号分隔）" value={(values.profile?.ignore || []).join(', ')} placeholder="闲聊, 表情, 广告" onChange={v => onProfileChange({ ignore: v.split(',').map(s => s.trim()).filter(Boolean) })} />
                         {/* 摘要风格 — preset chips + 自定义 */}
                         <div>
                           <label className="text-xs text-text-muted block mb-1.5">摘要风格</label>
@@ -1791,10 +1803,10 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                               >{s.label}</button>
                             ))}
                           </div>
-                          {/** 非自定义风格 → 显示对应提示词预览（只读） */}
-                          {values.profile?.style && values.profile.style !== 'custom' && (
+                          {/** 非自定义风格 → 显示对应提示词预览（只读）；默认风格也显示默认 prompt */}
+                          {values.profile?.style !== 'custom' && (
                             <div className="mt-1.5 p-2 rounded-lg bg-bg-inset border border-border-main text-xs text-text-muted max-h-16 overflow-y-auto whitespace-pre-wrap">
-                              {stylePresets?.[values.profile.style] || defaultSystemPrompt || '（暂无说明）'}
+                              {stylePresets?.[values.profile?.style] || defaultSystemPrompt || '（暂无说明）'}
                             </div>
                           )}
                         </div>
@@ -1999,19 +2011,26 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
               className="overflow-hidden"
             >
               <div className="mt-3 space-y-2.5 pl-4">
-                {/* 群简介 — merged from purpose + description */}
+                {/* 群记忆开关 + 可编辑记忆 */}
                 <div>
-                  <label className="text-xs text-text-muted block mb-1">群简介</label>
+                  <div className="flex items-center justify-between gap-3 mb-1">
+                    <label className="text-xs text-text-muted">群记忆</label>
+                    <Toggle
+                      enabled={!!draft.memory_enabled}
+                      onChange={v => onDraftChange({ ...draft, memory_enabled: v })}
+                    />
+                  </div>
+                  <p className="text-xs text-text-muted mb-1.5">每次摘要后自动浓缩更新；关闭后不再更新。可直接编辑，删除文本保存即清空。</p>
                   <textarea
-                    value={draft.profile?.summary || ''}
-                    onChange={e => onDraftChange({ ...draft, profile: { ...draft.profile, summary: e.target.value } })}
-                    placeholder="这个群是做什么的？主要聊什么？"
-                    rows={2}
-                    className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm text-text-main placeholder:text-text-muted/65 resize-none focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+                    value={draft.memory || ''}
+                    onChange={e => onDraftChange({ ...draft, memory: e.target.value })}
+                    placeholder="（暂无记忆，第一次摘要后自动生成）"
+                    rows={4}
+                    disabled={!draft.memory_enabled}
+                    className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm text-text-main placeholder:text-text-muted/65 resize-none focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all disabled:opacity-45 disabled:cursor-not-allowed"
                   />
+                  <div className="text-right text-[11px] text-text-muted mt-1">{draft.memory?.length || 0} / 2000</div>
                 </div>
-                <ProfileInput label="关注点（逗号分隔）" value={(draft.profile?.focus || []).join(', ')} placeholder="新需求, 报价, 截止时间" onChange={v => onDraftChange({ ...draft, profile: { ...draft.profile, focus: v.split(',').map(s => s.trim()).filter(Boolean) } })} />
-                <ProfileInput label="忽略内容（逗号分隔）" value={(draft.profile?.ignore || []).join(', ')} placeholder="闲聊, 表情, 广告" onChange={v => onDraftChange({ ...draft, profile: { ...draft.profile, ignore: v.split(',').map(s => s.trim()).filter(Boolean) } })} />
                 {/* 摘要风格 — preset chips + 自定义 */}
                 <div>
                   <label className="text-xs text-text-muted block mb-1.5">摘要风格</label>
@@ -2034,10 +2053,10 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
                       >{s.label}</button>
                     ))}
                   </div>
-                  {/** 非自定义风格 → 显示对应提示词预览（只读） */}
-                  {draft.profile?.style && draft.profile.style !== 'custom' && (
+                  {/** 非自定义风格 → 显示对应提示词预览（只读）；默认风格也显示默认 prompt */}
+                  {draft.profile?.style !== 'custom' && (
                     <div className="mt-1.5 p-2 rounded-lg bg-bg-inset border border-border-main text-xs text-text-muted max-h-16 overflow-y-auto whitespace-pre-wrap">
-                      {stylePresets?.[draft.profile.style] || defaultSystemPrompt || '（暂无说明）'}
+                      {stylePresets?.[draft.profile?.style] || defaultSystemPrompt || '（暂无说明）'}
                     </div>
                   )}
                 </div>
@@ -2102,21 +2121,6 @@ function DeleteButton({ onDelete }) {
     >
       <Trash size={16} />
     </button>
-  )
-}
-
-function ProfileInput({ label, value, placeholder, onChange }) {
-  return (
-    <div>
-      <label className="text-xs text-text-muted block mb-1">{label}</label>
-      <input
-        type="text"
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full bg-bg-raised border border-border-main rounded-lg px-3.5 py-2 text-sm text-text-main placeholder:text-text-muted/65 focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
-      />
-    </div>
   )
 }
 

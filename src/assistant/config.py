@@ -35,14 +35,12 @@ class OAMonitorGroup:
 
 @dataclass
 class GroupProfile:
-    summary: str = ""          # 群简介（合并原 purpose + description）
-    focus: list[str] = field(default_factory=list)    # 关注点
-    ignore: list[str] = field(default_factory=list)   # 忽略内容
+    """群摘要档案 — 只保留输出风格相关配置。
+
+    summary/focus/ignore 已移除：特殊需求直接写在 custom_prompt 中。
+    """
     style: str = ""            # 摘要风格预设: "" | "行动项优先" | "完整复盘" | "极简速览" | "自定义"
     custom_prompt: str = ""    # 额外摘要指令
-    # Legacy fields (kept for backward compat during deserialization)
-    purpose: str = ""          # DEPRECATED — merged into summary
-    description: str = ""      # DEPRECATED — merged into summary
 
 
 @dataclass
@@ -55,6 +53,7 @@ class DigestGroup:
     enabled: bool = True
     profile: Optional[GroupProfile] = None
     memory: str = ""
+    memory_enabled: bool = True  # 群记忆开关: 关闭后摘要不再更新记忆
     unread_only: bool = False   # 仅摘要未读消息
     push_target: str = ""       # 推送目标: "ilink" = 推到微信, "" = 不推送
 
@@ -176,19 +175,14 @@ def _config_to_dict(cfg: AssistantConfig) -> dict:
             "lookback_hours": dg.lookback_hours,
             "enabled": dg.enabled,
             "memory": dg.memory,
+            "memory_enabled": dg.memory_enabled,
             "unread_only": dg.unread_only,
             "push_target": dg.push_target,
         }
         if dg.profile:
             item["profile"] = {
-                "summary": dg.profile.summary,
-                "focus": dg.profile.focus,
-                "ignore": dg.profile.ignore,
                 "style": dg.profile.style,
                 "custom_prompt": dg.profile.custom_prompt,
-                # Legacy aliases for backward compat
-                "purpose": dg.profile.purpose or dg.profile.summary,
-                "description": dg.profile.description,
             }
         else:
             item["profile"] = None
@@ -324,22 +318,11 @@ def _dict_to_config(data: dict) -> AssistantConfig:
         profile = None
         p_data = dg_data.get("profile")
         if p_data:
-            # Migrate legacy purpose/description into summary
-            summary = p_data.get("summary", "")
-            purpose = p_data.get("purpose", "")
-            description = p_data.get("description", "")
-            if not summary and (purpose or description):
-                parts = [p for p in [purpose, description] if p]
-                summary = "\n".join(parts)
+            # 旧数据可能带 summary/focus/ignore/purpose/description — 静默丢弃，
+            # 只保留 style / custom_prompt。
             profile = GroupProfile(
-                summary=summary,
-                focus=p_data.get("focus", []),
-                ignore=p_data.get("ignore", []),
                 style=p_data.get("style", ""),
                 custom_prompt=p_data.get("custom_prompt", ""),
-                # Keep legacy fields for re-serialization compat
-                purpose=purpose,
-                description=description,
             )
         cfg.digest_groups.append(DigestGroup(
             chat_id=dg_data.get("chat_id", ""),
@@ -350,6 +333,7 @@ def _dict_to_config(data: dict) -> AssistantConfig:
             enabled=dg_data.get("enabled", True),
             profile=profile,
             memory=dg_data.get("memory", ""),
+            memory_enabled=dg_data.get("memory_enabled", True),
             unread_only=dg_data.get("unread_only", False),
             push_target=dg_data.get("push_target", ""),
         ))
