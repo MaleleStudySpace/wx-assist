@@ -434,8 +434,23 @@ class OAMonitorEngine:
         if not self._content_cache:
             return
         try:
+            # 幂等写入：已存在的文章保留已有全文抓取状态（content_status / full_content）。
+            # 否则 INSERT OR REPLACE 整行覆盖会把已抓全文的文章重置回待抓状态，
+            # 导致全文抓取队列待抓数不降反升（旧版推送记录无 url 列时更明显——
+            # dedup 查 outbox 匹配不到旧记录，会对已抓文章反复 upsert）。
+            existing = None
+            try:
+                existing = self._content_cache.query_one(
+                    "SELECT content_status, full_content FROM oa_cache WHERE url=?",
+                    [art.url],
+                )
+            except Exception:
+                pass
             cleaned = self._content_cache._clean_oa(art)
             if cleaned:
+                if existing:
+                    cleaned["content_status"] = existing["content_status"]
+                    cleaned["full_content"] = existing["full_content"]
                 self._content_cache.upsert("oa_cache", cleaned)
         except Exception as e:
             logger.warning("[CACHE] _cache_article 失败: %s", e)
