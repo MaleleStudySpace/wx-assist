@@ -263,15 +263,29 @@ class OpenAICompatSummarizer(AbstractSummarizer):
 
     def _call_chat_api_stream(self, system_prompt: str,
                                messages: list[dict],
-                               max_tokens: int = 2000) -> Iterator[str]:
-        """Stream chat API response, yielding token strings."""
+                               max_tokens: int = 2000,
+                               extra_body: dict | None = None) -> Iterator[str]:
+        """Stream chat API response, yielding token strings.
+
+        extra_body: 调用方追加的 SDK 附加参数（如 {"thinking": {"type": "disabled"}}），
+        以 OpenAI SDK 的 extra_body 参数传递，不平铺进顶层 kwargs
+        （否则 SDK 报 unexpected keyword argument 错误）。
+        """
         from typing import Iterator as _Iter
         api_messages = [{"role": "system", "content": system_prompt}] + messages
-        params = self._merge_params(
-            {"model": self.model, "max_tokens": max_tokens,
-             "messages": api_messages, "stream": True},
-            self.extra_body,
-        )
+        params = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": api_messages,
+            "stream": True,
+        }
+        # config 的 AI_PROVIDER_EXTRA_BODY 也按 SDK extra_body 语义传递
+        # （原来被 _merge_params 平铺成顶层参数，配置了附加参数会直接报错）
+        sdk_extra = dict(self.extra_body or {})
+        if extra_body:
+            sdk_extra.update(extra_body)
+        if sdk_extra:
+            params["extra_body"] = sdk_extra
         stream = self.client.chat.completions.create(**params)
         for chunk in stream:
             if not chunk.choices:

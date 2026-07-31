@@ -1108,12 +1108,6 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
     try:
         config = load_config()
         summarizer = create_summarizer(config)
-        # 快速总结禁用 thinking/reasoning，节省时间
-        if hasattr(summarizer, 'extra_body'):
-            summarizer.extra_body = {
-                **(summarizer.extra_body or {}),
-                "thinking": {"type": "disabled"},
-            }
     except Exception as e:
         _fail_task(f"AI 后端初始化失败: {e}")
         _send_sse_headers(wfile)
@@ -1185,9 +1179,16 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
     stream_start = time.monotonic()
     first_token_received = False
     try:
+        # 快速总结禁用 thinking/reasoning，节省时间。
+        # 通过 SDK 的 extra_body 参数传递，不平铺进顶层 kwargs，
+        # 否则 OpenAI SDK 报 "unexpected keyword argument 'thinking'"。
+        # Claude 后端无 thinking 概念，不传该参数。
+        stream_kwargs: dict = {"max_tokens": 4096}  # 给 DeepSeek reasoning 预留空间
+        if getattr(summarizer, "_backend_name", "") == "deepseek":
+            stream_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         for token in summarizer._call_chat_api_stream(
             system_prompt, [{"role": "user", "content": user_message}],
-            max_tokens=4096,  # 给 DeepSeek reasoning 预留空间
+            **stream_kwargs,
         ):
             if not first_token_received:
                 first_token_received = True
