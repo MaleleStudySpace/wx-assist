@@ -145,16 +145,15 @@ class OAMonitorEngine:
             if not art.url:
                 continue
 
-            # ── Dedup: check cache + per-session set ─────────────────
+            # ── Dedup: per-session set + outbox (精确 url) ──────────────
+            # 不再查 oa_cache（避免与 sync_oa_incremental 竞争：增量合并
+            # 先抓到的文章会写入 oa_cache，导致 oa_monitor 误判"已推送"）
             is_known = art.url in self._alerted_urls
-            if not is_known and self._content_cache:
+            if not is_known and self._outbox:
                 try:
-                    existing = self._content_cache.query_one(
-                        "SELECT 1 FROM oa_cache WHERE url=?", [art.url]
-                    )
-                    is_known = existing is not None
-                except Exception:
-                    pass
+                    is_known = self._outbox.query_by_url(art.url, notif_type="oa_article_alert")
+                except Exception as e:
+                    logger.debug("OAMonitor: outbox dedup 查询失败 %s: %s", art.url[:40], e)
 
             # ── Persist to oa_cache (INSERT OR REPLACE, idempotent) ──
             if not is_known:
@@ -162,7 +161,12 @@ class OAMonitorEngine:
                 cached_new += 1
 
             # ── Skip notification for out-of-window or already known ──
-            if not in_window or is_known:
+            if not in_window:
+                age = int(now - art_ts) if art_ts else -1
+                logger.debug("OAMonitor: '%s' out of window (age=%ds)", title[:30], age)
+                continue
+            if is_known:
+                logger.debug("OAMonitor: '%s' already alerted (dedup hit)", title[:30])
                 continue
 
             # Mark as alerted immediately (prevents race within same poll)
@@ -401,6 +405,7 @@ class OAMonitorEngine:
                 title=notif_title,
                 content=notif_content,
                 priority="high",
+                url=art.url,
             )
             logger.info(
                 "OAMonitor: new article '%s' from %s (group=%s)",

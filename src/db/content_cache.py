@@ -586,6 +586,7 @@ class ContentCache:
         if not accounts:
             return 0
         total = 0
+        all_new_titles = []
         tid = None
         try:
             existing = self._get_existing_oa_urls()
@@ -605,10 +606,12 @@ class ContentCache:
                     if new:
                         self.batch_upsert("oa_cache", new)
                         total += len(new)
+                        all_new_titles.extend(c.get("title", "") for c in new if c.get("title"))
                 except Exception as e:
                     logger.warning("[CACHE] OA 增量 %s 失败: %s", name, e)
             if total:
-                logger.info("[CACHE] OA 增量合并: %d 篇文章", total)
+                title_summary = " | ".join(t[:30] for t in all_new_titles[:10])
+                logger.info("[CACHE] OA 增量合并: %d 篇 | %s", total, title_summary)
                 tid = _create_task(task_center, "cache_oa_incremental", "", "OA增量同步")
                 _complete_task(task_center, tid, f"OA 增量: 新增 {total} 篇")
         except Exception as e:

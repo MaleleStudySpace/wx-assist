@@ -1473,7 +1473,7 @@ export default function OATab() {
 
         {/* Search results */}
         <AnimatePresence>
-          {searchResults.length > 0 && (
+          {searchResults.length > 0 ? (
             <motion.div
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
@@ -1492,7 +1492,13 @@ export default function OATab() {
                 ))}
               </div>
             </motion.div>
-          )}
+          ) : search.trim() && !searching ? (
+            <div className="text-center py-6 text-sm text-text-muted border border-dashed border-border-main rounded-xl bg-bg-card/30">
+              <FileText size={24} className="mx-auto mb-2 opacity-30" />
+              <p>未找到匹配 "{search}" 的文章</p>
+              <p className="text-xs mt-1 opacity-60">试试其他关键词，或等 OA 同步完成后重试</p>
+            </div>
+          ) : null}
         </AnimatePresence>
       </div>
 

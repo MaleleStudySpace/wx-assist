@@ -37,6 +37,8 @@ UPGRADE_STMTS = (
     "ALTER TABLE assistant_outbox ADD COLUMN push_status TEXT DEFAULT ''",
     "ALTER TABLE assistant_outbox ADD COLUMN push_error TEXT DEFAULT ''",
     "ALTER TABLE assistant_outbox ADD COLUMN push_at TEXT",
+    # ── 用于 OAMonitorEngine dedup 精确查询（按文章 url） ──
+    "ALTER TABLE assistant_outbox ADD COLUMN url TEXT DEFAULT ''",
     "CREATE INDEX IF NOT EXISTS idx_outbox_chat_id ON assistant_outbox(chat_id)",
     "CREATE INDEX IF NOT EXISTS idx_outbox_type ON assistant_outbox(type)",
     "CREATE INDEX IF NOT EXISTS idx_outbox_push_status ON assistant_outbox(push_status)",
@@ -71,6 +73,7 @@ class Outbox:
                 ("push_status", "ALTER TABLE assistant_outbox ADD COLUMN push_status TEXT DEFAULT ''"),
                 ("push_error", "ALTER TABLE assistant_outbox ADD COLUMN push_error TEXT DEFAULT ''"),
                 ("push_at", "ALTER TABLE assistant_outbox ADD COLUMN push_at TEXT"),
+                ("url", "ALTER TABLE assistant_outbox ADD COLUMN url TEXT DEFAULT ''"),
             ]
             for col_name, alter_sql in migrations:
                 if col_name not in columns:
@@ -96,13 +99,19 @@ class Outbox:
         return conn
 
     def add(self, notif_type: str, group_name: str, title: str,
-            content: str, priority: str = "normal", chat_id: str = "") -> int:
-        """Add a notification and return its ID."""
+            content: str, priority: str = "normal", chat_id: str = "",
+            url: str = "") -> int:
+        """Add a notification and return its ID.
+
+        Args:
+            url: Optional URL for dedup (used by OAMonitorEngine to check
+                 if an OA article was already alerted).
+        """
         with self._get_conn() as conn:
             cur = conn.execute(
-                "INSERT INTO assistant_outbox (type, priority, chat_id, group_name, title, content, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (notif_type, priority, chat_id, group_name, title, content, _now()),
+                "INSERT INTO assistant_outbox (type, priority, chat_id, group_name, title, content, url, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (notif_type, priority, chat_id, group_name, title, content, url, _now()),
             )
             conn.commit()
             nid = cur.lastrowid
@@ -139,6 +148,30 @@ class Outbox:
                 params,
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def query_by_url(self, url: str, notif_type: str = "") -> bool:
+        """Check whether a notification with this URL already exists.
+
+        Used by OAMonitorEngine for accurate dedup. Empty url → False.
+
+        Args:
+            url: Article URL.
+            notif_type: Optional filter (e.g. "oa_article_alert").
+        """
+        if not url:
+            return False
+        with self._get_conn() as conn:
+            if notif_type:
+                row = conn.execute(
+                    "SELECT 1 FROM assistant_outbox WHERE url=? AND type=? LIMIT 1",
+                    (url, notif_type),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT 1 FROM assistant_outbox WHERE url=? LIMIT 1",
+                    (url,),
+                ).fetchone()
+            return row is not None
 
     def ack(self, notif_id: int) -> bool:
         """Mark a notification as delivered."""

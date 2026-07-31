@@ -258,6 +258,21 @@ def get_content_cache():
         return None
 
 
+def _match_my_wxid(sender: str, my_wxid: str) -> bool:
+    """比对 sender 与 my_wxid，忽略末尾 _xxx 设备/场景后缀。
+
+    例如配置 myWxid="wxid_wxeb5jtupcvz12_d3e3"，WCDB sender="wxid_wxeb5jtupcvz12"
+    (无后缀) → 严格相等失败 → 误判非自己。剥后缀比较即可正确识别。
+    """
+    if not sender or not my_wxid:
+        return False
+    if sender == my_wxid:
+        return True
+    if "_" in my_wxid:
+        return sender == my_wxid.rsplit("_", 1)[0]
+    return False
+
+
 # ── 后台缓存同步辅助（非阻塞，daemon 线程） ──────────────────────────
 
 def _bg_sync_oa(cc, gh_id=None):
@@ -2468,7 +2483,16 @@ def handle_chat_messages(params, config: AssistantConfig):
         start_time = int(params.get("start_time", [0])[0]) if params.get("start_time") else 0
         end_time = int(params.get("end_time", [0])[0]) if params.get("end_time") else 0
 
-        messages = client.get_messages(talker, limit=limit, offset=offset)
+        try:
+            messages = client.get_messages(talker, limit=limit, offset=offset)
+        except ValueError as _e:
+            # WCDB DLL 内部序列化缓冲限制（~32KB）：limit 较大时（如公众号会话
+            # 消息多）JSON 截断失败。降级到 50 重试；绝大多数会话 ≤50 条已够用。
+            if "too large" in str(_e) and limit > 50:
+                logger.warning("WCDB get_messages limit=%d 超缓冲，降级重试 limit=50", limit)
+                messages = client.get_messages(talker, limit=50, offset=offset)
+            else:
+                raise
 
         # Time filtering
         if start_time or end_time:
@@ -2574,7 +2598,7 @@ def handle_chat_messages(params, config: AssistantConfig):
                 "sender": sender,
                 "sender_name": name_map.get(sender, sender),
                 "sender_avatar": avatar_map.get(sender, ""),
-                "is_self": sender == my_wxid,
+                "is_self": _match_my_wxid(sender, my_wxid),
                 "content": display_content,
                 "create_time": create_time,
                 "images": media["images"],
@@ -3231,7 +3255,7 @@ def handle_chat_export(params, config: AssistantConfig):
                 "sender": sender,
                 "sender_name": name_map.get(sender, sender),
                 "sender_avatar": avatar_map.get(sender, ""),
-                "is_self": sender == my_wxid,
+                "is_self": _match_my_wxid(sender, my_wxid),
                 "content": display_content,
                 "create_time": create_time,
                 "images": media["images"],

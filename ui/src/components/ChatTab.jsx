@@ -577,7 +577,7 @@ export default function ChatTab() {
     if (!talker) return
     setLoadingMessages(true)
     const currentOffset = append ? offset : 0
-    const limit = 100
+    const limit = 50
 
     // Save scroll position before appending older messages at top
     const container = msgContainerRef.current
