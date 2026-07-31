@@ -656,6 +656,9 @@ class ContentCache:
                 _complete_task(self._fetcher_tc, self._fetcher_task_id,
                                f"抓取完成: {self._fetcher_count} 篇")
                 self._fetcher_task_id = None
+                # 追加索引完成日志：明确这是正常收敛，不是异常反复
+                logger.info("[CACHE] RAG OA 原文追加索引完成: 共追加 %d 篇全文（RAG 已含全文，此后仅新文章触发索引）",
+                            self._fetcher_count)
                 self._fetcher_count = 0
             return
 
@@ -664,6 +667,19 @@ class ContentCache:
             self._fetcher_task_id = _create_task(
                 self._fetcher_tc, "cache_oa_content", "", "OA全文抓取"
             )
+            # 追加索引开始日志：明确首次全量同步的预期行为
+            try:
+                _pending = self.query_one(
+                    "SELECT COUNT(*) AS c FROM oa_cache WHERE content_status=0"
+                )["c"]
+                logger.info(
+                    "[CACHE] RAG OA 原文追加索引开始: %d 篇待抓取全文（每 2 秒 1 篇，期间 "
+                    "抓取成功会刷新 cached_at 触发 RAG 增量索引，表现为连续 "
+                    "'RAG 索引 OA 文章: N 条'，属正常追加，抓完自动停止）",
+                    _pending,
+                )
+            except Exception:
+                pass
 
         url = row["url"]
         title = row["title"]
@@ -680,6 +696,18 @@ class ContentCache:
                     "cached_at": int(time.time()),  # 触及时戳触发增量重索引
                 }, {"url": url})
                 self._fetcher_count += 1
+                # 每 10 篇打一次追加索引进度日志
+                if self._fetcher_count % 10 == 0:
+                    try:
+                        _pending = self.query_one(
+                            "SELECT COUNT(*) AS c FROM oa_cache WHERE content_status=0"
+                        )["c"]
+                        logger.info(
+                            "[CACHE] RAG OA 原文追加索引中: 已处理 %d 篇，剩余 %d 篇待抓",
+                            self._fetcher_count, _pending,
+                        )
+                    except Exception:
+                        pass
                 # 每 5 篇更新一次任务进度
                 if self._fetcher_count % 5 == 0 and self._fetcher_task_id:
                     _update_task(self._fetcher_tc, self._fetcher_task_id,
