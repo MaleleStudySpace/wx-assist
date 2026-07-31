@@ -290,14 +290,6 @@ def load_config() -> BotConfig:
     # No strict validation here — AI features will simply be unavailable
     # until the user configures AI_PROVIDER_* via the dashboard.
 
-    # Parse trigger keywords from comma-separated string
-    keywords_str = os.getenv("TRIGGER_KEYWORDS", "").strip()
-    trigger_keywords = (
-        [kw.strip() for kw in keywords_str.split(",") if kw.strip()]
-        if keywords_str
-        else None  # let the dataclass default apply
-    )
-
     kwargs: dict = {
         "wechat_backend": os.getenv("WECHAT_BACKEND", "wcdb").strip(),
         "wechat_data_dir": os.getenv("WECHAT_DATA_DIR", "").strip(),

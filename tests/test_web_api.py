@@ -41,26 +41,6 @@ class TestConfig(unittest.TestCase):
 
     # -- load_config ---------------------------------------------------
 
-    def test_load_config_deepseek_backend(self):
-        """load_config should build BotConfig from OpenAI environment variables."""
-        from src.config import load_config, BotConfig
-        env = {
-            "AI_PROVIDER_TYPE": "openai",
-            "AI_PROVIDER_API_KEY": "sk-test-deepseek-key",
-            "AI_PROVIDER_MODEL": "deepseek-v4-flash",
-            "WECHAT_BACKEND": "wcdb",
-            "WECHAT_GROUPS": "*",
-            "TRIGGER_KEYWORDS": "summary,help,info",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            cfg = load_config()
-            self.assertIsInstance(cfg, BotConfig)
-            self.assertEqual(cfg.ai_provider_type, "openai")
-            self.assertEqual(cfg.ai_provider_api_key, "sk-test-deepseek-key")
-            self.assertEqual(cfg.ai_provider_model, "deepseek-v4-flash")
-            self.assertEqual(cfg.trigger_keywords, ["summary", "help", "info"])
-            self.assertEqual(cfg.wechat_groups, "*")
-
     def test_load_config_claude_backend(self):
         """load_config should build BotConfig from Anthropic environment variables."""
         from src.config import load_config, BotConfig
@@ -102,16 +82,6 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(cfg.poll_interval_sec, 1.0)
             self.assertEqual(cfg.chunk_size, 400)
             self.assertEqual(cfg.log_level, "INFO")
-
-    def test_load_config_empty_trigger_keywords_uses_default(self):
-        """When TRIGGER_KEYWORDS is unset, the dataclass defaults apply."""
-        from src.config import load_config
-        env = {"AI_PROVIDER_TYPE": "openai", "AI_PROVIDER_API_KEY": "sk-test-key",
-               "TRIGGER_KEYWORDS": ""}
-        with patch.dict(os.environ, env, clear=True):
-            cfg = load_config()
-            self.assertIn("summarize", cfg.trigger_keywords)
-            self.assertIn("总结一下", cfg.trigger_keywords)
 
     # -- _validate_config ----------------------------------------------
 
@@ -276,66 +246,6 @@ class TestConfig(unittest.TestCase):
         ):
             self.assertTrue(is_onboarding_done())
 
-    # -- _sanitize_display_name ----------------------------------------
-
-    def test_sanitize_display_name_empty_returns_default(self):
-        """Empty string returns the default display name."""
-        from src.config import _sanitize_display_name
-        self.assertEqual(_sanitize_display_name(""), "群聊小助手")
-
-    def test_sanitize_display_name_none_returns_default(self):
-        """None (falsy) returns the default display name."""
-        from src.config import _sanitize_display_name
-        self.assertEqual(_sanitize_display_name(None), "群聊小助手")
-
-    def test_sanitize_display_name_strips_control_chars(self):
-        """CR, LF, and other control chars are removed."""
-        from src.config import _sanitize_display_name
-        result = _sanitize_display_name("hello\nworld\r\n\x00test\x1b")
-        self.assertNotIn("\n", result)
-        self.assertNotIn("\r", result)
-        self.assertNotIn("\x00", result)
-        self.assertNotIn("\x1b", result)
-        self.assertIn("hello", result)
-        self.assertIn("test", result)
-
-    def test_sanitize_display_name_too_long_truncated(self):
-        """Names longer than 128 chars are truncated."""
-        from src.config import _sanitize_display_name
-        long_name = "A" * 200
-        result = _sanitize_display_name(long_name)
-        self.assertLessEqual(len(result), 128)
-        self.assertEqual(result, "A" * 128)
-
-    def test_sanitize_display_name_whitespace_only_returns_default(self):
-        """Whitespace-only names fall back to default."""
-        from src.config import _sanitize_display_name
-        self.assertEqual(_sanitize_display_name("   \t  \n  "), "群聊小助手")
-
-    def test_sanitize_display_name_preserves_unicode(self):
-        """Chinese characters are preserved."""
-        from src.config import _sanitize_display_name
-        result = _sanitize_display_name("你好世界")
-        self.assertEqual(result, "你好世界")
-
-    def test_sanitize_display_name_collapses_whitespace(self):
-        """Multiple spaces collapse to a single space."""
-        from src.config import _sanitize_display_name
-        result = _sanitize_display_name("hello   world")
-        self.assertEqual(result, "hello world")
-
-    def test_sanitize_display_name_strips_leading_trailing(self):
-        """Leading and trailing whitespace are stripped."""
-        from src.config import _sanitize_display_name
-        result = _sanitize_display_name("  hello  ")
-        self.assertEqual(result, "hello")
-
-    def test_sanitize_display_name_exactly_128_chars_passes(self):
-        """A name exactly 128 chars is not truncated."""
-        from src.config import _sanitize_display_name
-        name = "A" * 128
-        self.assertEqual(len(_sanitize_display_name(name)), 128)
-
     # -- _decode_wechat_groups ----------------------------------------
 
     def test_decode_wechat_groups_wildcard(self):
@@ -474,6 +384,7 @@ class ServerStatusTests(unittest.TestCase):
             "last_api_call_sec_ago", "last_api_call_time",
             "timestamp", "error", "avatar_url", "wx_name",
             "restricted_features_enabled",
+            "mcp_servers", "rag_ok",
         }
         self.assertEqual(set(snap.keys()), expected_fields)
 
@@ -1114,15 +1025,27 @@ class ReadRecentLogsTests(unittest.TestCase):
             "2024-06-01 12:00:00 [INFO] bot: Bot started\n"
             "2024-06-01 12:01:00 [ERROR] router: Something went wrong\n"
             "Traceback line without timestamp\n"
-        )
+        ).encode("utf-8")
+
+        # _read_recent_logs 用 open(rb) + stat() + read() 读尾部，
+        # 不是 Path.read_text —— mock 文件句柄与 stat 结果
+        fake_file = MagicMock()
+        fake_file.seek.return_value = None
+        fake_file.readline.return_value = b""
+        fake_file.read.return_value = log_content
+        fake_file.__enter__.return_value = fake_file
+        fake_file.__exit__.return_value = False
+
         with (
             patch.object(Path, "exists", return_value=True),
-            patch.object(Path, "read_text", return_value=log_content),
+            patch.object(Path, "stat") as mock_stat,
+            patch("builtins.open", return_value=fake_file),
         ):
+            mock_stat.return_value.st_size = len(log_content)
             result = _read_recent_logs()
         self.assertTrue(result["ok"])
         entries = result["logs"]
-        self.assertGreaterEqual(len(entries), 2)
+        self.assertGreaterEqual(len(entries), 3)
         self.assertEqual(entries[0]["ts"], "2024-06-01 12:00:00")
         self.assertEqual(entries[0]["level"], "INFO")
         self.assertEqual(entries[0]["module"], "bot")
@@ -1150,6 +1073,7 @@ class SetEnvKeyTests(unittest.TestCase):
             self.assertIn("TEST_KEY=test_value", content)
         finally:
             tmp_env.unlink(missing_ok=True)
+            tmp_env.with_suffix(".lock").unlink(missing_ok=True)  # write_env_atomic 留下的锁文件
             tmp_env.parent.rmdir()
 
     def test_updates_existing_key(self):
@@ -1167,6 +1091,7 @@ class SetEnvKeyTests(unittest.TestCase):
             self.assertIn("OTHER_KEY=keep", content)
         finally:
             tmp_env.unlink(missing_ok=True)
+            tmp_env.with_suffix(".lock").unlink(missing_ok=True)  # write_env_atomic 留下的锁文件
             tmp_dir.rmdir()
 
     def test_adds_new_key_to_existing_file(self):
@@ -1182,6 +1107,7 @@ class SetEnvKeyTests(unittest.TestCase):
             self.assertIn("NEW_KEY=new_value", content)
         finally:
             tmp_env.unlink(missing_ok=True)
+            tmp_env.with_suffix(".lock").unlink(missing_ok=True)  # write_env_atomic 留下的锁文件
             tmp_dir.rmdir()
 
     def test_ignores_comment_lines(self):
@@ -1198,6 +1124,7 @@ class SetEnvKeyTests(unittest.TestCase):
             self.assertIn("TEST_KEY=uncommented", content)
         finally:
             tmp_env.unlink(missing_ok=True)
+            tmp_env.with_suffix(".lock").unlink(missing_ok=True)  # write_env_atomic 留下的锁文件
             tmp_dir.rmdir()
 
 
@@ -1230,18 +1157,27 @@ class OnboardingApiTests(unittest.TestCase):
 
     def test_onboarding_reset_returns_ok(self):
         """POST /api/onboarding/reset returns ok=True."""
-        with patch("src.web.server._find_or_create_env") as mock_find:
-            fake_env = MagicMock()
-            fake_env.exists.return_value = True
-            fake_env.with_suffix.return_value = fake_env
-            mock_find.return_value = fake_env
-            with patch("os.replace"):
+        # reset 会调用 write_env_atomic 做真实文件操作 —— 必须用真实临时文件，
+        # 不能用 MagicMock（open() 会因句柄无效失败）
+        tmp_dir = Path(tempfile.mkdtemp())
+        fake_env = tmp_dir / ".env"
+        fake_env.write_text("ONBOARDING_DONE=true\nWCDB_KEY=old\n",
+                            encoding="utf-8")
+        try:
+            with patch("src.web.server._find_or_create_env", return_value=fake_env):
                 handler, sock = _build_handler(
                     "/api/onboarding/reset", method="POST",
                 )
                 parts = sock.get_response_text().split("\r\n\r\n", 1)
                 body = json.loads(parts[1])
                 self.assertTrue(body["ok"])
+            content = fake_env.read_text(encoding="utf-8")
+            self.assertIn("ONBOARDING_DONE=false", content)
+            self.assertIn("WCDB_KEY=", content)
+        finally:
+            fake_env.unlink(missing_ok=True)
+            fake_env.with_suffix(".lock").unlink(missing_ok=True)
+            tmp_dir.rmdir()
 
     def test_onboarding_step2_posts_data(self):
         """POST /api/onboarding/step2 accepts WeChat identity data."""

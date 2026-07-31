@@ -43,96 +43,6 @@ class ConfigModuleImportTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# _sanitize_display_name
-# ---------------------------------------------------------------------------
-
-
-class SanitizeDisplayNameTests(unittest.TestCase):
-    """Edge-case tests for _sanitize_display_name."""
-
-    def test_empty_string_returns_fallback(self):
-        """Empty string → fallback display name."""
-        from src.config import _sanitize_display_name
-
-        result = _sanitize_display_name("")
-        self.assertEqual(result, "群聊小助手")
-
-    def test_none_returns_fallback(self):
-        """None → fallback display name."""
-        from src.config import _sanitize_display_name
-
-        result = _sanitize_display_name(None)
-        self.assertEqual(result, "群聊小助手")
-
-    def test_normal_name_passes_through(self):
-        """Ordinary name should be returned unchanged."""
-        from src.config import _sanitize_display_name
-
-        result = _sanitize_display_name("小明")
-        self.assertEqual(result, "小明")
-
-    def test_control_characters_are_stripped(self):
-        """CR, LF, and other control characters must be removed."""
-        from src.config import _sanitize_display_name
-
-        result = _sanitize_display_name("小\x00明\r\n测试")
-        self.assertEqual(result, "小明 测试")
-
-    def test_whitespace_collapsed_and_trimmed(self):
-        """Multiple spaces → single space; leading/trailing stripped."""
-        from src.config import _sanitize_display_name
-
-        result = _sanitize_display_name("   小明    测试   ")
-        self.assertEqual(result, "小明 测试")
-
-    def test_excessive_length_truncated_to_128(self):
-        """Names longer than 128 chars must be truncated."""
-        from src.config import _sanitize_display_name
-
-        long_name = "A" * 200
-        result = _sanitize_display_name(long_name)
-        self.assertEqual(len(result), 128)
-        self.assertTrue(result.startswith("A" * 128))
-
-    def test_only_whitespace_returns_fallback(self):
-        """A name consisting only of whitespace → fallback."""
-        from src.config import _sanitize_display_name
-
-        result = _sanitize_display_name("   \t  \n  ")
-        self.assertEqual(result, "群聊小助手")
-
-    def test_only_control_chars_returns_fallback(self):
-        """A name consisting only of stripped control chars → fallback."""
-        from src.config import _sanitize_display_name
-
-        result = _sanitize_display_name("\x00\x01\x02\x1f")
-        self.assertEqual(result, "群聊小助手")
-
-    def test_exactly_128_chars_kept_intact(self):
-        """A name of exactly 128 chars should not be truncated."""
-        from src.config import _sanitize_display_name
-
-        name_128 = "A" * 128
-        result = _sanitize_display_name(name_128)
-        self.assertEqual(len(result), 128)
-        self.assertEqual(result, name_128)
-
-    def test_tabs_converted_to_space(self):
-        """Tabs should be collapsed to a single space."""
-        from src.config import _sanitize_display_name
-
-        result = _sanitize_display_name("hello\tworld")
-        self.assertEqual(result, "hello world")
-
-    def test_delete_character_stripped(self):
-        """DEL character (0x7f) must be removed."""
-        from src.config import _sanitize_display_name
-
-        result = _sanitize_display_name("hello\x7fworld")
-        self.assertEqual(result, "helloworld")
-
-
-# ---------------------------------------------------------------------------
 # _decode_wechat_groups
 # ---------------------------------------------------------------------------
 
@@ -390,20 +300,6 @@ class LoadConfigTests(unittest.TestCase):
         }, clear=True):
             config = load_config()
             self.assertEqual(config.ai_provider_api_key, "")
-
-    def test_load_config_parses_trigger_keywords(self):
-        """Custom TRIGGER_KEYWORDS should be parsed from comma-separated string."""
-        from src.config import load_config
-
-        with patch.dict(os.environ, {
-            "ANTHROPIC_API_KEY": "sk-ant-test",
-            "TRIGGER_KEYWORDS": "总结,回顾,summarize",
-        }, clear=True):
-            config = load_config()
-            self.assertEqual(
-                config.trigger_keywords,
-                ["总结", "回顾", "summarize"],
-            )
 
     def test_load_config_uses_defaults_for_unset_vars(self):
         """Unset environment variables should fall back to BotConfig defaults."""

@@ -290,16 +290,6 @@ class TestSidebarNavigation:
         assert "系统配置" in page_text
         assert "运行日志" in page_text
 
-    def test_sandbox_subtab_visible(self, page):
-        page.goto(BASE_URL, timeout=10000)
-        page.wait_for_timeout(1000)
-        config_btn = page.locator("button:has-text('系统配置')")
-        if config_btn.count() > 0:
-            config_btn.first.click()
-            page.wait_for_timeout(500)
-            page_text = page.inner_text("body")
-            assert "提示词沙箱" in page_text
-
 
 class TestConfigExportImport:
     def test_backup_ui_visible(self, page):

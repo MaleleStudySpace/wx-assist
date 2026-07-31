@@ -1,5 +1,6 @@
 """Tests for Assistant alert engine and digest filtering."""
 
+import time
 import unittest
 
 from src.assistant.alert import AlertEngine
@@ -22,7 +23,7 @@ class TestAlertEngine(unittest.TestCase):
             "group_name": "抢单群A",
             "sender_name": "张三",
             "content": "急单！谁接 报价500 明天就要",
-            "timestamp": 1700000000,
+            "timestamp": int(time.time()),
         }
         nid = engine.check(msg)
         self.assertIsNotNone(nid)
@@ -39,7 +40,7 @@ class TestAlertEngine(unittest.TestCase):
             "group_name": "测试群",
             "sender_name": "李四",
             "content": "这个项目的报价是5000",
-            "timestamp": 1700000000,
+            "timestamp": int(time.time()),
         }
         nid = engine.check(msg)
         self.assertIsNotNone(nid)
@@ -56,7 +57,7 @@ class TestAlertEngine(unittest.TestCase):
             "group_name": "抢单群A",
             "sender_name": "张三",
             "content": "哈哈 今天天气真好",
-            "timestamp": 1700000000,
+            "timestamp": int(time.time()),
         }
         nid = engine.check(msg)
         self.assertIsNone(nid)
@@ -72,6 +73,7 @@ class TestAlertEngine(unittest.TestCase):
         msg = {
             "group_name": "抢单群A",
             "content": "急单派单！",
+            "timestamp": int(time.time()),
         }
         nid = engine.check(msg)
         self.assertIsNone(nid)
@@ -81,7 +83,11 @@ class TestAlertEngine(unittest.TestCase):
         outbox = Outbox()
         engine = AlertEngine(cfg, outbox)
 
-        msg = {"group_name": "抢单群A", "content": "派单！"}
+        msg = {
+            "group_name": "抢单群A",
+            "content": "派单！",
+            "timestamp": int(time.time()),
+        }
         nid = engine.check(msg)
         self.assertIsNone(nid)
 
@@ -127,14 +133,18 @@ class TestDigestFiltering(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["content"], "正常讨论")
 
-    def test_filter_placeholder(self):
+    def test_filter_media_placeholder(self):
+        """媒体消息(带 msg_type)替换为结构化占位符并保留，供 LLM 感知上下文。"""
         msgs = [
-            {"content": "[图片]"},
-            {"content": "[语音]"},
+            {"content": "[图片]", "msg_type": 3},
+            {"content": "[语音]", "msg_type": 34},
             {"content": "正常消息"},
         ]
         result = filter_messages(msgs)
-        self.assertEqual(len(result), 1)
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result[0]["content"], "{{ image }}")
+        self.assertEqual(result[1]["content"], "{{ voice }}")
+        self.assertEqual(result[2]["content"], "正常消息")
 
     def test_build_digest_prompt(self):
         dg = DigestGroup(
