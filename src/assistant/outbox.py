@@ -91,6 +91,33 @@ class Outbox:
                     conn.execute(stmt)
                 except sqlite3.OperationalError:
                     pass
+            # 回填旧记录的 url（从 content JSON 提取）——
+            # 旧版本没有 url 列，推送记录只有 content JSON 里带 url。
+            # 不回填则 OAMonitorEngine.query_by_url 匹配不到旧推送，
+            # 导致已推送过的文章被判 is_known=False 而重复推送。
+            _backfilled = 0
+            try:
+                import json as _json  # 局部导入（文件顶部未 import json）
+                _rows = conn.execute(
+                    "SELECT id, content FROM assistant_outbox "
+                    "WHERE type='oa_article_alert' AND (url IS NULL OR url='')"
+                ).fetchall()
+                for _rid, _content in _rows:
+                    try:
+                        _d = _json.loads(_content)
+                        _u = (_d.get("url") or "").strip()
+                        if _u:
+                            conn.execute(
+                                "UPDATE assistant_outbox SET url=? WHERE id=?",
+                                (_u, _rid),
+                            )
+                            _backfilled += 1
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            if _backfilled:
+                logger.info("Outbox: 回填 %d 条历史推送记录的 url（防重复推送）", _backfilled)
             conn.commit()
 
     def _get_conn(self) -> sqlite3.Connection:
