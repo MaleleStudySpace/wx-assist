@@ -27,7 +27,7 @@ AI_PROVIDER_BASE_URL + AI_PROVIDER_API_KEY 都设置
 ## 系统层级
 
 ```
-调用方（scheduler / oa_digest / ai_chat / 其他）
+调用方（scheduler / oa_digest / ai_chat / agent / skill / 其他）
     │
     ▼
 create_summarizer(config) → 工厂函数
@@ -41,10 +41,30 @@ AbstractSummarizer 子类
     │   ├─ map-reduce：chunk × N → merge
     │   └─ multi-level：chunk → batch merge → final merge
     │
+    ├─ agent_chat(system, messages, tools) → (content, tool_calls, reasoning)
+    │   Agent 的 ReAct 循环调用；OpenAI 兼容实现提取 reasoning_content
+    │   （thinking 模式产物，必须保留在对话历史中，否则上游 API 报错）
+    │
     ├─ _call_chat_api(system, messages) → str（单次对话）
-    ├─ _call_chat_api_stream(system, messages) → Iterator[str]（SSE）
+    ├─ _call_chat_api_stream(system, messages, extra_body) → Iterator[str]（SSE）
+    ├─ _call_long_api(system, messages, max_tokens, temperature) → str（长文本）
+    │   供 OA 摘要等使用；thinking 模式吃光 token 时自动禁用并重试
+    │
     └─ consolidate_memory() → str（群记忆压缩）
 ```
+
+## DeepSeek 实现细节（OpenAI 兼容后端）
+
+| 项目 | 值 |
+|------|-----|
+| 默认模型 | `deepseek-v4-pro`（旗舰，1M 上下文） |
+| 快速模型 | `deepseek-v4-flash`（快/便宜，1M 上下文） |
+| token 预算 | 900K（1M 上下文留安全边际） |
+| 结构化输出 | 工具调用模拟（`STORE_SUMMARY_TOOL` + `tool_choice="auto"`） |
+
+- **extra_body 语义**：provider 附加参数（如 `{"thinking": {"type": "disabled"}}`）必须经 OpenAI SDK 的 `extra_body` 参数传递，不能平铺进顶层 kwargs，否则报 `unexpected keyword argument`。调用方可通过 `_call_chat_api_stream(..., extra_body=...)` 按需传入。
+- **thinking 模式**：DeepSeek 开启思考时响应带 `reasoning_content`；若思考吃光 max_tokens 导致 content 为空，`_call_long_api` 自动禁用 thinking 并加倍 max_tokens 重试。
+- **空响应降级**：各调用方法在 content 为空时返回 `"..."` 并记 warning，不抛异常中断链路。
 
 ## 摘要 Pipeline
 

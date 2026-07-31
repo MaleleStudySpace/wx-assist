@@ -12,6 +12,7 @@
 | `group_digest` | DigestScheduler | 群聊定时摘要 |
 | `oa_digest` | DigestScheduler / 手动 | 公众号摘要 |
 | `oa_article_alert` | OAMonitorEngine | 公众号新文章即时提醒 |
+| `cron` | CronScheduler | 通用 skill 定时任务执行结果 |
 
 ## 数据结构
 
@@ -49,6 +50,7 @@
 - `group_digest`：`lookback_hours`、`mode`、`msg_count`、`digest`
 - `oa_digest`：`articles_count`、`digest`
 - `oa_article_alert`：`time`、`article_title`、`digest`、`url`
+- `cron`：skill 执行结果文本（或 `[CRON 错误] ...` 错误信息）
 
 `display` 字段专为 iLink 推送设计，已预格式化为 `format_for_wechat` 可消费的文本。
 

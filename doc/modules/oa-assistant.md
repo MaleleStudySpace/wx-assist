@@ -93,16 +93,26 @@ OAMonitorEngine daemon 线程（60s 轮询）
         │
         ▼
     时间过滤（仅 5 分钟内发布的新文章）
-    URL 去重（内存 Set，7 天自动清理）
+    URL 去重（内存 _alerted_urls 上限 5000 / 7 天清理 + oa_cache 持久化跨重启）
         │
         ▼
-    AI 摘要（可选，失败降级为标题摘要）
+    4 层文章内容获取链路（优先取最新一层）:
+      ① 本地 oa_cache.full_content
+      ② HTTP 抓取（15s 超时）→ HTML 清洗
+      ③ 本地数据库重查 URL + HTTP 重试
+      ④ 本地数据库短导语兜底
         │
+        ▼
+    AI 摘要（后台线程 + 35s 硬超时，失败降级为标题摘要；摘要写回缓存）
+        │  用 custom_prompt（默认 "请用1-2句话总结以下公众号文章的核心内容"）
         ▼
     outbox.add(notif_type="oa_article_alert", priority="high")
         │
         ├── push_target == "ilink"? → iLink 推送
         └── 仅入队
+        │
+        ▼
+    WebSocket 广播推送结果 / 触发 RAG 重索引（新文章写入缓存后）
 ```
 
 ### 与定时摘要的区别
@@ -110,9 +120,9 @@ OAMonitorEngine daemon 线程（60s 轮询）
 | 维度 | 定时摘要 | 即时提醒 |
 |------|----------|----------|
 | 调度 | cron 定时 / 手动 | 60s 后台轮询 |
-| 范围 | 分组内所有号的历史文章 | 仅最新发布文章 |
-| 去重 | DigestHistory（URL 持久化，30 天） | `_alerted_urls`（内存 Set，7 天） |
-| AI 摘要 | 必选 | 可选（失败降级） |
+| 范围 | 分组内所有号的历史文章 | 仅 5 分钟内最新发布文章 |
+| 去重 | DigestHistory（URL 持久化，30 天） | 内存 + 缓存双重 URL 去重 |
+| AI 摘要 | 必选（90s 超时） | 可选（35s 硬超时，失败降级） |
 | 推送频率 | 按计划 | 实时 |
 
 ## 代码位置

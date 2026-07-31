@@ -20,9 +20,9 @@ DigestScheduler daemon 线程（60s 轮询）
 _generate_digest(dg)
     1. 拉取回溯窗口内消息（limit=500）
     2. unread_only? → 切片到未读部分
-    3. filter_messages(raw, ignore_kw) → 过滤噪音 + 媒体占位
+    3. filter_messages(raw) → 过滤噪音 + 媒体占位
     4. 构建 system_prompt + user_prompt → AI 调用
-    5. generate_memory_update_prompt() → 更新 dg.memory
+    5. memory_enabled? → generate_memory_update_prompt() → 更新 dg.memory
     6. outbox.add(notif_type="group_digest")
     7. push_target=="ilink"? → iLink 推送 + 广播推送结果
 ```
@@ -39,18 +39,19 @@ _generate_digest(dg)
 | `cron_expr` | str | "" | 5 字段 cron 表达式（多行，每行一个触发时间） |
 | `lookback_hours` | int | 6 | 回溯窗口（3/6/12/24） |
 | `enabled` | bool | True | 主开关 |
-| `profile` | GroupProfile? | None | 群档案（群上下文） |
-| `memory` | str | "" | 累积摘要记忆（自动更新，不可编辑） |
+| `profile` | GroupProfile? | None | 群档案（输出风格配置） |
+| `memory` | str | "" | 累积摘要记忆（AI 自动更新，前端可编辑，≤2000 字） |
+| `memory_enabled` | bool | True | 群记忆开关：关闭后摘要不再更新记忆 |
 | `unread_only` | bool | False | 仅摘要未读消息 |
 | `push_target` | str | "" | "ilink"=推到微信，""=仅入队 |
 
 ### GroupProfile（嵌套）
 
+> summary（群简介）/ focus（关注点）/ ignore（忽略内容）三个字段已移除：
+> 特殊需求直接写在 `custom_prompt` 中。
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `summary` | str | 群简介 |
-| `focus` | list[str] | 关注点 |
-| `ignore` | list[str] | 忽略内容（同时用于 filter_messages） |
 | `style` | str | 摘要风格预设："" / "行动项优先" / "完整复盘" / "极简速览" / "自定义" |
 | `custom_prompt` | str | 自定义摘要指令 |
 
@@ -71,9 +72,6 @@ _generate_digest(dg)
 ### user_prompt 结构（`build_digest_prompt()`）
 
 ```
-## 群信息
-群简介 / 关注点 / 忽略内容
-
 ## 近期记忆
 {memory 或 "（暂无历史记忆）"}
 
@@ -88,7 +86,7 @@ _generate_digest(dg)
 
 `filter_messages()` 处理两类问题：
 
-1. **噪音过滤**：系统消息（入群/退群/改群名）、纯表情、极短消息、常见无意义回复（"收到"/"好的"/"ok" 等）、命中忽略关键词的消息。
+1. **噪音过滤**：系统消息（入群/退群/改群名）、纯表情、极短消息、常见无意义回复（"收到"/"好的"/"ok" 等）。
 2. **媒体占位**：图片/语音/视频/贴纸/应用消息等非文本类型，原始内容替换为结构化占位符（`{{ image }}` / `{{ voice }}` 等），让 LLM 知道上下文而不接触原始载荷。
 3. **标识符清洗**：消息文本中的 `wxid_xxx` / `gh_xxx` 等内部标识符在进入 prompt 前被剥离，保证摘要只展示昵称。
 
@@ -96,7 +94,9 @@ _generate_digest(dg)
 
 ## 记忆更新
 
-每次摘要后调用 `generate_memory_update_prompt()`，让 AI 在旧记忆基础上写一段 ≤500 字的新记忆，记录核心要点、近期趋势、群氛围。更新后立即 `save_assistant_config()` 持久化，下次摘要作为"近期记忆"注入 prompt，形成跨次记忆累积。
+每次摘要后（`memory_enabled` 为真时）调用 `generate_memory_update_prompt()`，让 AI 在旧记忆基础上写一段 ≤2000 字的新记忆，记录核心要点、近期趋势、群氛围。更新后立即 `save_assistant_config()` 持久化，下次摘要作为"近期记忆"注入 prompt，形成跨次记忆累积。
+
+群记忆可在前端群档案中查看和编辑（关闭 `memory_enabled` 则摘要不再更新记忆，清空即重置）。
 
 ## 双通道输出
 
@@ -119,7 +119,7 @@ _generate_digest(dg)
 
 ### 3. custom_prompt 替代而非追加
 
-群档案（focus/ignore/style）是客观上下文，不应被自定义指令覆盖；custom_prompt 是用户对该群摘要的"额外要求"，作为 system 输入完全替代默认指令，让用户获得完全控制权。
+群档案（style）是输出风格上下文，不应被自定义指令覆盖；custom_prompt 是用户对该群摘要的"额外要求"，作为 system 输入完全替代默认指令，让用户获得完全控制权。
 
 ### 4. 风格预设作为 system 追加
 
