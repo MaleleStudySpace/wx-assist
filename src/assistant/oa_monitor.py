@@ -145,6 +145,10 @@ class OAMonitorEngine:
             if not art.url:
                 continue
 
+            # 提前计算展示字段（供跳过日志 + 后续推送复用）
+            title = art.title or "(无标题)"
+            source = art.source_name or gh_id
+
             # ── Dedup: per-session set + outbox (精确 url) ──────────────
             # 不再查 oa_cache（避免与 sync_oa_incremental 竞争：增量合并
             # 先抓到的文章会写入 oa_cache，导致 oa_monitor 误判"已推送"）
@@ -168,21 +172,6 @@ class OAMonitorEngine:
             if is_known:
                 logger.debug("OAMonitor: '%s' already alerted (dedup hit)", title[:30])
                 continue
-
-            # Mark as alerted immediately (prevents race within same poll)
-            self._alerted_urls[art.url] = now
-
-            # Format time
-            time_str = ""
-            if art_ts:
-                try:
-                    time_str = datetime.fromtimestamp(art_ts).strftime('%Y-%m-%d %H:%M')
-                except Exception:
-                    time_str = ""
-
-            # Build notification content
-            source = art.source_name or gh_id
-            title = art.title or "(无标题)"
 
             # ── AI 摘要：4 层内容获取链路 + 后台线程 + 35s 超时 ──
             # Layer 1: 本地 oa_cache.full_content
