@@ -199,7 +199,8 @@ class SkillEngine:
         system = (
             "根据用户的需求执行任务。"
             " 如果需要外部数据，可以调用提供的工具。"
-            " 如果没有新内容需要输出，请只回复 [SILENT]。"
+            " 如果确认没有任何新内容可输出（如监控类任务无变化），只回复 [SILENT]。"
+            " 如果执行失败或遇到错误，必须输出错误说明，禁止用 [SILENT] 掩盖。"
             " 其他情况正常输出结果。"
         )
 
@@ -243,7 +244,7 @@ class SkillEngine:
             "type": "script",
             "description": "天气预报 — 查询指定城市的天气情况",
             "command": "weather.py",
-            "timeout": 15,
+            "timeout": 45,
             "args": {
                 "location": {
                     "type": "string",
@@ -262,7 +263,11 @@ class SkillEngine:
 
         # 写 scripts/weather.py
         weather_py = r'''"""天气查询 — wttr.in，零配置免费，无需 API key。"""
-import json, sys, urllib.request
+import json, sys, time, urllib.request
+
+# 强制 UTF-8 输出（Windows 默认 GBK 会炸 emoji/中文，不论谁调用都不依赖环境变量）
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 def main():
     args = _parse_args()
@@ -272,12 +277,24 @@ def main():
     url = f"https://wttr.in/{urllib.request.quote(location)}?format=j1&lang=zh"
     req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
 
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-    except Exception:
-        print("[SILENT]")
-        sys.exit(0)
+    # wttr.in 免费服务偶发超时：重试 2 次（间隔 2s）
+    data = None
+    last_err = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            break
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(2)
+
+    # 定时任务场景：报错必须推送告知用户，不能用 [SILENT] 静默吞掉。
+    # 非零退出码让调度器记 error_count，错误信息推送给用户。
+    if data is None:
+        print(f"☁️ {location} 天气获取失败：{last_err}")
+        sys.exit(1)
 
     current = data["current_condition"][0]
     output = [
