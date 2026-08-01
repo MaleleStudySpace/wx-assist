@@ -23,6 +23,11 @@ from src.assistant.config import (
 from src.assistant.oa_digest import OADigestService
 from src.assistant.oa_groups import OAGroupManager
 from src.wechat.wcdb_client import WcdbNativeClient
+# 消息 content 解压/前缀剥离 — 统一走公共模块（与入库链路共用同一实现）
+from src.wechat.content_codec import (
+    decompress_content as _decompress_content,
+    strip_wxid_prefix as _strip_wxid_prefix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2045,62 +2050,6 @@ def handle_chat_sessions(params, config: AssistantConfig):
     except Exception as e:
         logger.error(f"Failed to list chat sessions: {e}")
         return {"ok": False, "error": str(e)}
-
-
-def _decompress_content(content: str) -> str:
-    """Decompress zstd-compressed hex-encoded message content.
-
-    WCDB stores most message content as hex-encoded zstd-compressed data.
-    The zstd magic number is 0x28B52FFD, which appears as "28b52ffd" in hex.
-    After decompression, the content is either plain text, XML, or
-    sender_id:\\ncontent (group chat format).
-    """
-    if not content or len(content) < 16:
-        return content
-
-    # Quick check: is this hex-encoded data?
-    try:
-        is_hex = all(c in '0123456789abcdef' for c in content[:100].lower())
-    except Exception:
-        return content
-
-    if not is_hex:
-        return content
-
-    # Check for zstd magic (28b52ffd) at the start
-    if not content.lower().startswith('28b52ffd'):
-        return content
-
-    try:
-        raw = bytes.fromhex(content)
-        import zstandard
-        dctx = zstandard.ZstdDecompressor()
-        decompressed = dctx.decompress(raw, max_output_size=10 * 1024 * 1024)
-        text = decompressed.decode('utf-8', errors='replace')
-        # If >20% replacement chars, decompression likely produced garbage
-        replacement_count = text.count('�')
-        if len(text) > 0 and replacement_count > len(text) * 0.2:
-            return content
-        return text
-    except Exception:
-        return content
-
-
-def _strip_wxid_prefix(content: str) -> str:
-    """Strip sender ID prefix from group chat message content.
-
-    In WeChat group chats, messages are stored as 'sender_id:\\nactual text'
-    or 'sender_id:actual text'. The sender ID can be:
-    - wxid_xxx (WeChat ID)
-    - qq123456789 (QQ number)
-    - Other alphanumeric IDs
-
-    This prefix should not be displayed to the user.
-    """
-    import re as _re
-    # Match sender_id followed by colon at the start, optionally followed by newline
-    # Sender IDs can be: wxid_xxx, qq123, 12345@openim, user@domain, etc.
-    return _re.sub(r'^[a-zA-Z0-9_@.\-]+:\n?', '', content)
 
 
 def _extract_system_msg_text(content: str) -> str:

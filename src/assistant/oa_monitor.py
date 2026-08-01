@@ -192,8 +192,10 @@ class OAMonitorEngine:
                              int(now - art_ts) if art_ts else -1)
                 continue
             if is_known:
-                # 窗口内但已有推送记录 —— 值得留意（说明文章在窗口内被 dedup 拦下）
-                logger.warning("OAMonitor: 跳过推送 '%s' — 已有推送记录 (dedup)", title[:30])
+                # 窗口内但已有推送记录 —— 正常 dedup（推送成功的文章在 5 分钟
+                # 窗口内每轮轮询都会命中，属预期行为）。用 debug 级别避免
+                # 每轮刷一条 warning，混淆真正的异常日志。
+                logger.debug("OAMonitor: 跳过推送 '%s' — 已有推送记录 (dedup)", title[:30])
                 continue
 
             # Mark as alerted immediately (prevents race within same poll)
@@ -437,13 +439,14 @@ class OAMonitorEngine:
 
             # ── 推送 + 任务中心追踪（可选，task_center 为 None 时跳过）──
             # 创建"公众号即时提醒"任务：推送成功 complete / 失败 fail(error)
+            # group_name 存 "公众号名 · 文章名"，任务中心直接可见文章详情
             _task_id = None
             if self._task_center:
                 try:
                     _task_id = self._task_center.create_task(
                         task_type="oa_article_alert",
                         source="system", group_id=gh_id,
-                        group_name=mg.name or source,
+                        group_name=f"{source} · {title}",
                     )
                 except Exception as _e:
                     logger.debug("OAMonitor: 创建推送任务失败: %s", _e)

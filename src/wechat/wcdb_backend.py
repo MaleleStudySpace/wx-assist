@@ -500,6 +500,14 @@ class WcdbBackend(AbstractWeChatBackend):
         if not content:
             return None
 
+        # 入库前统一解压：微信 4.x 将大部分消息 content 存为 hex 编码的 zstd
+        # 压缩数据（魔数 28b52ffd）。不在这里解压的话，密文 hex 会原样进
+        # messages.db，下游 digest/RAG/记忆全读到乱码（{{ encrypted }}）。
+        # 与 WEBUI 会话管理（api_handlers._decompress_content）共用同一实现；
+        # 解压失败（媒体 XML 等非 zstd 内容）原样保留，不丢数据。
+        from .content_codec import decompress_content
+        content = decompress_content(content)
+
         # Skip system messages
         sys_keywords = (
             "修改群名", "加入了群聊", "退出了群聊",
@@ -534,6 +542,13 @@ class WcdbBackend(AbstractWeChatBackend):
                 name = self._client.resolve_nickname(at_wxid)
                 return f"@{name}" if name != at_wxid else match.group(0)
             resolved_content = re.sub(r'@wxid_[a-zA-Z0-9]+', _replace_at, content)
+
+        # 群聊消息解压后统一为 "sender_id:\n内容" 格式，入库前剥掉 sender 前缀，
+        # 保证缓存表里是干净可读文本（与 WEBUI 显示层行为一致）。
+        # 注意：这里比 WEBUI 的 strip_wxid_prefix 更严格——要求"前缀 + 换行"，
+        # 避免把 "http://" / "8:00 开会" 这类以字母数字+冒号开头的真实文本误伤。
+        if talker.endswith('@chatroom'):
+            resolved_content = re.sub(r'^[a-zA-Z0-9_@.\-]+:\r?\n', '', resolved_content, count=1)
 
         # Generate stable message ID
         raw_id = (

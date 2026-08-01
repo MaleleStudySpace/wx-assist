@@ -1701,17 +1701,24 @@ export default function OATab() {
       )}
 
       {/* ── 公众号缓存全文 设置区 ── */}
-      <div className="mb-5 p-4 rounded-xl border border-border-main bg-bg-card">
+      <div className="relative mb-5 p-4 rounded-xl overflow-visible border border-brand-green/35 bg-gradient-to-b from-brand-green/[0.06] to-brand-green/[0.02] shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+        {/* 顶部品牌色细线 */}
+        <div className="absolute top-0 left-6 right-6 h-0.5 rounded-full bg-gradient-to-r from-transparent via-brand-green to-transparent" />
+        <div className="mb-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-brand-green/10 border border-brand-green/25">
+          <span className="text-[10px] font-semibold tracking-wider text-brand-green">⚙ 全文缓存</span>
+        </div>
         <div className="flex items-start gap-3">
-          <div className="w-9 h-9 rounded-lg bg-brand-green/10 border border-brand-green/20 flex items-center justify-center text-base shrink-0">⚡</div>
+          <div className="w-10 h-10 rounded-xl bg-brand-green/10 border border-brand-green/25 flex items-center justify-center text-lg shrink-0">⚡</div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-1.5">
-                <p className="text-sm text-text-main font-medium">公众号缓存全文</p>
+                <p className="text-[15px] text-white font-semibold">公众号缓存全文</p>
                 <div className="group relative">
-                  <span className="inline-flex w-4 h-4 rounded-full bg-bg-raised border border-border-main text-text-muted text-[10px] font-bold items-center justify-center cursor-help">?</span>
-                  <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-64 p-3 rounded-lg bg-bg-card border border-border-main shadow-xl text-xs text-text-muted leading-relaxed z-10">
-                    开启：后台自动抓取公众号文章全文，AI 检索可搜索全文内容。<br/><br/>
+                  <span className="inline-flex w-[17px] h-[17px] rounded-full bg-bg-raised border border-border-main text-text-muted text-[10px] font-bold items-center justify-center cursor-help hover:border-brand-green/40 hover:text-brand-green transition-colors">?</span>
+                  {/* tooltip: z-50 向右弹出，避开左侧 z-40 TAB 栏遮挡 */}
+                  <div className="hidden group-hover:block absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 w-64 p-3 rounded-lg bg-bg-card border border-border-main shadow-xl text-xs text-text-muted leading-relaxed z-50">
+                    <div className="absolute left-[-5px] top-1/2 -translate-y-1/2 rotate-45 w-2 h-2 bg-bg-card border-l border-b border-border-main" />
+                    开启：后台自动抓取公众号文章<b className="text-text-main">全文</b>，AI 检索可搜索全文内容。<br/><br/>
                     关闭：不再缓存任何新文章全文，<span className="text-amber-500">RAG 语义检索仅剩标题与摘要</span>；已缓存的全文保留。<br/><br/>
                     不影响公众号即时提醒与摘要推送。
                   </div>

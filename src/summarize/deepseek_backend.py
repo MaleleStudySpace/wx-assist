@@ -10,7 +10,7 @@ Docs: https://platform.deepseek.com/api-docs
 import json
 import logging
 import time
-from typing import Iterator
+from typing import Iterator, Optional
 
 from openai import OpenAI, RateLimitError, APIConnectionError, APIStatusError
 
@@ -189,16 +189,85 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             merged.update(extra_body)
         return merged
 
-    def _call_chat_api(self, system_prompt: str,
-                        messages: list[dict]) -> str:
-        """DeepSeek-specific: uses chat.completions.create() with system role."""
+    def _call_with_thinking_guard(self, system_prompt: str,
+                                  messages: list[dict],
+                                  max_tokens: int = 4096,
+                                  temperature: Optional[float] = None,
+                                  log_tag: str = "CHAT-API") -> str:
+        """调用 chat.completions，并在 thinking 模式耗尽 token 时自动降级重试。
+
+        DeepSeek 推理模型（如 DeepSeek-V4-Flash-QC）在 thinking 模式下可能把
+        max_tokens 全部花在 reasoning_content 上，导致最终 content 为空。
+
+        降级采用双通道，兼容不同 API 对参数的支持差异：
+          通道 1: thinking disabled + max_tokens 加倍（官方 DeepSeek 支持，最快）
+          通道 2: 仅 max_tokens 加倍（不传 thinking 字段——部分中转 API 不认识
+                 该字段会返回 400，捕获异常后走这里，仍能靠更多 token 让
+                 reasoning 跑完并留出 content 空间）
+        两层都失败才返回空，调用方自行兜底（如 "..."）。
+
+        Returns:
+            content 字符串（可能为空，调用方自行兜底）。
+        """
         api_messages = [{"role": "system", "content": system_prompt}] + messages
         params = self._merge_params(
-            {"model": self.model, "max_tokens": 4096, "messages": api_messages},
+            {"model": self.model, "max_tokens": max_tokens, "messages": api_messages},
             self.extra_body,
         )
+        if temperature is not None:
+            params["temperature"] = temperature
+
         response = self.client.chat.completions.create(**params)
         content = response.choices[0].message.content
+        reasoning = getattr(response.choices[0].message, 'reasoning_content', None)
+
+        # Graceful degradation: thinking mode consumed all tokens, leaving content=null.
+        if not content and reasoning:
+            retry_mt = max(max_tokens * 2, 4096)
+            logger.warning(
+                "[%s] thinking mode consumed all tokens (model=%s, max=%d, "
+                "reasoning_chars=%d). Retrying with doubled max_tokens=%d.",
+                log_tag, self.model, max_tokens, len(reasoning), retry_mt,
+            )
+            # 通道 1: 禁用 thinking（官方 API 支持；中转 API 可能 400 → 捕获降级）
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=retry_mt,
+                    messages=api_messages,
+                    extra_body={"thinking": {"type": "disabled"}},
+                )
+                retry_content = response.choices[0].message.content
+                if retry_content:
+                    return retry_content
+            except Exception as retry_err:
+                logger.warning(
+                    "[%s] thinking-disabled retry unsupported (%s); "
+                    "falling back to plain max_tokens bump", log_tag, retry_err,
+                )
+            # 通道 2: 仅加倍 max_tokens，不传 thinking（兼容不认识该字段的中转 API）
+            try:
+                retry_params = {
+                    "model": self.model,
+                    "max_tokens": retry_mt,
+                    "messages": api_messages,
+                }
+                if temperature is not None:
+                    retry_params["temperature"] = temperature
+                response = self.client.chat.completions.create(**retry_params)
+                retry_content = response.choices[0].message.content
+                if retry_content:
+                    return retry_content
+            except Exception as retry_err:
+                logger.warning("[%s] max_tokens bump retry also failed: %s", log_tag, retry_err)
+
+        return content
+
+    def _call_chat_api(self, system_prompt: str,
+                       messages: list[dict]) -> str:
+        """DeepSeek-specific: uses chat.completions.create() with system role."""
+        content = self._call_with_thinking_guard(
+            system_prompt, messages, max_tokens=4096, log_tag="CHAT-API")
         if not content:
             logger.warning("[CHAT-API] LLM returned empty content (model=%s)", self.model)
             return "..."
@@ -207,13 +276,8 @@ class OpenAICompatSummarizer(AbstractSummarizer):
     def _call_digest_api(self, system_prompt: str,
                          messages: list[dict]) -> str:
         """Digest-specific: higher max_tokens than chat for custom_prompt path."""
-        api_messages = [{"role": "system", "content": system_prompt}] + messages
-        params = self._merge_params(
-            {"model": self.model, "max_tokens": 4096, "messages": api_messages},
-            self.extra_body,
-        )
-        response = self.client.chat.completions.create(**params)
-        content = response.choices[0].message.content
+        content = self._call_with_thinking_guard(
+            system_prompt, messages, max_tokens=4096, log_tag="DIGEST-API")
         if not content:
             logger.warning("[DIGEST-API] LLM returned empty content (model=%s)", self.model)
             return "..."
@@ -224,38 +288,9 @@ class OpenAICompatSummarizer(AbstractSummarizer):
                        max_tokens: int = 2000,
                        temperature: float = 0.3) -> str:
         """Long-form API call with configurable params for OA digest etc."""
-        api_messages = [{"role": "system", "content": system_prompt}] + messages
-        params = self._merge_params(
-            {"model": self.model, "max_tokens": max_tokens,
-             "temperature": temperature, "messages": api_messages},
-            self.extra_body,
-        )
-        response = self.client.chat.completions.create(**params)
-        content = response.choices[0].message.content
-        reasoning = getattr(response.choices[0].message, 'reasoning_content', None)
-
-        # Graceful degradation: thinking mode consumed all tokens, leaving content=null.
-        # Detect → disable thinking → retry with doubled max_tokens.
-        if not content and reasoning:
-            logger.warning(
-                "[LONG-API] thinking mode consumed all tokens (model=%s, max=%d, "
-                "reasoning_chars=%d). Retrying with thinking disabled.",
-                self.model, max_tokens, len(reasoning),
-            )
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    max_tokens=max(max_tokens * 2, 4096),
-                    temperature=temperature,
-                    messages=api_messages,
-                    extra_body={"thinking": {"type": "disabled"}},
-                )
-                content = response.choices[0].message.content
-                if content:
-                    return content
-            except Exception as retry_err:
-                logger.warning("[LONG-API] Retry with thinking disabled also failed: %s", retry_err)
-
+        content = self._call_with_thinking_guard(
+            system_prompt, messages, max_tokens=max_tokens,
+            temperature=temperature, log_tag="LONG-API")
         if not content:
             logger.warning("[LONG-API] LLM returned empty content (model=%s)", self.model)
             return "..."
