@@ -110,7 +110,10 @@ def _parse_summary_from_tool_call(response) -> SummaryResult:
                     k: v for k, v in data.items()
                     if k in ("summary_text", "topics", "participants")
                 })
-        except (json.JSONDecodeError, TypeError):
+        except (TypeError, ValueError):
+            # ValueError 覆盖 json.JSONDecodeError 与 pydantic ValidationError
+            # （两者都是 ValueError 子类）。LLM 返回 JSON 字段类型不符时
+            # 降级到 Strategy 3 纯文本包裹，不能抛错中断摘要。
             pass
 
     # Strategy 3: plain text — wrap in minimal SummaryResult
