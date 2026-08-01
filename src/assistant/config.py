@@ -43,6 +43,8 @@ class OAMonitorGroup:
     enabled: bool = True
     push_target: str = ""                               # "" | "ilink"
     custom_prompt: str = ""                             # 自定义 AI 总结 prompt
+    dnd_start: str = ""                                 # 免打扰开始 "HH:MM"（空=不启用）
+    dnd_end: str = ""                                   # 免打扰结束 "HH:MM"（空=不启用）
 
 
 @dataclass
@@ -182,6 +184,8 @@ def _config_to_dict(cfg: AssistantConfig) -> dict:
             "enabled": omg.enabled,
             "push_target": omg.push_target,
             "custom_prompt": omg.custom_prompt,
+            "dnd_start": omg.dnd_start,
+            "dnd_end": omg.dnd_end,
         })
     for dg in cfg.digest_groups:
         item = {
@@ -336,6 +340,8 @@ def _dict_to_config(data: dict) -> AssistantConfig:
             enabled=omg_data.get("enabled", True),
             push_target=omg_data.get("push_target", ""),
             custom_prompt=omg_data.get("custom_prompt", ""),
+            dnd_start=omg_data.get("dnd_start", ""),
+            dnd_end=omg_data.get("dnd_end", ""),
         ))
     for dg_data in data.get("digest_groups", []):
         profile = None

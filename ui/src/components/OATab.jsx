@@ -710,6 +710,14 @@ function MonitorGroupCard({ group, accounts, onEdit, onDelete, onToggle }) {
                 <span className="text-xs px-1.5 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">通知</span>
               </>
             )}
+            {group.dnd_start && group.dnd_end && (
+              <>
+                <span className="text-sm text-text-muted">·</span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 dark:text-amber-400 font-medium flex items-center gap-0.5">
+                  🌙 {group.dnd_start}-{group.dnd_end}
+                </span>
+              </>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -762,6 +770,11 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [accountSearch, setAccountSearch] = useState('')
   const [showAccountPicker, setShowAccountPicker] = useState(false)
+  // ── 免打扰时段 ──
+  const [dndEnabled, setDndEnabled] = useState(!!(group?.dnd_start && group?.dnd_end))
+  const [dndStart, setDndStart] = useState(group?.dnd_start || '22:00')
+  const [dndEnd, setDndEnd] = useState(group?.dnd_end || '08:00')
+  const [dndExpanded, setDndExpanded] = useState(!!(group?.dnd_start && group?.dnd_end))
 
   const filteredAccounts = accounts.filter(acc => {
     if (!accountSearch) return true
@@ -928,6 +941,71 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
         <Toggle enabled={pushTarget} onChange={setPushTarget} />
       </div>
 
+      {/* 免打扰时段 — 默认收起，有配置时展开 */}
+      <div className={`border rounded-lg overflow-hidden transition-colors
+        ${dndEnabled ? 'border-amber-500/30' : 'border-border-main'}`}>
+        <button
+          onClick={() => setDndExpanded(v => !v)}
+          className="w-full flex items-center justify-between px-3.5 py-2.5 text-sm text-text-muted
+            hover:text-text-main transition-colors cursor-pointer"
+        >
+          <span className="flex items-center gap-2">
+            <span className="text-xs">🌙</span>
+            免打扰时段
+            {dndEnabled && (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-medium">
+                {dndStart}-{dndEnd}
+              </span>
+            )}
+          </span>
+          <span className={`text-xs transition-transform duration-200 ${dndExpanded ? 'rotate-90' : ''}`}>▶</span>
+        </button>
+        {dndExpanded && (
+          <div className="border-t border-border-main px-3.5 py-3 space-y-3">
+            <p className="text-xs text-text-muted/70">开启后，该时段内新文章仍会缓存，但不推送通知</p>
+
+            {/* 启用开关 */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-text-main font-medium">启用免打扰</span>
+              <Toggle enabled={dndEnabled} onChange={setDndEnabled} />
+            </div>
+
+            {/* 时间选择 */}
+            <div className={`flex items-center gap-3 transition-opacity ${dndEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+              <div className="flex-1">
+                <label className="block text-[11px] text-text-muted/60 mb-1 uppercase tracking-wider">开始时间</label>
+                <input
+                  type="time"
+                  value={dndStart}
+                  onChange={(e) => setDndStart(e.target.value)}
+                  className="w-full px-2.5 py-2 rounded-lg border border-border-main bg-bg-raised text-text-main
+                    text-[15px] font-medium font-mono text-center focus:outline-none focus:border-amber-500/50"
+                />
+              </div>
+              <div className="text-text-muted text-base mt-4">→</div>
+              <div className="flex-1">
+                <label className="block text-[11px] text-text-muted/60 mb-1 uppercase tracking-wider">结束时间</label>
+                <input
+                  type="time"
+                  value={dndEnd}
+                  onChange={(e) => setDndEnd(e.target.value)}
+                  className="w-full px-2.5 py-2 rounded-lg border border-border-main bg-bg-raised text-text-main
+                    text-[15px] font-medium font-mono text-center focus:outline-none focus:border-amber-500/50"
+                />
+              </div>
+            </div>
+
+            {/* 预览提示 */}
+            {dndEnabled && (
+              <div className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-amber-500/[0.06] border border-amber-500/10 text-xs text-amber-500">
+                <span>🌙</span>
+                <span>{dndStart} - {dndEnd} 期间不推送通知{dndStart > dndEnd ? '（跨午夜）' : ''}</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* ③ 自定义 prompt — 默认收起 */}
       <div className="border border-border-main rounded-lg overflow-hidden">
         <button
@@ -966,6 +1044,8 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
             accounts: selectedAccounts,
             push_target: pushTarget ? 'ilink' : '',
             custom_prompt: customPrompt || undefined,
+            dnd_start: dndEnabled ? dndStart : '',
+            dnd_end: dndEnabled ? dndEnd : '',
           })}
           disabled={!name.trim() || selectedAccounts.length === 0}
           className="flex-1 py-2.5 rounded-full bg-amber-500 text-white text-sm font-semibold

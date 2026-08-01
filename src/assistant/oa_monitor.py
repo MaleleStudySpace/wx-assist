@@ -198,6 +198,34 @@ class OAMonitorEngine:
                 logger.debug("OAMonitor: 跳过推送 '%s' — 已有推送记录 (dedup)", title[:30])
                 continue
 
+            # ── 免打扰时段检查 ──
+            # 免打扰期间：文章仍写入 oa_cache（不丢数据），仍做 dedup 标记
+            # （避免免打扰结束后重复推送），只跳过通知推送。
+            if mg.dnd_start and mg.dnd_end:
+                try:
+                    _now_dt = datetime.now()
+                    _now_min = _now_dt.hour * 60 + _now_dt.minute
+                    _sh, _sm = mg.dnd_start.split(":")
+                    _eh, _em = mg.dnd_end.split(":")
+                    _start_min = int(_sh) * 60 + int(_sm)
+                    _end_min = int(_eh) * 60 + int(_em)
+                    # 跨午夜：start > end 时，当前时间 >= start 或 < end 即在免打扰内
+                    if _start_min <= _end_min:
+                        _in_dnd = _start_min <= _now_min < _end_min
+                    else:
+                        _in_dnd = _now_min >= _start_min or _now_min < _end_min
+                    if _in_dnd:
+                        # 仍标记 dedup，免打扰结束后不会重复推送
+                        self._alerted_urls[art.url] = now
+                        logger.debug(
+                            "OAMonitor: 跳过推送 '%s' — 免打扰时段 %s~%s",
+                            title[:30], mg.dnd_start, mg.dnd_end,
+                        )
+                        continue
+                except (ValueError, AttributeError) as _e:
+                    logger.debug("OAMonitor: 免打扰时段解析失败 (%s~%s): %s",
+                                 mg.dnd_start, mg.dnd_end, _e)
+
             # Mark as alerted immediately (prevents race within same poll)
             self._alerted_urls[art.url] = now
 
