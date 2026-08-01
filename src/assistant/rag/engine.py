@@ -280,7 +280,10 @@ class RAGEngine:
                         "SELECT DISTINCT chat_id FROM messages WHERE chat_id NOT LIKE 'ilink_%'"
                     ).fetchall()
                     groups = [r["chat_id"] for r in rows] if rows else []
-                except Exception:
+                except Exception as e:
+                    # 查询失败与"确实没有群"在日志上同形（都是"跳过"），
+                    # 必须区分故障与真空。
+                    logger.warning("[RAG] 冷启动查询群列表失败: %s", e)
                     groups = []
 
             if not groups:

@@ -116,7 +116,10 @@ class DigestHistory:
                     self._urls = {url: float(ts) for url, ts in raw_urls.items()}
                 else:
                     self._urls = {}
-            except Exception:
+            except Exception as e:
+                # 去重历史丢失 → 本轮全部文章被重新摘要、重复推送。
+                # 虽然 mark_digested 写回后自愈，但根因不可见。
+                logger.warning("DigestHistory 加载失败，去重历史清空: %s", e)
                 self._urls = {}
 
     def _save(self):

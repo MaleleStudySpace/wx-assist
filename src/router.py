@@ -162,8 +162,10 @@ class MessageRouter:
             if WELCOME_FILE.exists():
                 data = json.loads(WELCOME_FILE.read_text(encoding="utf-8"))
                 welcomed = set(data.get("welcomed", []))
-        except Exception:
-            pass
+        except Exception as e:
+            # 欢迎记录解析失败 → 该用户下次 DM 会被重复欢迎（自愈靠下方重写文件），
+            # 但根因不可见，记录 warning。
+            logger.warning("欢迎记录解析失败，将重建: %s", e)
 
         if chat_id in welcomed:
             return ""

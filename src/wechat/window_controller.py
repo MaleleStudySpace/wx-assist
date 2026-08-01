@@ -986,5 +986,6 @@ class WeChatWindowController:
         try:
             with open(FAILURE_LOG, "a", encoding="utf-8") as f:
                 f.write(msg)
-        except Exception:
-            pass
+        except Exception as e:
+            # 发送失败持久化日志是最后一道可见性保障，写失败（磁盘满/权限）也要告警。
+            logger.warning("send_failures.log 写入失败: %s", e)

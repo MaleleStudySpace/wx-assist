@@ -71,8 +71,9 @@ class ContentCache:
                     "sns": float(data.get("sns") or 0),
                     "fav": float(data.get("fav") or 0),
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            # 游标损坏被静默当"首次启动"→ 全量重索引（分钟级写入）。
+            logger.warning("索引游标读取失败，将全量重索引: %s", e)
         return {"oa": 0.0, "sns": 0.0, "fav": 0.0}
 
     def _save_index_cursor(self):
@@ -85,8 +86,9 @@ class ContentCache:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self._last_indexed_at, f, ensure_ascii=False)
             os.replace(tmp, path)  # 原子替换，避免写一半崩溃
-        except Exception:
-            pass
+        except Exception as e:
+            # 游标存不进去 → 每次重启都全量重索引且静默。磁盘故障必须可见。
+            logger.warning("索引游标保存失败，重启将全量重索引: %s", e)
 
     # ══════════════════════════════════════════════════════════════
     # 连接管理
@@ -1331,21 +1333,24 @@ def _update_task(tc, task_id, progress):
     if task_id and tc:
         try:
             tc.update_task(task_id, progress=progress)
-        except Exception:
-            pass
+        except Exception as e:
+            # 纯 UI 进度辅助，高频（每轮缓存任务多次）用 debug 防刷屏。
+            logger.debug("[CACHE] update_task 进度失败: %s", e)
 
 
 def _complete_task(tc, task_id, result=""):
     if task_id and tc:
         try:
             tc.complete_task(task_id, result=result or "")
-        except Exception:
-            pass
+        except Exception as e:
+            # 任务终态失败 → 任务卡 running（前端转圈）。低频（每任务一次）。
+            logger.warning("[CACHE] complete_task 失败: %s", e)
 
 
 def _fail_task(tc, task_id, error=""):
     if task_id and tc:
         try:
             tc.fail_task(task_id, error=error or "")
-        except Exception:
-            pass
+        except Exception as e:
+            # 失败任务唯一落库出口，静默则错误信息丢失、任务卡 running。
+            logger.warning("[CACHE] fail_task 失败: %s", e)

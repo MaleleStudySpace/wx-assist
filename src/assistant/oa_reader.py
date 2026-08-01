@@ -121,8 +121,10 @@ def fetch_article_content(url: str, timeout: int = 15, title: str = "") -> str:
         extractor = WeChatArticleExtractor()
         try:
             extractor.feed(html)
-        except Exception:
-            pass
+        except Exception as e:
+            # 核心兜底解析器失败 → 用户拿到质量降级的 <p> 文本或空内容，
+            # 与"正文就是短"无法区分。debug 级（抓取链路较频，防刷屏）。
+            logger.debug("[OA-READER] HTMLParser feed 失败，将走 <p> 兜底: %s", e)
         sections = extractor.get_content()
         if sections:
             return "\n\n".join(

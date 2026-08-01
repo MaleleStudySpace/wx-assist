@@ -4867,8 +4867,9 @@ def handle_oa_digest_run(params, config: AssistantConfig):
                                                      "status": "completed",
                                                      "progress": "无新内容" if _is_empty else "完成",
                                                      "group_name": _group_name})
-            except Exception:
-                pass
+            except Exception as e:
+                # complete_task 失败 → 任务永久卡 running（前端转圈无迹可循）。
+                logger.warning("OA digest complete_task 失败: %s", e)
 
         except Exception as e:
             logger.exception("[OA-DIGEST] Background digest failed")

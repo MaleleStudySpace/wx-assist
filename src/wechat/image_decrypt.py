@@ -225,7 +225,9 @@ def download_and_decrypt(url: str, key, timeout: int = 15) -> Optional[bytes]:
         })
         resp = urlopen(req, context=ctx, timeout=timeout)
         data = resp.read()
-    except Exception:
+    except Exception as e:
+        # 图片下载是外部网络调用，失败后图片静默缺失（前端图裂），必须可见。
+        logger.warning("image download failed: %s", url or "?")
         return None
 
     if key is None:

@@ -114,10 +114,12 @@ class Outbox:
                                 (_u, _rid),
                             )
                             _backfilled += 1
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as e:
+                        # 批量循环内单条失败：该条 url 永空 → 重复推送。
+                        logger.debug("Outbox url 回填单条失败 (id=%s): %s", _rid, e)
+            except Exception as e:
+                # 回填整体中断，_backfilled 计数丢失。
+                logger.warning("Outbox url 回填中断: %s", e)
             if _backfilled:
                 logger.info("Outbox: 回填 %d 条历史推送记录的 url（防重复推送）", _backfilled)
             conn.commit()

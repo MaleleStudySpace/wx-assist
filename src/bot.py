@@ -289,8 +289,8 @@ class Bot:
         try:
             from .web.server import _register_backend
             _register_backend(backend)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("register_backend 失败: %s", e)
 
         # ── 5b. Cleanup restricted triggers if disabled ──────────────
         # Triggers persist in WCDB across restarts; if the config switch
@@ -392,24 +392,24 @@ class Bot:
             try:
                 from src.web.server import register_assistant_scheduler
                 register_assistant_scheduler(assistant_scheduler)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("register_assistant_scheduler 失败: %s", e)
 
             # Register TaskCenter with server
             if task_center:
                 try:
                     from src.web.server import register_task_center
                     register_task_center(task_center)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("register_task_center 失败: %s", e)
 
             # ── Alert engine (message-triggered, no thread needed) ──
             assistant_alert = AlertEngine(asst_cfg, outbox)
             try:
                 from src.web.server import register_assistant_alert
                 register_assistant_alert(assistant_alert)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("register_assistant_alert 失败: %s", e)
 
             # ── OA Monitor (thread loop, no-ops when no groups) ──
             from src.assistant.oa_monitor import OAMonitorEngine
@@ -428,8 +428,8 @@ class Bot:
             try:
                 from src.web.server import register_oa_monitor
                 register_oa_monitor(oa_monitor)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("register_oa_monitor 失败: %s", e)
 
             logger.info("Assistant: alert engine + OA monitor + digest scheduler initialized")
         except Exception as e:
@@ -523,8 +523,8 @@ class Bot:
                 try:
                     from src.web.server import register_skill_engine
                     register_skill_engine(skill_engine)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("register_skill_engine 失败: %s", e)
                 logger.info("[SKILL] SkillEngine 已初始化")
             except Exception as e:
                 logger.warning("[SKILL] SkillEngine init failed: %s", e)
@@ -542,8 +542,8 @@ class Bot:
                 try:
                     from src.web.server import register_cron_scheduler
                     register_cron_scheduler(cron_scheduler)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("register_cron_scheduler 失败: %s", e)
                 logger.info("[CRON] CronScheduler 已初始化 (%d 个任务)",
                             len(cron_scheduler.list_jobs()))
             except Exception as e:
@@ -586,8 +586,8 @@ class Bot:
                 try:
                     from src.web.server import register_rag_engine
                     register_rag_engine(rag_engine)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("register_rag_engine 失败: %s", e)
 
                 logger.info("[RAG] RAGEngine initialized and injected")
 

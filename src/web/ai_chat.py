@@ -1070,8 +1070,9 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
                 "sns_summarize", "manual", username or "朋友圈", "朋友圈总结",
             )
             _task_center.update_task(tid, progress="正在读取朋友圈内容")
-    except Exception:
-        pass
+    except Exception as e:
+        # 任务中心建任务失败：前端无任务追踪（不影响摘要主流程）。
+        logger.warning("sns summarize 任务中心建任务失败: %s", e)
 
     # ── 辅助：错误路径清理 TaskCenter ──
     def _fail_task(error=""):
@@ -1251,8 +1252,9 @@ def handle_sns_ai_summarize_stream(body: dict, wfile) -> None:
         from src.web.server import _task_center as _tc
         if tid and _tc:
             _tc.complete_task(tid, result=response_text[:200])
-    except Exception:
-        pass
+    except Exception as e:
+        # complete_task 失败 → 任务永久卡 running，前端转圈且无迹可循。
+        logger.warning("sns summarize complete_task 失败: %s", e)
 
     try:
         _send_sse_event(wfile, "done", {"source_name": source_name})

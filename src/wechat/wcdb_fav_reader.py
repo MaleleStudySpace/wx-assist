@@ -5,10 +5,13 @@
 通过 client.exec_query() 查询 favorite.db。
 """
 import json
+import logging
 import re
 from pathlib import Path
 from datetime import datetime
 from xml.etree import ElementTree as ET
+
+logger = logging.getLogger(__name__)
 
 
 # ── 收藏类型映射 ──
@@ -114,7 +117,10 @@ class WcdbFavReader:
             # 转义非实体引用的 &
             clean = re.sub(r'&(?!(?:amp|lt|gt|apos|quot|#x[0-9a-fA-F]+|#\d+);)', '&amp;', clean)
             root = ET.fromstring(clean)
-        except Exception:
+        except Exception as e:
+            # 收藏 XML 解析失败 → 标题/链接/来源全丢（带 raw 内容返回）。
+            # debug 级（逐条解析，防刷屏），记录前 80 字符便于定位。
+            logger.debug("收藏 XML 解析失败: %.80s", xml_str)
             return result
 
         # 标题 & 描述
