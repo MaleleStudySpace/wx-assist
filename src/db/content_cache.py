@@ -458,7 +458,13 @@ class ContentCache:
             self._end_full_sync("oa")
 
     def _sync_oa_accounts(self, client):
-        """同步 OA 账号列表。"""
+        """同步 OA 账号列表。
+
+        过滤规则：get_display_names() 返回 gh_id 本身的号不入库。
+        这些号在 contact 表中无 nick_name 记录（已取关或从未收到推送），
+        显示 gh_id 对用户无意义，且 WCDB 中 0 篇文章，无法搜索/摘要/监控。
+        后续 contact 表有数据后，下次同步自动恢复（30min 刷新，自愈）。
+        """
         try:
             from src.assistant.oa_parser import get_oa_sessions
             sessions = get_oa_sessions(client)
@@ -473,14 +479,21 @@ class ContentCache:
         except Exception:
             names = {}
         accounts = []
+        skipped = []
         now = int(time.time())
         for s in sessions:
             uid = s.get("username", "")
             if not uid:
                 continue
+            display_name = names.get(uid, uid) or uid
+            # 过滤：display_name == uid 说明 contact 表无 nick_name，
+            # 该公众号已取关或从未互动，显示 gh_id 对用户无意义
+            if display_name == uid:
+                skipped.append(uid)
+                continue
             accounts.append({
                 "gh_id": uid,
-                "display_name": names.get(uid, uid) or uid,
+                "display_name": display_name,
                 "avatar_url": "",
                 "last_updated": now,
             })
@@ -489,7 +502,8 @@ class ContentCache:
             names_str = ", ".join(a.get("display_name", a["gh_id"]) for a in accounts[:5])
             if len(accounts) > 5:
                 names_str += f" ... 共 {len(accounts)} 个"
-            logger.info("[CACHE] OA 账号同步: %s", names_str)
+            logger.info("[CACHE] OA 账号同步: %s (跳过 %d 个无昵称)",
+                        names_str, len(skipped))
 
     def _sync_oa_articles_full(self, client, task_id=None, task_center=None):
         """全量同步 OA 文章：遍历每个 gh_id，拉最新 50 篇。"""

@@ -73,6 +73,7 @@ a = Analysis(
         'src.wechat', 'src.wechat.base', 'src.wechat.wcdb_backend',
         'src.wechat.wcdb_client', 'src.wechat.mac_hybrid_backend',
         'src.wechat.mac_weflow_client',
+        'src.wechat.content_codec',  # wcdb_backend 函数内 import，静态分析检测不到，必须显式加入
         'src.wechat.mac_ui_backend', 'src.wechat.window_controller',
         'src.wechat.keyboard', 'src.wechat.helpers', 'src.wechat.extract_key',
         'src.wechat.native', 'src.wechat.native.injector',

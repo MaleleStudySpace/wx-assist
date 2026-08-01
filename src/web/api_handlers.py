@@ -4540,7 +4540,11 @@ def handle_sns_export(params, config: AssistantConfig):
 # ── 公众号 API ─────────────────────────────────────────────────────────
 
 def handle_oa_accounts(params, config: AssistantConfig):
-    """GET /api/oa/accounts — List all OA accounts (cache-first)"""
+    """GET /api/oa/accounts — List all OA accounts (cache-first)
+
+    过滤规则：display_name == gh_id 的号不返回（contact 表无 nick_name，
+    已取关或从未互动，显示 gh_id 对用户无意义）。
+    """
     # ── Cache-first: 从 oa_accounts 读取 ──
     cc = get_content_cache()
     if cc:
@@ -4549,11 +4553,13 @@ def handle_oa_accounts(params, config: AssistantConfig):
             if cached:
                 # 后台触发增量同步（不阻塞响应）
                 _bg_sync_oa(cc)
+                # 过滤：display_name == gh_id 的号不返回
+                filtered = [r for r in cached if r["display_name"] != r["gh_id"]]
                 return {
                     "ok": True,
                     "data": [
                         {"username": r["gh_id"], "nickname": r["display_name"]}
-                        for r in cached
+                        for r in filtered
                     ],
                 }
         except Exception as e:
@@ -4567,17 +4573,14 @@ def handle_oa_accounts(params, config: AssistantConfig):
     try:
         from src.assistant.oa_parser import get_oa_sessions
         sessions = get_oa_sessions(client)
-        # Use resolve_nickname to get proper display names for gh_ accounts
-        return {
-            "ok": True,
-            "data": [
-                {
-                    "username": s.get("username"),
-                    "nickname": client.resolve_nickname(s.get("username", ""))
-                }
-                for s in sessions
-            ],
-        }
+        # 过滤：resolve_nickname 返回 gh_id 本身的号不返回
+        result = []
+        for s in sessions:
+            uid = s.get("username", "")
+            nick = client.resolve_nickname(uid)
+            if nick != uid:  # 有真实昵称才返回
+                result.append({"username": uid, "nickname": nick})
+        return {"ok": True, "data": result}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -4591,6 +4594,7 @@ def handle_oa_groups_list(params, config: AssistantConfig):
     # 不限定 gh_ 前缀：部分服务号 username 是 wxid_ 开头，前缀过滤会漏
     all_gh = list(set(gh for g in groups for gh in (g.accounts or []) if gh))
     service_ids = set()
+    no_name_ids = set()  # contact 表无 nick_name 的公众号 ID
     if all_gh:
         try:
             from src.assistant.oa_parser import _get_service_account_ids
@@ -4598,14 +4602,23 @@ def handle_oa_groups_list(params, config: AssistantConfig):
             if client:
                 fake_sessions = [{"username": gh} for gh in all_gh]
                 service_ids = _get_service_account_ids(client, fake_sessions)
+                # 检测无昵称的公众号：get_display_names 返回 gh_id 本身
+                non_service = [gh for gh in all_gh if gh not in service_ids]
+                if non_service:
+                    try:
+                        names = client.get_display_names(non_service)
+                        no_name_ids = {gh for gh in non_service if names.get(gh, gh) == gh}
+                    except Exception:
+                        pass
         except Exception:
             pass
 
+    _filtered = service_ids | no_name_ids
     return {
         "ok": True,
         "data": [
             {"id": g.id, "name": g.name,
-             "accounts": [a for a in (g.accounts or []) if a not in service_ids],
+             "accounts": [a for a in (g.accounts or []) if a not in _filtered],
              "schedule": g.schedule,
              "cron_expr": g.cron_expr,
              "digest_template": g.digest_template, "push_target": g.push_target,
