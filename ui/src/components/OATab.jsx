@@ -1063,6 +1063,9 @@ export default function OATab() {
   // 公众号缓存全文（总开关 + 忽略列表）
   const [fullTextEnabled, setFullTextEnabled] = useState(true)
   const [ignoredGhIds, setIgnoredGhIds] = useState([])
+  // 已保存的基准值（用于"仅变更时显示保存按钮"）
+  const [savedFullTextEnabled, setSavedFullTextEnabled] = useState(true)
+  const [savedIgnoredGhIds, setSavedIgnoredGhIds] = useState([])
   const [fullTextDropdownOpen, setFullTextDropdownOpen] = useState(false)
   const [fullTextSearch, setFullTextSearch] = useState('')
   const [fullTextSaving, setFullTextSaving] = useState(false)
@@ -1166,6 +1169,9 @@ export default function OATab() {
         const ftf = configData.config.oa_full_text_fetch || {}
         setFullTextEnabled(ftf.enabled !== false)
         setIgnoredGhIds(ftf.ignore_gh_ids || [])
+        // 记录已保存基准值（用于"仅变更时显示保存按钮"）
+        setSavedFullTextEnabled(ftf.enabled !== false)
+        setSavedIgnoredGhIds(ftf.ignore_gh_ids || [])
       }
     } catch {
       setError('加载失败')
@@ -1280,6 +1286,9 @@ export default function OATab() {
       const data = await res.json()
       if (data.ok) {
         setFullTextSaved(true)
+        // 同步基准值：保存成功后若无新变更，保存按钮自动隐藏
+        setSavedFullTextEnabled(fullTextEnabled)
+        setSavedIgnoredGhIds([...ignoredGhIds])
         setTimeout(() => setFullTextSaved(false), 1800)
       } else {
         setFullTextError(data.error || '保存失败')
@@ -1701,7 +1710,7 @@ export default function OATab() {
       )}
 
       {/* ── 公众号缓存全文 设置区 ── */}
-      <div className="relative mb-5 p-4 rounded-xl overflow-visible border border-brand-green/35 bg-gradient-to-b from-brand-green/[0.06] to-brand-green/[0.02] shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+      <div className="relative mt-8 mb-2 p-4 rounded-xl overflow-visible border border-brand-green/35 bg-gradient-to-b from-brand-green/[0.06] to-brand-green/[0.02] shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
         {/* 顶部品牌色细线 */}
         <div className="absolute top-0 left-6 right-6 h-0.5 rounded-full bg-gradient-to-r from-transparent via-brand-green to-transparent" />
         <div className="mb-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-brand-green/10 border border-brand-green/25">
@@ -1808,18 +1817,27 @@ export default function OATab() {
           )}
         </div>
 
-        {/* 保存 + 状态 */}
-        <div className="mt-4 flex items-center gap-3">
-          <button
-            onClick={handleSaveFullText}
-            disabled={fullTextSaving}
-            className="px-5 py-2 rounded-full text-xs font-semibold bg-brand-green-hover text-white hover:bg-[#0d8c5c] transition-colors cursor-pointer disabled:opacity-50"
-          >
-            {fullTextSaving ? '保存中...' : '保存设置'}
-          </button>
-          {fullTextSaved && <span className="text-xs text-brand-green">✓ 已保存，全文抓取设置已生效</span>}
-          {fullTextError && <span className="text-xs text-status-error">{fullTextError}</span>}
-        </div>
+        {/* 保存 + 状态：仅在设置发生变更时显示，避免与其他配置混用 */}
+        {(() => {
+          const changed = fullTextEnabled !== savedFullTextEnabled
+            || ignoredGhIds.length !== savedIgnoredGhIds.length
+            || ignoredGhIds.some(id => !savedIgnoredGhIds.includes(id))
+            || savedIgnoredGhIds.some(id => !ignoredGhIds.includes(id))
+          if (!changed) return null
+          return (
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                onClick={handleSaveFullText}
+                disabled={fullTextSaving}
+                className="px-5 py-2 rounded-full text-xs font-semibold bg-brand-green-hover text-white hover:bg-[#0d8c5c] transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {fullTextSaving ? '保存中...' : '保存设置'}
+              </button>
+              {fullTextSaved && <span className="text-xs text-brand-green">✓ 已保存，全文抓取设置已生效</span>}
+              {fullTextError && <span className="text-xs text-status-error">{fullTextError}</span>}
+            </div>
+          )
+        })()}
       </div>
 
       {/* Running digest indicator */}

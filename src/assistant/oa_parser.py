@@ -267,29 +267,93 @@ def _safe_get_messages(client, gh_id: str, limit: int, offset: int = 0) -> list:
 def get_oa_sessions(client) -> list[dict]:
     """Get all Official Account (公众号) sessions, excluding service accounts (服务号).
 
-    Distinguishes between:
-    - 订阅号/公众号: verify_flag bit 3 (8) set, bit 4 (16) NOT set
-    - 服务号: verify_flag bit 4 (16) set (e.g. 微信支付, 信用卡还款)
+    判定逻辑（已实测验证）：
+    - 是公众号：contact.verify_flag 的 bit3 (8) 置位 —— 微信客户端即靠此区分
+      公众号与普通好友（27069 个好友全部 verify_flag=0）。
+    - 是内容公众号（订阅号）：biz_info.type = 0。
+      type=1 服务号（微信支付/银行/广告账号）、type=2 企业号、
+      type=3 校内/系统号、type=5 个人号 全部排除。
 
-    Service accounts (verify_flag & 16 != 0) are excluded because they are
-    payment/notification accounts, not content publishers.
+    注意：微信 4.x 部分公众号 username 是 wxid_ 开头（极客公园/虎嗅/央视新闻），
+    不能用 username 前缀（gh_）判定 —— 否则这些号会漏掉。
 
     Returns:
-        List of session dicts for real 公众号 only
+        List of session dicts for real 内容公众号 only.
     """
-    sessions = client.get_sessions(limit=500)
-    gh_sessions = [s for s in sessions if s.get("username", "").startswith("gh_")]
+    return _query_content_oa_sessions(client)
 
-    if not gh_sessions:
-        return []
 
-    # Query contact table to get verify_flag for each gh_ account
-    service_gh_ids = _get_service_account_ids(client, gh_sessions)
-    if not service_gh_ids:
-        return gh_sessions
+def query_content_oa_ids(client, usernames: list[str]) -> set[str]:
+    """给定 username 集合，返回其中属于内容公众号（biz_info.type=0）的子集。
 
-    # Filter out service accounts
-    return [s for s in gh_sessions if s.get("username", "") not in service_gh_ids]
+    供 api_handlers 等按任意会话/账号集合判断公众号身份时复用，
+    与 _query_content_oa_sessions 使用同一判定 SQL，保证全项目一致。
+    """
+    result: set[str] = set()
+    batch_size = 200
+    for i in range(0, len(usernames), batch_size):
+        batch = usernames[i:i + batch_size]
+        if not batch:
+            continue
+        quoted = ",".join(f"'{u}'" for u in batch)
+        try:
+            sql = (
+                "SELECT b.username FROM biz_info b "
+                "WHERE b.type = 0 "
+                "AND b.username IN (" + quoted + ") "
+                "AND b.username NOT LIKE '%@chatroom' "
+                "AND b.username NOT LIKE '%@stranger' "
+                "AND b.username NOT LIKE '%@openim' "
+                "AND b.username NOT LIKE '%@app'"
+            )
+            rows = client.exec_query("contact", "", sql)
+            if rows:
+                for r in rows:
+                    u = r.get("username", "")
+                    if u:
+                        result.add(u)
+        except Exception as e:
+            logger.warning("query_content_oa_ids batch failed: %s", e)
+    return result
+
+
+def _query_content_oa_sessions(client) -> list[dict]:
+    """按 biz_info.type=0 查询内容公众号会话。
+
+    以 biz_info 表为主（公众号必有 biz_info 记录；部分公众号无 contact
+    记录——如澎湃新闻 gh_d29e0d22a6f9——用 contact 主表会漏掉）。
+    verify_flag bit3 仅作 contact 存在时的辅助依据。
+
+    Returns:
+        List of session dicts（username + displayName 字段）。
+    """
+    sessions = []
+    try:
+        sql = (
+            "SELECT b.username AS bu, c.nick_name "
+            "FROM biz_info b "
+            "LEFT JOIN contact c ON b.username = c.username "
+            "WHERE b.type = 0 "
+            "AND b.username NOT LIKE '%@chatroom' "
+            "AND b.username NOT LIKE '%@stranger' "
+            "AND b.username NOT LIKE '%@openim' "
+            "AND b.username NOT LIKE '%@app' "
+            "ORDER BY b.username"
+        )
+        rows = client.exec_query("contact", "", sql)
+        for r in rows:
+            u = r.get("bu") or ""
+            if not u:
+                continue
+            nick = r.get("nick_name") or ""
+            sessions.append({
+                "username": u,
+                "displayName": nick or u,
+                "displayName_nick": nick or u,
+            })
+    except Exception as e:
+        logger.warning("_query_content_oa_sessions failed: %s", e)
+    return sessions
 
 
 # Cache for service account flags (avoids repeated DB queries)

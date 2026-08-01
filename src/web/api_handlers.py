@@ -1715,45 +1715,57 @@ def _detect_service_accounts(client, sessions: list) -> set[str]:
     biz_info.type=1 → service account (微信支付, 信用卡还款 etc.)
     biz_info.type=0 → public account (公众号/订阅号)
     verify_flag & 16 is unreliable (公众号 like 新智元 also has bit 4 set).
+
+    注意：不限定 gh_ 前缀 —— 微信 4.x 部分服务号 username 是 wxid_ 开头
+    （如 腾讯招聘），用前缀过滤会漏掉。
     """
 
     global _service_ids_cache
     if _service_ids_cache is not None:
         return _service_ids_cache
 
-    gh_ids = [s.get("username", "") for s in sessions
-              if s.get("username", "").startswith("gh_")
-              and re.fullmatch(r'[a-zA-Z0-9_@]+', s.get("username", ""))]
-    if not gh_ids:
+    # 收集全部候选（排除群聊和无效 username），不再用 gh_ 前缀过滤
+    all_ids = [s.get("username", "") for s in sessions
+               if s.get("username", "")
+               and "@chatroom" not in s.get("username", "")
+               and re.fullmatch(r'[a-zA-Z0-9_@]+', s.get("username", ""))]
+    if not all_ids:
         _service_ids_cache = set()
         return set()
 
     service_ids: set[str] = set()
     try:
         # 优先用 biz_info.type 字段（精确区分服务号和公众号）
-        quoted = ",".join(f"'{gid}'" for gid in gh_ids)
-        sql = f"SELECT username, type FROM biz_info WHERE username IN ({quoted})"
-        rows = client.exec_query("contact", "", sql)
-        if rows:
-            for row in rows:
-                biz_type = int(row.get("type", 0) or 0)
-                if biz_type == 1:  # 服务号
-                    service_ids.add(row.get("username", ""))
-            logger.info("Detected service accounts (biz_info.type=1): %d accounts", len(service_ids))
-            _service_ids_cache = service_ids
-            return service_ids
+        # 分批查询避免 DLL JSON 缓冲超限
+        batch_size = 200
+        for i in range(0, len(all_ids), batch_size):
+            batch = all_ids[i:i + batch_size]
+            quoted = ",".join(f"'{gid}'" for gid in batch)
+            sql = f"SELECT username, type FROM biz_info WHERE username IN ({quoted})"
+            rows = client.exec_query("contact", "", sql)
+            if rows:
+                for row in rows:
+                    biz_type = int(row.get("type", 0) or 0)
+                    if biz_type == 1:  # 服务号
+                        service_ids.add(row.get("username", ""))
+        logger.info("Detected service accounts (biz_info.type=1): %d accounts", len(service_ids))
+        _service_ids_cache = service_ids
+        return service_ids
     except Exception as e:
         logger.warning("biz_info query failed, falling back to verify_flag: %s", e)
 
     # Fallback: verify_flag & 16 (原有逻辑，不够精确)
     try:
-        quoted = ",".join(f"'{gid}'" for gid in gh_ids)
-        sql = f"SELECT username, verify_flag FROM contact WHERE username IN ({quoted})"
-        rows = client.exec_query("contact", "", sql)
-        for row in rows:
-            vflag = int(row.get("verify_flag", 0) or 0)
-            if vflag & 16:
-                service_ids.add(row.get("username", ""))
+        batch_size = 200
+        for i in range(0, len(all_ids), batch_size):
+            batch = all_ids[i:i + batch_size]
+            quoted = ",".join(f"'{gid}'" for gid in batch)
+            sql = f"SELECT username, verify_flag FROM contact WHERE username IN ({quoted})"
+            rows = client.exec_query("contact", "", sql)
+            for row in rows:
+                vflag = int(row.get("verify_flag", 0) or 0)
+                if vflag & 16:
+                    service_ids.add(row.get("username", ""))
         if service_ids:
             logger.info("Detected service accounts (verify_flag & 16 fallback): %d accounts", len(service_ids))
     except Exception as e:
@@ -1936,15 +1948,26 @@ def handle_chat_sessions(params, config: AssistantConfig):
 
         # Classify sessions into groups:
         # 1. Normal sessions (individuals, group chats)
-        # 2. Public accounts (gh_*) — should be folded into "公众号"
-        #    Service accounts (服务号, verify_flag & 16) go to normal_sessions
+        # 2. Public accounts — should be folded into "公众号"
+        #    Service accounts (服务号, biz_info.type=1) go to normal_sessions
         # 3. Folded chats (individual or group) — @placeholder_foldgroup
         # 4. Service accounts (服务号) — 微信支付, 信用卡还款 etc.
-        #    These are gh_* but NOT content publishers, keep in normal list.
+        #    These are NOT content publishers, keep in normal list.
         service_gh_ids = _detect_service_accounts(client, sessions)
 
+        # 内容公众号判定（verify_flag bit3 + biz_info.type=0）：
+        # 不限定 gh_ 前缀 —— 微信 4.x 部分公众号 username 是 wxid_ 开头
+        # （极客公园/虎嗅/央视新闻），必须按此规则才能全量识别。
+        try:
+            from src.assistant.oa_parser import query_content_oa_ids
+            _cand = [s.get("username", "") for s in sessions
+                     if s.get("username", "") and "@chatroom" not in s.get("username", "")]
+            content_oa_ids = query_content_oa_ids(client, _cand)
+        except Exception:
+            content_oa_ids = set()
+
         normal_sessions = []
-        oa_sessions = []       # 公众号/订阅号 (gh_* minus service accounts)
+        oa_sessions = []       # 公众号/订阅号 (内容号, minus service accounts)
         folded_sessions = []   # 折叠的群聊 (from @placeholder_foldgroup)
 
         WECHAT_INTERNAL_USERS = {'brandsessionholder', 'brandservicesessionholder'}
@@ -1956,7 +1979,7 @@ def handle_chat_sessions(params, config: AssistantConfig):
                 continue  # 跳过微信内部占位符
             elif uname == "@placeholder_foldgroup":
                 fold_placeholder = s
-            elif uname.startswith("gh_"):
+            elif uname in content_oa_ids:
                 if uname in service_gh_ids:
                     # 服务号 → 放入 normal sessions (不在公众号折叠区)
                     normal_sessions.append(s)
@@ -4565,7 +4588,8 @@ def handle_oa_groups_list(params, config: AssistantConfig):
     groups = manager.list_groups()
 
     # Filter service account IDs from group.accounts
-    all_gh = list(set(gh for g in groups for gh in (g.accounts or []) if gh and gh.startswith("gh_")))
+    # 不限定 gh_ 前缀：部分服务号 username 是 wxid_ 开头，前缀过滤会漏
+    all_gh = list(set(gh for g in groups for gh in (g.accounts or []) if gh))
     service_ids = set()
     if all_gh:
         try:
@@ -4601,7 +4625,7 @@ def _filter_service_account_ids(accounts):
         client = get_wcdb_client()
         if not client:
             return accounts
-        fake_sessions = [{"username": gh} for gh in accounts if isinstance(gh, str) and gh.startswith("gh_")]
+        fake_sessions = [{"username": gh} for gh in accounts if isinstance(gh, str) and gh]
         if not fake_sessions:
             return accounts
         service_ids = _get_service_account_ids(client, fake_sessions)
