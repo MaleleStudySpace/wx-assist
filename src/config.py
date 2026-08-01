@@ -89,8 +89,12 @@ def write_env_atomic(env_path: Path, updates: dict[str, str]) -> None:
         lines = []
         try:
             lines = env_path.read_text(encoding="utf-8").splitlines()
-        except Exception:
-            lines = []
+        except Exception as e:
+            # 读失败继续写会用空内容覆盖原文件，丢掉已有配置。
+            # 中止保存，保留原文件，记录原因（调用方忽略返回值也不受影响）。
+            logger.warning("write_env_atomic: cannot read %s, aborting save to avoid data loss: %s",
+                           env_path, e)
+            return
 
         # Apply updates
         updated_keys = set()

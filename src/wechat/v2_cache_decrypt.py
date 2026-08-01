@@ -154,7 +154,10 @@ def decrypt_v2_cache(data: bytes, aes_key: str, xor_key: int) -> Optional[bytes]
         cipher = AES.new(key_bytes, AES.MODE_ECB)
         aes_ciphertext = data[offset:offset + aligned]
         decrypted_aes = Padding.unpad(cipher.decrypt(aes_ciphertext), AES.block_size)
-    except (ValueError, KeyError):
+    except (ValueError, KeyError) as e:
+        # unpad 失败 = 密钥不匹配或数据损坏。这是最高价值的诊断信号，
+        # 若密钥推导错误会导致所有 V2 图片静默解密失败。
+        logger.warning("V2 cache decrypt failed (bad key or corrupt data): %s", e)
         return None
 
     offset += aligned

@@ -82,8 +82,13 @@ class MessageStore:
 
             try:
                 self.conn.commit()
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError as e:
+                # commit 失败 = 消息未落库。记录 error 并恢复连接状态，
+                # 保持 return True 让主流程照常（WCDB 下次轮询会重新读到
+                # 这条消息再入库，天然自愈）。
+                logger.error("insert_message commit failed, will be re-picked next poll (chat=%s): %s",
+                             chat_id, e)
+                self._recover_conn()
 
         return True
 
@@ -361,8 +366,10 @@ class MessageStore:
             )
             try:
                 self.conn.commit()
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError as e:
+                # commit 失败 = 群记忆未落库，下次摘要记忆不连贯。
+                logger.error("upsert_group_memory commit failed (chat=%s): %s", chat_id, e)
+                self._recover_conn()
 
     def get_new_message_count(self, chat_id: str,
                               since_message_id: str | None) -> int:

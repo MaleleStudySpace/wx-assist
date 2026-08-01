@@ -256,8 +256,11 @@ def _safe_get_messages(client, gh_id: str, limit: int, offset: int = 0) -> list:
     """
     try:
         return client.get_messages(talker=gh_id, limit=limit, offset=offset) or []
-    except Exception:
+    except Exception as e:
         # 降级：返回空。已拉到的数据由调用方保留，不影响其他公众号。
+        # 注意：DLL 缓冲限制（limit 过大 JSON 截断）也会走这里，属正常现象，
+        # 故用 debug 级记录（带 gh_id 便于区分"截断"与"真故障"）。
+        logger.debug("_safe_get_messages 失败 (gh=%s, limit=%s): %s", gh_id, limit, e)
         return []
 
 

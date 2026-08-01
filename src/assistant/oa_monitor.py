@@ -493,8 +493,12 @@ class OAMonitorEngine:
                 existing = self._content_cache.query_one(
                     "SELECT url FROM oa_cache WHERE url=?", [art.url]
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                # 查询失败不能当"未缓存"处理——否则会走到 upsert 把 cached_at
+                # 刷成 now，触发 RAG 游标回退、已索引文章反复重索引。
+                # 跳过本次写入（更保守），60s 高频路径用 debug 防刷屏。
+                logger.debug("[CACHE] _cache_article 查询失败，跳过写入: %s", e)
+                return False
             if existing:
                 return False  # 已缓存，不重写（保护 cached_at / content_status / full_content）
             cleaned = self._content_cache._clean_oa(art)

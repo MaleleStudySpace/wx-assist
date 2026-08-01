@@ -110,7 +110,7 @@ def _parse_summary_from_tool_call(response) -> SummaryResult:
                     k: v for k, v in data.items()
                     if k in ("summary_text", "topics", "participants")
                 })
-        except (json.JSONDecodeError, Exception):
+        except (json.JSONDecodeError, TypeError):
             pass
 
     # Strategy 3: plain text — wrap in minimal SummaryResult

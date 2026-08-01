@@ -55,8 +55,9 @@ def _save_state(state: dict[str, float]) -> None:
             encoding="utf-8",
         )
         _os.replace(tmp, p)
-    except Exception:
-        pass
+    except Exception as e:
+        # 防重触状态丢失 → 重启后 3h 窗口内 cron 可能重复触发。
+        logger.warning("scheduler state save failed (may re-trigger after restart): %s", e)
 
 
 

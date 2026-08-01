@@ -287,8 +287,9 @@ def _bg_sync_oa(cc, gh_id=None):
             else:
                 cc.sync_oa_accounts(client)       # ← 先刷账号列表
                 cc.sync_oa_incremental(client)    # ← 再刷文章
-        except Exception:
-            pass
+        except Exception as e:
+            # 后台同步线程是缓存唯一更新源，失败会长期走降级路径且无日志。
+            logger.warning("bg-oa-sync failed: %s", e)
     threading.Thread(target=_run, daemon=True, name="bg-oa-sync").start()
 
 
@@ -299,8 +300,8 @@ def _bg_sync_sns(cc):
             client = get_wcdb_client()
             if client:
                 cc.sync_sns_incremental(client)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("bg-sns-sync failed: %s", e)
     threading.Thread(target=_run, daemon=True, name="bg-sns-sync").start()
 
 
@@ -311,8 +312,8 @@ def _bg_sync_fav(cc):
             client = get_wcdb_client()
             if client:
                 cc.sync_fav_incremental(client)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("bg-fav-sync failed: %s", e)
     threading.Thread(target=_run, daemon=True, name="bg-fav-sync").start()
 
 

@@ -3048,7 +3048,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 if candidates_str:
                     try:
                         candidates = json.loads(candidates_str)
-                    except:
+                    except (ValueError, TypeError):
                         candidates = [candidates_str]
 
                 # Get wcdb_client from api_handlers singleton

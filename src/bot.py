@@ -596,8 +596,10 @@ class Bot:
                     try:
                         db_conn = self._conn
                         rag_engine.cold_start(db_conn, tracked_groups=None)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # 冷启动失败 → RAG 搜索静默退化且无任何日志，
+                        # 用户会以为"语义检索就是找不到"。必须告警。
+                        logger.warning("[RAG] cold start failed: %s", e)
 
                 threading.Thread(target=_cold_start_task, daemon=True,
                                  name="rag-cold-start").start()
