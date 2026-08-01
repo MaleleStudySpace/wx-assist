@@ -15,6 +15,18 @@ CONFIG_PATH = Path("data/assistant_config.json")
 
 
 @dataclass
+class OAFullTextFetchConfig:
+    """公众号全文缓存开关（只控制 content_cache 全文抓取线程）。
+
+    enabled=False 时全文抓取线程停止抓取（新文章不缓存全文）；
+    ignore_gh_ids 中的公众号不抓取全文。
+    不影响 oa_monitor 推送/摘要逻辑。
+    """
+    enabled: bool = True
+    ignore_gh_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
 class AlertGroup:
     chat_id: str = ""
     group_name: str = ""
@@ -111,6 +123,7 @@ class AssistantConfig:
     oa_groups: list[OAGroup] = field(default_factory=list)
     fav_export: FavExportConfig = field(default_factory=FavExportConfig)
     scheduler_tasks: list[SchedulerTask] = field(default_factory=list)
+    oa_full_text_fetch: OAFullTextFetchConfig = field(default_factory=OAFullTextFetchConfig)
 
 
 def _default_config() -> AssistantConfig:
@@ -148,6 +161,10 @@ def _config_to_dict(cfg: AssistantConfig) -> dict:
             "last_export_timestamp": cfg.fav_export.last_export_timestamp,
         },
         "scheduler_tasks": [],
+        "oa_full_text_fetch": {
+            "enabled": cfg.oa_full_text_fetch.enabled,
+            "ignore_gh_ids": list(cfg.oa_full_text_fetch.ignore_gh_ids),
+        },
     }
     for ag in cfg.alert_groups:
         result["alert_groups"].append({
@@ -296,6 +313,12 @@ def _dict_to_config(data: dict) -> AssistantConfig:
         assistant_enabled=data.get("assistant_enabled", False),
         notification_queue=_queue_from_legacy(data),
         fav_export=fav_export,
+    )
+    # --- oa_full_text_fetch（默认 enabled=True，兼容旧配置无此字段）---
+    _ftf = data.get("oa_full_text_fetch") or {}
+    cfg.oa_full_text_fetch = OAFullTextFetchConfig(
+        enabled=_ftf.get("enabled", True),
+        ignore_gh_ids=list(_ftf.get("ignore_gh_ids") or []),
     )
     for ag_data in data.get("alert_groups", []):
         cfg.alert_groups.append(AlertGroup(

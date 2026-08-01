@@ -42,6 +42,7 @@ UPGRADE_STMTS = (
     "CREATE INDEX IF NOT EXISTS idx_outbox_chat_id ON assistant_outbox(chat_id)",
     "CREATE INDEX IF NOT EXISTS idx_outbox_type ON assistant_outbox(type)",
     "CREATE INDEX IF NOT EXISTS idx_outbox_push_status ON assistant_outbox(push_status)",
+    "CREATE INDEX IF NOT EXISTS idx_outbox_url ON assistant_outbox(url)",
 )
 
 
@@ -86,6 +87,7 @@ class Outbox:
                 "CREATE INDEX IF NOT EXISTS idx_outbox_chat_id ON assistant_outbox(chat_id)",
                 "CREATE INDEX IF NOT EXISTS idx_outbox_type ON assistant_outbox(type)",
                 "CREATE INDEX IF NOT EXISTS idx_outbox_push_status ON assistant_outbox(push_status)",
+                "CREATE INDEX IF NOT EXISTS idx_outbox_url ON assistant_outbox(url)",
             ):
                 try:
                     conn.execute(stmt)
@@ -176,7 +178,8 @@ class Outbox:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def query_by_url(self, url: str, notif_type: str = "") -> bool:
+    def query_by_url(self, url: str, notif_type: str = "",
+                     only_success: bool = False) -> bool:
         """Check whether a notification with this URL already exists.
 
         Used by OAMonitorEngine for accurate dedup. Empty url → False.
@@ -184,11 +187,19 @@ class Outbox:
         Args:
             url: Article URL.
             notif_type: Optional filter (e.g. "oa_article_alert").
+            only_success: True 时只认"推送成功"的记录（push_status='success'）。
+                推送失败/进行中的记录不算已推送 → 调用方可在窗口内重试。
         """
         if not url:
             return False
         with self._get_conn() as conn:
-            if notif_type:
+            if only_success:
+                row = conn.execute(
+                    "SELECT 1 FROM assistant_outbox WHERE url=? AND type=? "
+                    "AND push_status='success' LIMIT 1",
+                    (url, notif_type or ""),
+                ).fetchone()
+            elif notif_type:
                 row = conn.execute(
                     "SELECT 1 FROM assistant_outbox WHERE url=? AND type=? LIMIT 1",
                     (url, notif_type),
@@ -249,6 +260,10 @@ class Outbox:
     def update_push_result(self, notif_id: int, push_channel: str,
                            push_status: str, push_error: str = "") -> bool:
         """Update push delivery result for a notification.
+
+        注意：此处只更新推送结果字段（push_status/push_error/push_at），
+        不修改 status —— status（pending/delivered/ignored）是投递生命周期，
+        由外部调用方通过 ack()/ignore() 管理，与微信推送结果无关。
 
         Args:
             notif_id: Notification ID

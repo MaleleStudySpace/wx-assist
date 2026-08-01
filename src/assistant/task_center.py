@@ -229,8 +229,12 @@ class TaskCenter:
             where = []
             params: list[object] = []
             if status:
-                where.append("status = ?")
-                params.append(status)
+                if status == "failed":
+                    # "失败"筛选包含两类：任务失败(status=failed) 或 推送失败(push_status=failed)
+                    where.append("(status = 'failed' OR push_status = 'failed')")
+                else:
+                    where.append("status = ?")
+                    params.append(status)
             if task_type:
                 types = [t.strip() for t in task_type.split(",") if t.strip()]
                 if len(types) == 1:

@@ -165,18 +165,52 @@ def parse_oa_article(xml: str) -> dict:
     return result
 
 
+# DLL 单次查询安全上限（实测 limit=100 可能超缓冲，50 稳定）
+_DLL_SAFE_LIMIT = 50
+
+
 def fetch_oa_articles(client, gh_id: str, limit: int = 20) -> list[OAArticle]:
-    """Fetch all articles from a specific Official Account.
+    """Fetch articles from a specific Official Account.
 
     Args:
         client: WcdbNativeClient instance
         gh_id: Official Account ID (e.g., "gh_010999ea1270")
-        limit: Max messages to fetch
+        limit: 每页拉取的消息数上限。
+            - limit 为 None 时：全量分页拉取该号全部消息（每页 _DLL_SAFE_LIMIT 条），
+              直到拉完或分页异常（降级返回已拉到的数据，绝不崩溃）
+            - limit > 0：单页拉取 limit 条（现状行为，保持兼容）
 
     Returns:
         List of OAArticle objects
     """
-    msgs = client.get_messages(talker=gh_id, limit=limit)
+    if limit is not None and limit > 0:
+        # 现状：单页拉取（limit 超过 DLL 安全上限时由调用方保证，此处不强改）
+        msgs = _safe_get_messages(client, gh_id, limit)
+    else:
+        # 全量分页：每页 _DLL_SAFE_LIMIT 条，直到自然拉完/异常/数据重复。
+        # 无硬性页数上限——靠三个自然停止条件兜底：
+        #   ① 本页 < 一页（拉完）② 本页全是已见 url（DLL 异常循环）③ 分页异常降级
+        msgs = []
+        seen_urls: set[str] = set()
+        offset = 0
+        while True:
+            batch = _safe_get_messages(client, gh_id, _DLL_SAFE_LIMIT, offset=offset)
+            if not batch:
+                break  # 拉完或降级
+            # 防止 DLL 异常返回同一批数据导致死循环：本页全是已见 url → 停止
+            if seen_urls:
+                page_urls = {
+                    (m.get("message_content") or "")[:40]
+                    for m in batch if m.get("message_content")
+                }
+                if page_urls and page_urls.issubset(seen_urls):
+                    break
+                seen_urls.update(page_urls)
+            msgs.extend(batch)
+            if len(batch) < _DLL_SAFE_LIMIT:
+                break  # 不足一页 → 已拉完
+            offset += _DLL_SAFE_LIMIT
+
     all_articles = []
 
     for m in msgs:
@@ -212,6 +246,19 @@ def fetch_oa_articles(client, gh_id: str, limit: int = 20) -> list[OAArticle]:
             all_articles.append(article)
 
     return all_articles
+
+
+def _safe_get_messages(client, gh_id: str, limit: int, offset: int = 0) -> list:
+    """安全调用 get_messages：任一分页异常降级返回空（不抛异常）。
+
+    DLL 缓冲限制（limit 过大 JSON 截断）时返回空，由调用方决定后续
+    （全量分页遇到即停止该号，已拉到的数据保留）。
+    """
+    try:
+        return client.get_messages(talker=gh_id, limit=limit, offset=offset) or []
+    except Exception:
+        # 降级：返回空。已拉到的数据由调用方保留，不影响其他公众号。
+        return []
 
 
 def get_oa_sessions(client) -> list[dict]:

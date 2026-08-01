@@ -49,10 +49,11 @@ class OAMonitorEngine:
     """
 
     def __init__(self, config: AssistantConfig, outbox: Outbox,
-                 content_cache=None):
+                 content_cache=None, task_center=None):
         self._config = config
         self._outbox = outbox
         self._content_cache = content_cache
+        self._task_center = task_center  # 可选：用于推送任务追踪（成功/失败可见）
         # URL dedup: url -> timestamp (secondary, per-session dedup only)
         self._alerted_urls: dict[str, float] = {}
         self._running = False
@@ -98,15 +99,29 @@ class OAMonitorEngine:
         if not self._config.assistant_enabled:
             return
 
+        total_cached_new = 0
         for mg in self._config.oa_monitor_groups:
             if not mg.enabled or not mg.accounts:
                 continue
 
             for gh_id in mg.accounts:
                 try:
-                    self._check_account(mg, gh_id)
+                    total_cached_new += self._check_account(mg, gh_id) or 0
                 except Exception as e:
                     logger.warning("OAMonitor: error checking %s: %s", gh_id, e)
+
+        # ── 本轮有新文章写入 oa_cache → 触发 RAG 重索引（整轮只触发一次） ──
+        # 上移到 _poll_cycle：原实现在 _check_account 内每个号触发一次，
+        # 补课期间每号 cached_new>0 会一轮触发 91 次 index_to_rag（日志刷屏）。
+        # 游标增量机制保证无论触发几次索引结果一致，合并为一次不影响正确性。
+        if total_cached_new > 0:
+            try:
+                from src.web.server import get_rag_engine
+                _re = get_rag_engine()
+                if _re and self._content_cache:
+                    self._content_cache.index_to_rag(_re, "oa")
+            except Exception:
+                pass
 
         # Periodic dedup cleanup
         self._cleanup_dedup()
@@ -155,22 +170,30 @@ class OAMonitorEngine:
             is_known = art.url in self._alerted_urls
             if not is_known and self._outbox:
                 try:
-                    is_known = self._outbox.query_by_url(art.url, notif_type="oa_article_alert")
+                    # 只认"推送成功"的记录：推送失败/进行中的不拦截 → 窗口内下轮重试
+                    is_known = self._outbox.query_by_url(
+                        art.url, notif_type="oa_article_alert", only_success=True)
                 except Exception as e:
                     logger.debug("OAMonitor: outbox dedup 查询失败 %s: %s", art.url[:40], e)
 
             # ── Persist to oa_cache (INSERT OR REPLACE, idempotent) ──
+            # cached_new 只统计真正新写入的文章（_cache_article 返回 True），
+            # 已缓存文章跳过不计数——否则每轮 900+ 篇已缓存文章都会计入，
+            # 导致 RAG 索引每轮都被触发（刷屏）。
             if not is_known:
-                self._cache_article(art)
-                cached_new += 1
+                if self._cache_article(art):
+                    cached_new += 1
 
             # ── Skip notification for out-of-window or already known ──
             if not in_window:
-                age = int(now - art_ts) if art_ts else -1
-                logger.debug("OAMonitor: '%s' out of window (age=%ds)", title[:30], age)
+                # 历史文章（>5 分钟）不推送是正常预期——每轮 91 号 × 10 篇里绝大多数
+                # 都是历史文章，打日志会刷屏。只在 debug 级别记录。
+                logger.debug("OAMonitor: 跳过推送 '%s' — 超出 5 分钟窗口 (age=%ds)", title[:30],
+                             int(now - art_ts) if art_ts else -1)
                 continue
             if is_known:
-                logger.debug("OAMonitor: '%s' already alerted (dedup hit)", title[:30])
+                # 窗口内但已有推送记录 —— 值得留意（说明文章在窗口内被 dedup 拦下）
+                logger.warning("OAMonitor: 跳过推送 '%s' — 已有推送记录 (dedup)", title[:30])
                 continue
 
             # Mark as alerted immediately (prevents race within same poll)
@@ -412,51 +435,82 @@ class OAMonitorEngine:
                 title[:30], source, mg.name,
             )
 
-            # Push to WeChat via iLink (if configured)
+            # ── 推送 + 任务中心追踪（可选，task_center 为 None 时跳过）──
+            # 创建"公众号即时提醒"任务：推送成功 complete / 失败 fail(error)
+            _task_id = None
+            if self._task_center:
+                try:
+                    _task_id = self._task_center.create_task(
+                        task_type="oa_article_alert",
+                        source="system", group_id=gh_id,
+                        group_name=mg.name or source,
+                    )
+                except Exception as _e:
+                    logger.debug("OAMonitor: 创建推送任务失败: %s", _e)
+                    _task_id = None
+
             if mg.push_target == "ilink":
-                self._push_to_wechat(nid, mg.name or source, notif_title, notif_content)
+                _ok, _err = self._push_to_wechat(nid, mg.name or source, notif_title, notif_content)
+                if _task_id:
+                    try:
+                        if _ok:
+                            self._task_center.complete_task(_task_id, result="推送成功")
+                        else:
+                            self._task_center.fail_task(_task_id, error=_err or "推送失败")
+                    except Exception as _e:
+                        logger.debug("OAMonitor: 完结推送任务失败: %s", _e)
+            else:
+                # 未配置 iLink 推送：任务记为成功（已写入 outbox），说明未推送原因
+                if _task_id:
+                    try:
+                        self._task_center.complete_task(_task_id, result="未配置 iLink 推送（仅入库）")
+                    except Exception:
+                        pass
 
-        # ── 本轮有新文章写入 oa_cache → 触发 RAG 重索引 ──
-        if cached_new > 0:
-            try:
-                from src.web.server import get_rag_engine
-                _re = get_rag_engine()
-                if _re and self._content_cache:
-                    self._content_cache.index_to_rag(_re, "oa")
-            except Exception:
-                pass
+        # 返回本号新增缓存数，由 _poll_cycle 汇总后整轮只触发一次 RAG 索引
+        return cached_new
 
-    def _cache_article(self, art) -> None:
-        """Write a single OA article to oa_cache. Idempotent (INSERT OR REPLACE).
+    def _cache_article(self, art) -> bool:
+        """Write a single OA article to oa_cache. Returns True if actually written.
 
         Delegates to ContentCache._clean_oa() to avoid code duplication.
+
+        已存在于缓存的文章直接跳过（不重写，返回 False）：
+        - 内容（full_content/content_status）由增量合并与全文抓取线程维护，
+          oa_monitor 无需重写
+        - 重写会把 cached_at 刷成 now → RAG 增量索引游标（cached_at > 游标）
+          永远追不上 → 已索引文章反复重索引
+        - 新文章（缓存中不存在）才正常写入，cached_at=now 触发一次索引
+
+        返回值供 _check_account 统计"真正新写入数"，避免把已缓存文章误计为新增
+        （否则每轮会把 900+ 篇已缓存文章计入 cached_new → RAG 每轮都触发）。
         """
         if not self._content_cache:
-            return
+            return False
         try:
-            # 幂等写入：已存在的文章保留已有全文抓取状态（content_status / full_content）。
-            # 否则 INSERT OR REPLACE 整行覆盖会把已抓全文的文章重置回待抓状态，
-            # 导致全文抓取队列待抓数不降反升（旧版推送记录无 url 列时更明显——
-            # dedup 查 outbox 匹配不到旧记录，会对已抓文章反复 upsert）。
             existing = None
             try:
                 existing = self._content_cache.query_one(
-                    "SELECT content_status, full_content FROM oa_cache WHERE url=?",
-                    [art.url],
+                    "SELECT url FROM oa_cache WHERE url=?", [art.url]
                 )
             except Exception:
                 pass
+            if existing:
+                return False  # 已缓存，不重写（保护 cached_at / content_status / full_content）
             cleaned = self._content_cache._clean_oa(art)
             if cleaned:
-                if existing:
-                    cleaned["content_status"] = existing["content_status"]
-                    cleaned["full_content"] = existing["full_content"]
                 self._content_cache.upsert("oa_cache", cleaned)
+                return True
         except Exception as e:
             logger.warning("[CACHE] _cache_article 失败: %s", e)
+        return False
 
-    def _push_to_wechat(self, nid: int, group_name: str, title: str, content: str) -> None:
-        """Push notification to WeChat via iLink Bot."""
+    def _push_to_wechat(self, nid: int, group_name: str, title: str, content: str) -> tuple[bool, str]:
+        """Push notification to WeChat via iLink Bot.
+
+        Returns:
+            (push_ok, push_err): 推送是否成功 + 错误信息（供调用方完结任务中心任务）。
+        """
         try:
             from src.wechat.ilink_push import get_ilink_push, format_for_wechat
             import json as _json
@@ -487,14 +541,17 @@ class OAMonitorEngine:
                     })
                 except Exception:
                     pass
+                return push_ok, push_err
             else:
                 logger.warning("OAMonitor: WeChat push skipped for '%s': iLink not bound", group_name)
+                return False, "iLink not bound"
         except Exception as e:
             logger.warning("OAMonitor: WeChat push error for '%s': %s", group_name, e)
             try:
                 self._outbox.update_push_result(nid, "ilink", "failed", str(e))
             except Exception:
                 pass
+            return False, str(e)
 
     # ── Dedup management ────────────────────────────────────────────────
 

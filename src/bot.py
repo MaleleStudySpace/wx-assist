@@ -414,7 +414,16 @@ class Bot:
             # ── OA Monitor (thread loop, no-ops when no groups) ──
             from src.assistant.oa_monitor import OAMonitorEngine
             oa_monitor = OAMonitorEngine(asst_cfg, outbox,
-                                         content_cache=content_cache)
+                                         content_cache=content_cache,
+                                         task_center=task_center)
+            # 全文抓取开关注入（启动即生效，热更新走 /api/assistant/config）
+            try:
+                content_cache.set_full_text_config(
+                    asst_cfg.oa_full_text_fetch.enabled,
+                    asst_cfg.oa_full_text_fetch.ignore_gh_ids,
+                )
+            except Exception:
+                pass
             oa_monitor.start()
             try:
                 from src.web.server import register_oa_monitor

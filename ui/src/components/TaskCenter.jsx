@@ -6,10 +6,13 @@ import { API_BASE, getWsUrl } from './SharedComponents'
 const TASK_TYPES = {
   group_digest: { label: '群聊摘要', icon: ChatCircleDots, color: 'text-brand-green' },
   oa_digest: { label: '公众号摘要', icon: Newspaper, color: 'text-blue-400' },
-  oa_crawl: { label: 'OA 全文抓取', icon: Newspaper, color: 'text-blue-300' },
-  oa_incremental: { label: 'OA 增量同步', icon: Newspaper, color: 'text-blue-200' },
+  oa_article_alert: { label: '公众号即时提醒', icon: Newspaper, color: 'text-orange-400' },
   cron: { label: '定时任务', icon: Clock, color: 'text-amber-400' },
 }
+
+// 任务中心不展示的 OA 缓存同步类任务（全文抓取/增量同步/账号同步）
+// 后端仍会创建（cache_* 前缀），仅前端过滤，避免噪音
+const HIDDEN_TASK_PREFIXES = ['cache_oa_', 'oa_crawl', 'oa_incremental']
 
 const STATUS_STYLES = {
   pending:  { label: '待执行', color: 'text-text-muted', bg: 'bg-bg-raised', dot: 'bg-text-muted/40' },
@@ -53,7 +56,7 @@ export default function TaskCenter({ open, onClose }) {
       const params = new URLSearchParams()
       if (filter !== 'all') params.set('status', filter)
       if (typeFilter !== 'all') {
-        const typeVal = typeFilter === 'oa' ? 'oa_digest,oa_crawl,oa_incremental' : typeFilter
+        const typeVal = typeFilter === 'oa' ? 'oa_digest,oa_article_alert' : typeFilter
         params.set('type', typeVal)
       }
       params.set('limit', '50')
@@ -204,7 +207,9 @@ export default function TaskCenter({ open, onClose }) {
             </div>
           )}
 
-          {tasks.map(task => {
+          {tasks.filter(task =>
+            !HIDDEN_TASK_PREFIXES.some(p => (task.task_type || '').startsWith(p))
+          ).map(task => {
             const typeMeta = TASK_TYPES[task.task_type] || TASK_TYPES.group_digest
             const statusMeta = STATUS_STYLES[task.status] || STATUS_STYLES.pending
             const TypeIcon = typeMeta.icon

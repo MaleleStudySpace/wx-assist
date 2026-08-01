@@ -2270,6 +2270,25 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 with _onboarding_lock:
                     _onboarding_data["step4_done"] = True
 
+                # 保存公众号全文缓存开关（Onboarding 第 4 步开关滑动即时热更新）
+                if data.get("oa_full_text_fetch") is not None:
+                    try:
+                        from src.assistant.config import (
+                            load_assistant_config, save_assistant_config, _dict_to_config,
+                        )
+                        _cfg = load_assistant_config()
+                        _cfg.oa_full_text_fetch = _dict_to_config(
+                            {"oa_full_text_fetch": data["oa_full_text_fetch"]}
+                        ).oa_full_text_fetch
+                        save_assistant_config(_cfg)
+                        if _content_cache is not None:
+                            _content_cache.set_full_text_config(
+                                _cfg.oa_full_text_fetch.enabled,
+                                _cfg.oa_full_text_fetch.ignore_gh_ids,
+                            )
+                    except Exception as _e:
+                        logger.warning("Onboarding step4 save full-text config failed: %s", _e)
+
                 # Write all accumulated data to .env
                 env_path = _find_or_create_env()
                 _write_onboarding_to_env(env_path)
@@ -2456,7 +2475,21 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             existing.notification_queue.retention_hours = int(q["retention_hours"])
                     if "outbox_retention_hours" in body:
                         existing.notification_queue.retention_hours = int(body["outbox_retention_hours"])
+                    if "oa_full_text_fetch" in body:
+                        # 公众号全文缓存开关（enabled + ignore_gh_ids），只影响全文抓取线程
+                        existing.oa_full_text_fetch = _dict_to_config(
+                            {"oa_full_text_fetch": body["oa_full_text_fetch"]}
+                        ).oa_full_text_fetch
                     save_assistant_config(existing)
+                    # Hot-reload the full-text fetch switch into ContentCache
+                    try:
+                        if _content_cache is not None:
+                            _content_cache.set_full_text_config(
+                                existing.oa_full_text_fetch.enabled,
+                                existing.oa_full_text_fetch.ignore_gh_ids,
+                            )
+                    except Exception as _e:
+                        logger.warning("Failed to hot-reload full-text fetch config: %s", _e)
                     # Hot-reload the running scheduler with the new config
                     if _assistant_scheduler is not None:
                         try:

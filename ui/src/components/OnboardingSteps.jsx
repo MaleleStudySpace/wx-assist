@@ -1601,6 +1601,19 @@ const CAPABILITY_CARDS = [
 export function Step4Features({ data, updateData, onComplete }) {
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState(false)
+  // 公众号缓存全文（默认开启=现状）；开关滑动即时热更新
+  const [fullTextEnabled, setFullTextEnabled] = useState(true)
+
+  // 开关滑动 → 立即保存（热更新全文抓取线程，不阻塞界面）
+  async function handleFullTextToggle(v) {
+    setFullTextEnabled(v)
+    try {
+      await fetch(`${API}/api/onboarding/step4`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oa_full_text_fetch: { enabled: v } }),
+      })
+    } catch {}
+  }
 
   async function handleFinish() {
     setBusy(true)
@@ -1648,6 +1661,32 @@ export function Step4Features({ data, updateData, onComplete }) {
             <div className="text-xs text-text-muted leading-relaxed">{card.desc}</div>
           </div>
         ))}
+      </div>
+
+      {/* 公众号缓存全文 开关（滑动即时热更新） */}
+      <div className={`mt-5 flex items-center gap-3.5 bg-bg-raised border border-border-main rounded-2xl p-5 transition-opacity ${fullTextEnabled ? '' : 'opacity-60'}`}>
+        <div className="w-9 h-9 rounded-xl bg-brand-green/10 border border-brand-green/25 flex items-center justify-center text-base shrink-0">⚡</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <p className="text-sm font-semibold text-text-main">公众号缓存全文</p>
+            <div className="group relative">
+              <span className="inline-flex w-4 h-4 rounded-full bg-bg-raised border border-border-main text-text-muted text-[10px] font-bold items-center justify-center cursor-help">?</span>
+              <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-64 p-3 rounded-lg bg-bg-card border border-border-main shadow-xl text-xs text-text-muted leading-relaxed z-10">
+                开启：后台自动抓取公众号文章全文，AI 检索可搜索全文内容。<br/><br/>
+                关闭：不再缓存任何新文章全文，<span className="text-amber-500">RAG 语义检索仅剩标题与摘要</span>。<br/><br/>
+                不影响公众号即时提醒与摘要推送。
+              </div>
+            </div>
+          </div>
+          <p className="text-xs text-text-muted mt-1 leading-relaxed">自动抓取公众号文章全文，用于 AI 语义检索与摘要生成</p>
+          <p className="text-[11px] text-text-muted/70 mt-0.5">忽略列表可在「公众号助手」页面配置</p>
+        </div>
+        <button
+          onClick={() => handleFullTextToggle(!fullTextEnabled)}
+          className={`w-11 h-6 rounded-full relative transition-colors cursor-pointer shrink-0 ${fullTextEnabled ? 'bg-brand-green' : 'bg-bg-raised border border-border-main'}`}
+        >
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${fullTextEnabled ? 'left-[22px]' : 'left-0.5'}`} />
+        </button>
       </div>
 
       <div className="mt-8 pt-4">

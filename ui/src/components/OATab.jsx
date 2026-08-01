@@ -1060,6 +1060,15 @@ export default function OATab() {
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const [editingMonitor, setEditingMonitor] = useState(null)
 
+  // 公众号缓存全文（总开关 + 忽略列表）
+  const [fullTextEnabled, setFullTextEnabled] = useState(true)
+  const [ignoredGhIds, setIgnoredGhIds] = useState([])
+  const [fullTextDropdownOpen, setFullTextDropdownOpen] = useState(false)
+  const [fullTextSearch, setFullTextSearch] = useState('')
+  const [fullTextSaving, setFullTextSaving] = useState(false)
+  const [fullTextSaved, setFullTextSaved] = useState(false)
+  const [fullTextError, setFullTextError] = useState('')
+
   // "已关注公众号" collapse
   const [showAllAccounts, setShowAllAccounts] = useState(false)
   const ACCOUNTS_COLLAPSE_LIMIT = 5
@@ -1154,6 +1163,9 @@ export default function OATab() {
       if (groupData.ok) setGroups(groupData.data || [])
       if (configData.ok && configData.config) {
         setMonitorGroups(configData.config.oa_monitor_groups || [])
+        const ftf = configData.config.oa_full_text_fetch || {}
+        setFullTextEnabled(ftf.enabled !== false)
+        setIgnoredGhIds(ftf.ignore_gh_ids || [])
       }
     } catch {
       setError('加载失败')
@@ -1249,6 +1261,39 @@ export default function OATab() {
     setSearch('')
     setSearchResults([])
     setHasSearched(false)
+  }
+
+  // ── 公众号缓存全文设置（保存后热更新，只影响全文抓取线程）──
+  async function handleSaveFullText() {
+    setFullTextSaving(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/assistant/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          oa_full_text_fetch: {
+            enabled: fullTextEnabled,
+            ignore_gh_ids: ignoredGhIds,
+          },
+        }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        setFullTextSaved(true)
+        setTimeout(() => setFullTextSaved(false), 1800)
+      } else {
+        setFullTextError(data.error || '保存失败')
+      }
+    } catch {
+      setFullTextError('保存失败')
+    }
+    setFullTextSaving(false)
+  }
+
+  function toggleIgnoreGh(ghId) {
+    setIgnoredGhIds(prev =>
+      prev.includes(ghId) ? prev.filter(g => g !== ghId) : [...prev, ghId]
+    )
   }
 
   // ── OA Monitor CRUD ──────────────────────────────────────────────
@@ -1654,6 +1699,121 @@ export default function OATab() {
           ))}
         </div>
       )}
+
+      {/* ── 公众号缓存全文 设置区 ── */}
+      <div className="mb-5 p-4 rounded-xl border border-border-main bg-bg-card">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-brand-green/10 border border-brand-green/20 flex items-center justify-center text-base shrink-0">⚡</div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5">
+                <p className="text-sm text-text-main font-medium">公众号缓存全文</p>
+                <div className="group relative">
+                  <span className="inline-flex w-4 h-4 rounded-full bg-bg-raised border border-border-main text-text-muted text-[10px] font-bold items-center justify-center cursor-help">?</span>
+                  <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-64 p-3 rounded-lg bg-bg-card border border-border-main shadow-xl text-xs text-text-muted leading-relaxed z-10">
+                    开启：后台自动抓取公众号文章全文，AI 检索可搜索全文内容。<br/><br/>
+                    关闭：不再缓存任何新文章全文，<span className="text-amber-500">RAG 语义检索仅剩标题与摘要</span>；已缓存的全文保留。<br/><br/>
+                    不影响公众号即时提醒与摘要推送。
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setFullTextEnabled(!fullTextEnabled)}
+                className={`w-11 h-6 rounded-full relative transition-colors cursor-pointer shrink-0 ${fullTextEnabled ? 'bg-brand-green' : 'bg-bg-raised border border-border-main'}`}
+              >
+                <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${fullTextEnabled ? 'left-[22px]' : 'left-0.5'}`} />
+              </button>
+            </div>
+            <p className="text-xs text-text-muted mt-1">自动抓取公众号文章全文，用于 AI 语义检索与摘要生成</p>
+          </div>
+        </div>
+
+        {/* 忽略列表：点击下拉 */}
+        <div className="mt-4">
+          <button
+            onClick={() => setFullTextDropdownOpen(!fullTextDropdownOpen)}
+            className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-bg-raised border border-border-main hover:border-brand-green/40 transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-2 text-sm text-text-main">⛔ 忽略以下公众号（不抓取全文）</span>
+            <span className="flex items-center gap-2 text-xs text-text-muted">
+              {ignoredGhIds.length > 0 && <span className="text-amber-500 font-medium">已忽略 {ignoredGhIds.length} 个</span>}
+              <span className={`transition-transform ${fullTextDropdownOpen ? 'rotate-180' : ''}`}>▾</span>
+            </span>
+          </button>
+
+          {fullTextDropdownOpen && (
+            <div className="mt-2 rounded-lg border border-border-main overflow-hidden">
+              {/* 搜索 */}
+              <div className="relative bg-bg-raised">
+                <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                <input
+                  type="text"
+                  value={fullTextSearch}
+                  onChange={(e) => setFullTextSearch(e.target.value)}
+                  placeholder="搜索公众号..."
+                  className="w-full bg-transparent pl-9 pr-3 py-2 text-sm text-text-main placeholder:text-text-muted focus:outline-none"
+                />
+              </div>
+              {/* 全选 + 列表 */}
+              <div className="max-h-52 overflow-y-auto border-t border-border-main">
+                <button
+                  onClick={() => {
+                    const filtered = accounts.filter(a => {
+                      const q = fullTextSearch.toLowerCase()
+                      return !q || (a.nickname || '').toLowerCase().includes(q) || (a.username || '').toLowerCase().includes(q)
+                    })
+                    const visibleSelected = filtered.every(a => ignoredGhIds.includes(a.username))
+                    setIgnoredGhIds(prev => {
+                      const next = new Set(visibleSelected ? prev.filter(g => !filtered.some(a => a.username === g)) : [...prev, ...filtered.map(a => a.username)])
+                      return [...next]
+                    })
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-left border-b border-border-main/50 text-text-muted hover:text-text-main hover:bg-bg-raised/60 cursor-pointer"
+                >
+                  <span className="text-xs font-medium">{accounts.some(a => !ignoredGhIds.includes(a.username)) ? '全选所有' : '取消全选'}</span>
+                </button>
+                {accounts
+                  .filter(a => {
+                    const q = fullTextSearch.toLowerCase()
+                    return !q || (a.nickname || '').toLowerCase().includes(q) || (a.username || '').toLowerCase().includes(q)
+                  })
+                  .map(acc => {
+                    const selected = ignoredGhIds.includes(acc.username)
+                    return (
+                      <button
+                        key={acc.username}
+                        onClick={() => toggleIgnoreGh(acc.username)}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2 text-left cursor-pointer ${selected ? 'bg-brand-green-light/10' : 'hover:bg-bg-raised/60'}`}
+                      >
+                        <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 ${selected ? 'bg-brand-green border-brand-green' : 'border-border-main'}`}>
+                          {selected && <svg viewBox="0 0 12 12" className="w-2.5 h-2.5 text-bg-main" fill="currentColor"><path d="M10.28 2.28L4.5 8.06 1.72 5.28l-.72.72L4.5 9.5l6.5-6.5z"/></svg>}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-text-main truncate">{acc.nickname || acc.username}</p>
+                          <p className="text-xs text-text-muted font-mono truncate">{acc.username}</p>
+                        </div>
+                      </button>
+                    )
+                  })}
+              </div>
+              <div className="px-3 py-2 text-[11px] text-text-muted border-t border-border-main">勾选后该公众号不再抓取全文，AI 检索不到其全文内容</div>
+            </div>
+          )}
+        </div>
+
+        {/* 保存 + 状态 */}
+        <div className="mt-4 flex items-center gap-3">
+          <button
+            onClick={handleSaveFullText}
+            disabled={fullTextSaving}
+            className="px-5 py-2 rounded-full text-xs font-semibold bg-brand-green-hover text-white hover:bg-[#0d8c5c] transition-colors cursor-pointer disabled:opacity-50"
+          >
+            {fullTextSaving ? '保存中...' : '保存设置'}
+          </button>
+          {fullTextSaved && <span className="text-xs text-brand-green">✓ 已保存，全文抓取设置已生效</span>}
+          {fullTextError && <span className="text-xs text-status-error">{fullTextError}</span>}
+        </div>
+      </div>
 
       {/* Running digest indicator */}
       {digestRunning && (

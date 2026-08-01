@@ -32,6 +32,9 @@ class ContentCache:
     def __init__(self, db_path: str = "data/messages.db"):
         self._db_path = db_path
         self._write_lock = threading.Lock()
+        # 全文抓取开关（默认全开=现状）：由 bot/server 热更新注入 set_full_text_config
+        self._full_text_enabled = True
+        self._full_text_ignore: set[str] = set()
         # 全量同步进行中标记，防定时器重复触发
         self._syncing: dict[str, bool] = {
             "oa": False, "sns": False, "fav": False,
@@ -47,6 +50,11 @@ class ContentCache:
         # 默认 0 表示全量索引（首次启动），缓存到 data/last_indexed.json 跨重启持久化
         self._last_indexed_at: dict[str, float] = self._load_index_cursor()
         self._init_tables()
+
+    def set_full_text_config(self, enabled: bool, ignore_gh_ids: list = None) -> None:
+        """热更新全文抓取开关。只影响全文抓取线程，不影响 oa_monitor 推送/摘要。"""
+        self._full_text_enabled = bool(enabled)
+        self._full_text_ignore = set(ignore_gh_ids or [])
 
     def _index_cursor_path(self) -> str:
         return "data/last_indexed.json"
@@ -504,9 +512,13 @@ class ContentCache:
                         len(accounts), total_new)
 
     def _sync_oa_gh(self, client, gh_id: str) -> int:
-        """同步单个 OA 公众号的文章。返回新增条数。"""
+        """同步单个 OA 公众号的文章。返回新增条数。
+
+        全量拉取该号 WCDB 中所有文章（limit=None 内部按每页 50 分页 + 容错降级：
+        任一分页失败返回已拉到的数据，不影响其他公众号）。
+        """
         from src.assistant.oa_parser import fetch_oa_articles, OAArticle
-        articles = fetch_oa_articles(client, gh_id, limit=50)
+        articles = fetch_oa_articles(client, gh_id, limit=None)
         if not articles:
             return 0
         # 去重：只取缓存中没有的
@@ -633,6 +645,7 @@ class ContentCache:
         self._fetcher_tc = task_center
         self._fetcher_count = 0
         self._fetcher_task_id = None
+        self._fetcher_retries: dict[str, int] = {}  # url → 连续失败次数（防卡队列）
 
         def _loop():
             while True:
@@ -647,9 +660,18 @@ class ContentCache:
 
     def _fetch_one_content(self):
         """抓取一篇待抓取的文章全文。"""
-        row = self.query_one(
-            "SELECT url, title FROM oa_cache WHERE content_status=0 LIMIT 1"
-        )
+        # 总开关关闭 → 不抓取（线程空闲）
+        if not self._full_text_enabled:
+            return
+        # 忽略列表 → 查询排除这些公众号
+        _sql = "SELECT url, title FROM oa_cache WHERE content_status=0"
+        _params: list = []
+        if self._full_text_ignore:
+            _sql += " AND gh_id NOT IN ({})".format(
+                ",".join("?" * len(self._full_text_ignore)))
+            _params = list(self._full_text_ignore)
+        _sql += " LIMIT 1"
+        row = self.query_one(_sql, _params)
         if not row:
             # 没有待抓取文章时，重置任务状态
             if self._fetcher_task_id:
@@ -696,6 +718,7 @@ class ContentCache:
                     "cached_at": int(time.time()),  # 触及时戳触发增量重索引
                 }, {"url": url})
                 self._fetcher_count += 1
+                self._fetcher_retries.pop(url, None)  # 成功后清除重试计数
                 # 每 10 篇打一次追加索引进度日志
                 if self._fetcher_count % 10 == 0:
                     try:
@@ -715,14 +738,22 @@ class ContentCache:
             else:
                 self.update("oa_cache", {"content_status": -1}, {"url": url})
         except Exception as e:
-            # 403/429 标记失败，其他保持 0 下次重试
+            # 403/429 直接标记失败；其他异常连续失败 ≥5 次也放弃（防无限重试卡队列）
             resp_err = getattr(e, "response", None)
             status = getattr(resp_err, "status_code", 0) if resp_err else 0
             if status in (403, 429):
                 logger.warning("[CACHE] OA 全文抓取失败 %s (HTTP %d)", url, status)
                 self.update("oa_cache", {"content_status": -1}, {"url": url})
             else:
-                logger.debug("[CACHE] OA 全文抓取重试 %s: %s", url, e)
+                self._fetcher_retries[url] = self._fetcher_retries.get(url, 0) + 1
+                if self._fetcher_retries[url] >= 5:
+                    logger.warning("[CACHE] OA 全文抓取放弃 %s — 连续失败 %d 次: %s",
+                                   url, self._fetcher_retries[url], e)
+                    self.update("oa_cache", {"content_status": -1}, {"url": url})
+                    self._fetcher_retries.pop(url, None)
+                else:
+                    logger.debug("[CACHE] OA 全文抓取重试 %s (%d/5): %s",
+                                 url, self._fetcher_retries[url], e)
 
     # ══════════════════════════════════════════════════════════════
     # SNS 全量同步 + 增量合并
@@ -1123,8 +1154,11 @@ class ContentCache:
                 self._reindexing[source] = False
 
     def _do_index(self, rag_engine, source: str):
-        """执行一次具体的索引逻辑（不涉及锁）。"""
-        logger.info("[CACHE] RAG 索引开始: source=%s", source)
+        """执行一次具体的索引逻辑（不涉及锁）。
+
+        不再无条件打"开始"日志：增量索引查询后若无新内容则完全静默
+        （避免每分钟刷屏），有内容时由 _index_chunks 打一条带标题的汇总。
+        """
         try:
             if source == "oa":
                 self._index_oa(rag_engine)
@@ -1254,13 +1288,20 @@ class ContentCache:
     def _index_chunks(self, rag, chunks, label: str):
         """批量索引 chunks 到 ChromaDB。"""
         if not chunks:
-            logger.info("[CACHE] %s: 无新内容可索引", label)
+            # 无新内容 → 静默（debug 级），避免每分钟刷屏
+            logger.debug("[CACHE] %s: 无新内容可索引", label)
             return
         try:
             texts = [c.content for c in chunks]
             embeddings = rag._embedder.encode(texts)
             rag._store.add(chunks, embeddings)
-            logger.info("[CACHE] RAG 索引 %s: %d 条", label, len(chunks))
+            # 日志带标题摘要（前 5 条，每条截 25 字），便于确认索引了哪些内容
+            _title_sum = " | ".join(
+                "{}/{}".format((c.sender_name or "?")[:12], (c.content or "").replace("\n", " ")[:25])
+                for c in chunks[:5]
+            )
+            logger.info("[CACHE] RAG 索引 %s: %d 条%s", label, len(chunks),
+                        " | " + _title_sum if _title_sum else "")
         except Exception as e:
             logger.warning("[CACHE] RAG 索引 %s 失败: %s", label, e)
 
