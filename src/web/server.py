@@ -3839,6 +3839,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             self.path.startswith("/api/scheduler/") or self.path.startswith("/api/skills") or
             self.path.startswith("/api/export/") or self.path.startswith("/api/push/") or
             self.path.startswith("/api/groups/") or
+            self.path.startswith("/api/tasks/badge") or
             self.path.startswith("/api/tasks/") or self.path.startswith("/api/tasks?") or self.path == "/api/tasks" or
             self.path == "/api/scheduled-tasks"):
             try:

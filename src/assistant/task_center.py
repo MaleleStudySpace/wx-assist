@@ -280,6 +280,38 @@ class TaskCenter:
             logger.warning("[TASK-CENTER] count_running failed: %s", e)
             return 0
 
+    def count_failed_since(self, since: str = "") -> int:
+        """Count failed tasks created after a given timestamp.
+
+        Used by the frontend badge to show "unread failed" count.
+        If since is empty, counts all failed tasks.
+
+        Args:
+            since: ISO-8601 timestamp string (e.g. "2026-08-03T12:00:00").
+                   Only tasks with created_at > since are counted.
+
+        Returns:
+            Number of matching failed tasks.
+        """
+        try:
+            with self._get_conn() as conn:
+                if since:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM task_center "
+                        "WHERE (status='failed' OR push_status='failed') "
+                        "AND created_at > ?",
+                        (since,),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM task_center "
+                        "WHERE status='failed' OR push_status='failed'",
+                    ).fetchone()
+                return row[0] if row else 0
+        except Exception as e:
+            logger.warning("[TASK-CENTER] count_failed_since failed: %s", e)
+            return 0
+
     # ── Maintenance ───────────────────────────────────────────────────
 
     def cleanup_expired(self, max_age_hours: int = 72) -> int:

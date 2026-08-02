@@ -61,6 +61,9 @@ export default function App() {
   const [showTaskCenter, setShowTaskCenter] = useState(false)
   const [showLAN, setShowLAN] = useState(false)
   const [runningTaskCount, setRunningTaskCount] = useState(0)
+  const [failedTaskCount, setFailedTaskCount] = useState(0)
+  // lastReadTime: 上次打开任务中心的时间，用于计算"未读失败任务"数
+  const [lastReadTime, setLastReadTime] = useState(() => localStorage.getItem('taskCenterLastRead') || '')
 
   // Listen for open-task-center custom events from other components
   useEffect(() => {
@@ -69,19 +72,39 @@ export default function App() {
     return () => window.removeEventListener('open-task-center', handler)
   }, [])
 
-  // Poll running task count periodically
+  // Poll task badge counts (running + failed-since-last-read) periodically
   useEffect(() => {
     if (!onboardingDone) return
     function poll() {
-      fetch(`${API_BASE}/api/tasks?status=running&limit=50`)
+      const since = localStorage.getItem('taskCenterLastRead') || ''
+      const url = since
+        ? `${API_BASE}/api/tasks/badge?since=${encodeURIComponent(since)}`
+        : `${API_BASE}/api/tasks/badge`
+      fetch(url)
         .then(r => r.json())
-        .then(d => { if (d.ok) setRunningTaskCount(d.tasks?.length || 0) })
+        .then(d => {
+          if (d.ok) {
+            setRunningTaskCount(d.running || 0)
+            setFailedTaskCount(d.failed || 0)
+          }
+        })
         .catch(() => {})
     }
     poll()
     const id = setInterval(poll, 10000)
     return () => clearInterval(id)
   }, [onboardingDone])
+
+  // When task center opens, mark current time as "last read"
+  useEffect(() => {
+    if (showTaskCenter) {
+      const now = new Date().toISOString()
+      localStorage.setItem('taskCenterLastRead', now)
+      setLastReadTime(now)
+      // Immediately clear the failed badge (user has seen the tasks)
+      setFailedTaskCount(0)
+    }
+  }, [showTaskCenter])
 
   // Theme state: default to 'dark' (Version 1: 夜航控制台) but can toggle to 'light' (正常模式)
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark')
@@ -368,11 +391,16 @@ export default function App() {
                   title="任务中心"
                 >
                   <Bell size={18} />
-                  {runningTaskCount > 0 && (
+                  {/* 红绿互斥角标：有未读失败任务时显示红色，否则显示运行中绿色 */}
+                  {failedTaskCount > 0 ? (
+                    <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#d45656] text-[10px] text-white font-bold flex items-center justify-center leading-none">
+                      {failedTaskCount > 99 ? '99+' : failedTaskCount}
+                    </span>
+                  ) : runningTaskCount > 0 ? (
                     <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-brand-green text-[10px] text-white font-bold flex items-center justify-center leading-none">
                       {runningTaskCount > 99 ? '99+' : runningTaskCount}
                     </span>
-                  )}
+                  ) : null}
                 </button>
 
                 {/* LAN remote access */}

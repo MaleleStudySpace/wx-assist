@@ -5476,9 +5476,11 @@ def handle_api_request(path: str, params: dict, config: AssistantConfig, body: d
         return handle_export_open_folder(params, config)
 
     # ── 任务中心 ─────────────────────────────────────────────────────────
+    if path == "/api/tasks/badge":
+        return handle_tasks_badge(params, config)
     if path == "/api/tasks":
         return handle_tasks_list(params, config)
-    if path.startswith("/api/tasks/") and len(path.split("/")) == 4:
+    if path.startswith("/api/tasks/") and path != "/api/tasks/badge" and len(path.split("/")) == 4:
         params["id"] = [path.split("/")[3]]
         return handle_tasks_detail(params, config)
 
@@ -5632,6 +5634,26 @@ def handle_tasks_list(params, config: AssistantConfig):
         return {"ok": True, "tasks": tasks, "total": len(tasks)}
     except Exception as e:
         logger.error(f"[TASK-CENTER] list tasks failed: {e}")
+        return {"ok": False, "error": "Internal error"}
+
+
+def handle_tasks_badge(params, config: AssistantConfig):
+    """GET /api/tasks/badge — Badge counts for task center icon.
+
+    Returns running count and failed-since count for badge display.
+    Query params:
+      since: ISO-8601 timestamp — only count failed tasks created after this time.
+    """
+    try:
+        tc = get_task_center()
+        if not tc:
+            return {"ok": False, "error": "TaskCenter not available"}
+        since = (params.get("since", [""]) or [""])[0]
+        running = tc.count_running()
+        failed = tc.count_failed_since(since) if since else tc.count_failed_since()
+        return {"ok": True, "running": running, "failed": failed}
+    except Exception as e:
+        logger.error(f"[TASK-CENTER] badge count failed: {e}")
         return {"ok": False, "error": "Internal error"}
 
 
