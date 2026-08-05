@@ -4875,7 +4875,8 @@ def handle_oa_digest_run(params, config: AssistantConfig):
                     if _is_empty:
                         tc.complete_task(_tid, result='无新内容', articles_count=_articles_count)
                     else:
-                        tc.complete_task(_tid, result=_digest_text[:200], articles_count=_articles_count)
+                        # result 存完整摘要（不截断）——重推功能需要完整内容
+                        tc.complete_task(_tid, result=_digest_text, articles_count=_articles_count)
                     broadcast_event("task_update", {"task_id": _tid, "task_type": "oa_digest",
                                                      "status": "completed",
                                                      "progress": "无新内容" if _is_empty else "完成",
@@ -5478,9 +5479,17 @@ def handle_api_request(path: str, params: dict, config: AssistantConfig, body: d
     # ── 任务中心 ─────────────────────────────────────────────────────────
     if path == "/api/tasks/badge":
         return handle_tasks_badge(params, config)
+    # 批量重推：必须在 /api/tasks/:id 通配符之前（retry-batch 是 4 段会误匹配）
+    if path == "/api/tasks/retry-batch":
+        return handle_tasks_retry_batch(params, config)
     if path == "/api/tasks":
         return handle_tasks_list(params, config)
-    if path.startswith("/api/tasks/") and path != "/api/tasks/badge" and len(path.split("/")) == 4:
+    # 单条重推：POST /api/tasks/:id/retry（5 段）
+    if path.startswith("/api/tasks/") and path.endswith("/retry") and len(path.split("/")) == 5:
+        params["id"] = [path.split("/")[3]]
+        return handle_tasks_retry(params, config)
+    if (path.startswith("/api/tasks/") and path != "/api/tasks/badge"
+            and path != "/api/tasks/retry-batch" and len(path.split("/")) == 4):
         params["id"] = [path.split("/")[3]]
         return handle_tasks_detail(params, config)
 
@@ -5622,7 +5631,14 @@ def handle_export_open_folder(params, config: AssistantConfig):
 # ── 任务中心 API ─────────────────────────────────────────────────────────
 
 def handle_tasks_list(params, config: AssistantConfig):
-    """GET /api/tasks — List all tasks with optional filters."""
+    """GET /api/tasks — List all tasks with optional filters.
+
+    Query params:
+      status:  all | running | completed | failed（failed 含推送失败）
+      type:    task_type 或逗号分隔（如 oa_digest,oa_article_alert）
+      limit:   最多返回条数（默认 50，上限 200）
+      exclude: 逗号分隔的 task_type 前缀，SQL 层排除噪音任务（如 cache_）
+    """
     try:
         tc = get_task_center()
         if not tc:
@@ -5630,7 +5646,15 @@ def handle_tasks_list(params, config: AssistantConfig):
         status = (params.get("status", [""]) or [""])[0]
         task_type = (params.get("type", [""]) or [""])[0]
         limit = int((params.get("limit", ["50"]) or ["50"])[0])
-        tasks = tc.list_tasks(status=status, task_type=task_type, limit=limit)
+        exclude = (params.get("exclude", [""]) or [""])[0]
+        tasks = tc.list_tasks(status=status, task_type=task_type, limit=limit, exclude=exclude)
+        # result 存完整摘要（可能几千字）——列表展示只截断前 120 字，避免卡片过长/传输过大
+        # 完整内容保留在 DB，重推 API 单独 get_task 取
+        for t in tasks:
+            if t.get("result"):
+                t["result"] = t["result"][:120] + ("…" if len(t["result"]) > 120 else "")
+            if t.get("error"):
+                t["error"] = t["error"][:100]
         return {"ok": True, "tasks": tasks, "total": len(tasks)}
     except Exception as e:
         logger.error(f"[TASK-CENTER] list tasks failed: {e}")
@@ -5673,4 +5697,234 @@ def handle_tasks_detail(params, config: AssistantConfig):
         return {"ok": False, "error": "Task not found"}
     except Exception as e:
         logger.error(f"[TASK-CENTER] get task failed: {e}")
+        return {"ok": False, "error": "Internal error"}
+
+
+# ── 任务重推 API ───────────────────────────────────────────────────────
+
+_TASK_TITLE_BY_TYPE = {
+    "group_digest": "💬 群聊摘要",
+    "oa_digest": "📰 公众号摘要",
+    "oa_article_alert": "🔔 公众号提醒",
+    "cron": "⏰ 定时任务",
+}
+
+
+def _task_retry_title(task: dict) -> str:
+    """按任务类型生成推送标题（outbox 无 title 时的兜底）。"""
+    label = _TASK_TITLE_BY_TYPE.get(task.get("task_type"), "📋 任务通知")
+    name = task.get("group_name") or ""
+    return f"{label} · {name}"
+
+
+def _match_outbox_by_time(task: dict, outbox) -> Optional[dict]:
+    """历史任务（无 outbox_id 关联）按 chat_id + 时间窗口匹配 outbox 记录。
+
+    取 created_at 与任务最接近且相差 ≤10 分钟的记录；无匹配返回 None。
+    仅服务 oa_article_alert 等无 result 兜底的历史任务；digest/cron 有 result 兜底。
+    """
+    group_id = task.get("group_id") or ""
+    if not group_id:
+        return None
+    try:
+        from datetime import datetime
+        t_ts = datetime.fromisoformat((task.get("created_at") or "").replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+    try:
+        cands = outbox.list_notifications(chat_id=group_id, limit=20)
+    except Exception:
+        return None
+    best, best_diff = None, 600.0  # ±10 分钟窗口
+    for c in cands:
+        try:
+            from datetime import datetime
+            c_ts = datetime.fromisoformat((c.get("created_at") or "").replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        diff = abs(c_ts - t_ts)
+        if diff < best_diff:
+            best_diff, best = diff, c
+    return best
+
+
+def _task_retry_payload(task: dict, outbox) -> Optional[tuple[str, str]]:
+    """Build (title, content) for a retry push.
+
+    内容来源优先级：
+      1. task.outbox_id → outbox 完整记录（title + content，content 为 JSON 含 display）
+      2. 时间窗口匹配（历史任务无 outbox_id）→ 同 chat_id 最近的 outbox 记录
+      3. task.result（digest/cron 类已存完整摘要文本，不再截断）
+    返回 None 表示无内容可推。
+    """
+    title, content = None, None
+    if task.get("outbox_id"):
+        try:
+            notif = outbox.get_notification(task["outbox_id"])
+            if notif and notif.get("title") and notif.get("content"):
+                title, content = notif["title"], notif["content"]
+        except Exception:
+            pass
+    if not content:
+        notif = _match_outbox_by_time(task, outbox)
+        if notif and notif.get("title") and notif.get("content"):
+            title, content = notif["title"], notif["content"]
+    if not content:
+        content = task.get("result") or ""
+    if not title:
+        title = _task_retry_title(task)
+    if not content:
+        return None
+    return title, content
+
+
+def _task_is_retryable(task: dict) -> bool:
+    """可重推 = 推送失败：
+      - push_status='failed'（digest/cron 类）
+      - oa_article_alert 且 status='failed'（即时提醒用 fail_task 标记）
+    """
+    return (
+        task.get("push_status") == "failed"
+        or (task.get("task_type") == "oa_article_alert" and task.get("status") == "failed")
+    )
+
+
+def _do_task_retry_push(task: dict) -> dict:
+    """Execute one retry push via iLink. Returns {"success": bool, "error": str}."""
+    from src.assistant.outbox import Outbox
+    outbox = Outbox()
+    payload = _task_retry_payload(task, outbox)
+    if payload is None:
+        return {"success": False, "error": "任务无可用推送内容（result 为空且无 outbox 关联）"}
+    title, content = payload
+
+    from src.wechat.ilink_push import get_ilink_push, format_for_wechat
+    ilink = get_ilink_push()
+    if not ilink.is_available():
+        return {"success": False, "error": "iLink 未绑定，无法推送"}
+
+    # outbox content 是 JSON（含 display 展示文本）；纯文本直接推送
+    push_text = content
+    if isinstance(content, str) and content.lstrip().startswith("{"):
+        try:
+            _d = json.loads(content)
+            push_text = _d.get("display", content)
+        except Exception:
+            push_text = content
+    msg = format_for_wechat(title, push_text)
+    return ilink.send_message(msg)
+
+
+def _task_retry_after(tc, task: dict, ok: bool, err: str) -> None:
+    """Update task + outbox push state after a retry attempt.
+
+    即时提醒（oa_article_alert）重推成功后恢复 completed —— 否则红标
+    （status='failed'）永不消失；其他类型仅更新 push_status。
+    """
+    task_id = task["id"]
+    try:
+        if task.get("task_type") == "oa_article_alert" and task.get("status") == "failed":
+            if ok:
+                tc.update_task(
+                    task_id, status="completed", progress="完成",
+                    result="重推成功", error="",
+                    finished_at=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+                    push_status="success", push_error="",
+                )
+            else:
+                tc.update_push_result(task_id, "failed", err)
+        else:
+            tc.update_push_result(task_id, "success" if ok else "failed", err)
+    except Exception:
+        logger.warning("[TASK-RETRY] update task #%d failed", task_id, exc_info=True)
+
+    # 同步 outbox 推送状态（若有关联），保持去重/推送审计一致
+    if task.get("outbox_id"):
+        try:
+            from src.assistant.outbox import Outbox
+            Outbox().update_push_result(
+                task["outbox_id"], "ilink",
+                "success" if ok else "failed",
+                "" if ok else (err or "")[:500],
+            )
+        except Exception:
+            pass
+
+
+def handle_tasks_retry(params, config: AssistantConfig):
+    """POST /api/tasks/:id/retry — 重新推送单个推送失败的任务（同步执行）。
+
+    单条同步执行：正常 1~3s 返回；iLink 限速重试时最长 ~25s（3+6+12 退避）。
+    前端按钮显示 loading 等待响应即可。
+    """
+    try:
+        tc = get_task_center()
+        if not tc:
+            return {"ok": False, "error": "TaskCenter not available"}
+        try:
+            task_id = int((params.get("id", ["0"]) or ["0"])[0])
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "Invalid task ID"}
+        task = tc.get_task(task_id)
+        if not task:
+            return {"ok": False, "error": "Task not found"}
+        if not _task_is_retryable(task):
+            return {"ok": False, "error": "该任务不可重推（仅推送失败的任务可重推）"}
+        result = _do_task_retry_push(task)
+        ok = result.get("success", False)
+        err = result.get("error", "")
+        _task_retry_after(tc, task, ok, err)
+        return {"ok": True, "task_id": task_id, "success": ok, "error": err}
+    except Exception as e:
+        logger.error(f"[TASK-RETRY] retry task failed: {e}")
+        return {"ok": False, "error": "Internal error"}
+
+
+def handle_tasks_retry_batch(params, config: AssistantConfig):
+    """POST /api/tasks/retry-batch — 批量重推 N 小时内推送失败的任务。
+
+    后台线程逐条推送，每条间隔 3 秒（iLink 限速 2.5s，留余量防报错）。
+    每条结果通过 WebSocket task_retry_result 广播，前端实时更新。
+    Query params:
+      hours: 回溯小时数（默认 24，上限 72）
+    """
+    try:
+        tc = get_task_center()
+        if not tc:
+            return {"ok": False, "error": "TaskCenter not available"}
+        hours = int((params.get("hours", ["24"]) or ["24"])[0])
+        tasks = tc.get_failed_push_tasks(hours=hours)
+        if not tasks:
+            return {"ok": True, "total": 0, "queued": False, "message": "没有可重推的推送失败任务"}
+        # 单次上限 30 条，防后台线程长时间占用（30 × 3s = 90s 内完成）
+        if len(tasks) > 30:
+            tasks = tasks[:30]
+
+        def _run():
+            for i, task in enumerate(tasks):
+                if i > 0:
+                    time.sleep(3)  # 消息间隔：避免 iLink 限速报错
+                try:
+                    result = _do_task_retry_push(task)
+                    ok = result.get("success", False)
+                    err = result.get("error", "")
+                    _task_retry_after(tc, task, ok, err)
+                except Exception as e:
+                    ok, err = False, str(e)
+                    logger.warning("[TASK-RETRY] batch item #%s failed: %s", task["id"], e)
+                try:
+                    broadcast_event("task_retry_result", {
+                        "task_id": task["id"],
+                        "success": ok,
+                        "error": err,
+                        "group_name": task.get("group_name", ""),
+                    })
+                except Exception:
+                    pass
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True, "total": len(tasks), "queued": True,
+                "message": f"已排队 {len(tasks)} 条，每条间隔 3 秒推送"}
+    except Exception as e:
+        logger.error(f"[TASK-RETRY] batch retry failed: {e}")
         return {"ok": False, "error": "Internal error"}

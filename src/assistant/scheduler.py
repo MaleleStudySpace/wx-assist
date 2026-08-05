@@ -664,7 +664,8 @@ class DigestScheduler:
             self._tc_fail(task_id, error=digest_text)
             self._broadcast_task_update(task_id, 'group_digest', 'failed', '', dg.group_name, error=digest_text[:100])
         else:
-            self._tc_complete(task_id, result=digest_text[:200] if filtered else '',
+            # result 存完整摘要（不截断）——重推功能需要完整内容
+            self._tc_complete(task_id, result=digest_text if filtered else '',
                               msg_count=len(filtered) if filtered else 0)
             self._broadcast_task_update(task_id, 'group_digest', 'completed', '完成', dg.group_name)
         logger.info("[DIGEST] Pipeline completed for '%s' in %.0fms", dg.group_name, elapsed)
@@ -854,7 +855,7 @@ class DigestScheduler:
             pass
 
         # Task: completed
-        self._tc_complete(task_id, result=digest_text[:200], articles_count=articles_count)
+        self._tc_complete(task_id, result=digest_text, articles_count=articles_count)
         self._broadcast_task_update(task_id, 'oa_digest', 'completed', '完成', oa.name)
 
     # ── TaskCenter helpers ────────────────────────────────────────────

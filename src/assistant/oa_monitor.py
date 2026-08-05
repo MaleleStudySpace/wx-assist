@@ -468,6 +468,7 @@ class OAMonitorEngine:
             # ── 推送 + 任务中心追踪（可选，task_center 为 None 时跳过）──
             # 创建"公众号即时提醒"任务：推送成功 complete / 失败 fail(error)
             # group_name 存 "公众号名 · 文章名"，任务中心直接可见文章详情
+            # outbox_id 关联 outbox 记录 —— 推送失败后"重新推送"可取完整内容
             _task_id = None
             if self._task_center:
                 try:
@@ -475,6 +476,7 @@ class OAMonitorEngine:
                         task_type="oa_article_alert",
                         source="system", group_id=gh_id,
                         group_name=f"{source} · {title}",
+                        outbox_id=nid,
                     )
                 except Exception as _e:
                     logger.debug("OAMonitor: 创建推送任务失败: %s", _e)

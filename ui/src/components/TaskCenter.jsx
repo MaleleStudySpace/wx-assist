@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, ChatCircleDots, Newspaper, Clock, Spinner } from '@phosphor-icons/react'
+import { X, ChatCircleDots, Newspaper, Clock, Spinner, ArrowClockwise, Question } from '@phosphor-icons/react'
 import { API_BASE, getWsUrl } from './SharedComponents'
 
 const TASK_TYPES = {
@@ -47,6 +47,8 @@ export default function TaskCenter({ open, onClose }) {
   const [loading, setLoading] = useState(false)
   const [filter, setFilter] = useState('all')
   const [typeFilter, setTypeFilter] = useState('all')
+  const [retryingIds, setRetryingIds] = useState({})   // 单条重推中: { [taskId]: true }
+  const [batchState, setBatchState] = useState(null)   // 批量重推进度: { total, done, success, fail, active }
   const refreshTimer = useRef(null)
 
   // Fetch tasks
@@ -60,12 +62,55 @@ export default function TaskCenter({ open, onClose }) {
         params.set('type', typeVal)
       }
       params.set('limit', '50')
+      // 排除后台同步噪音任务（cache_oa_*/cache_fav_* 等）——
+      // 后端 SQL 层过滤，limit 只作用于真实任务，避免真实任务被挤占显示不全
+      params.set('exclude', 'cache_')
       const res = await fetch(`${API_BASE}/api/tasks?${params}`)
       const data = await res.json()
       if (data.ok) setTasks(data.tasks || [])
     } catch {}
     setLoading(false)
   }
+
+  // 单条重推：同步等待结果，成功则任务 push_status 变 success 按钮自然消失
+  async function retryTask(taskId) {
+    setRetryingIds(prev => ({ ...prev, [taskId]: true }))
+    try {
+      await fetch(`${API_BASE}/api/tasks/${taskId}/retry`, { method: 'POST' })
+    } catch {}
+    loadTasks()
+    setTimeout(() => {
+      setRetryingIds(prev => {
+        const next = { ...prev }
+        delete next[taskId]
+        return next
+      })
+    }, 2500)
+  }
+
+  // 一键重推：后端排队后逐条推送（间隔 3s），结果经 WS 实时到达
+  async function batchRetry() {
+    try {
+      const res = await fetch(`${API_BASE}/api/tasks/retry-batch?hours=24`, { method: 'POST' })
+      const data = await res.json()
+      if (data.ok) {
+        if (data.total === 0) {
+          setBatchState({ total: 0, done: 0, success: 0, fail: 0, active: false })
+          setTimeout(() => setBatchState(null), 2500)
+        } else {
+          setBatchState({ total: data.total, done: 0, success: 0, fail: 0, active: true })
+        }
+      }
+    } catch {}
+  }
+
+  // 批量重推收尾：全部完成 3s 后收起进度条
+  useEffect(() => {
+    if (batchState && batchState.active && batchState.total > 0 && batchState.done >= batchState.total) {
+      const t = setTimeout(() => setBatchState(null), 3500)
+      return () => clearTimeout(t)
+    }
+  }, [batchState])
 
   // Load on open + periodic refresh
   useEffect(() => {
@@ -83,6 +128,20 @@ export default function TaskCenter({ open, onClose }) {
     const handleMessage = (e) => {
       try {
         const data = JSON.parse(e.data)
+        if (data.type === 'task_retry_result') {
+          // 批量重推进度：更新计数 + 刷新列表（对应任务 push_status 已变）
+          setBatchState(prev => {
+            if (!prev || !prev.active || prev.total === 0) return prev
+            return {
+              ...prev,
+              done: Math.min(prev.done + 1, prev.total),
+              success: prev.success + (data.success ? 1 : 0),
+              fail: prev.fail + (data.success ? 0 : 1),
+            }
+          })
+          loadTasks()
+          return
+        }
         if (data.type === 'task_update') {
           setTasks(prev => {
             const idx = prev.findIndex(t => t.id === data.task_id)
@@ -145,11 +204,63 @@ export default function TaskCenter({ open, onClose }) {
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-main shrink-0">
-          <h3 className="text-sm font-semibold text-text-main">任务中心</h3>
+          <div className="flex items-center gap-3">
+            <h3 className="text-sm font-semibold text-text-main">任务中心</h3>
+            {/* 一键重推：重新推送 24h 内推送失败的消息（每条间隔 3 秒） */}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={batchRetry}
+                disabled={batchState?.active}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-lg
+                           text-sky-400 bg-sky-400/[0.06] border border-sky-400/[0.12]
+                           hover:bg-sky-400/[0.12] hover:border-sky-400/[0.25] hover:text-sky-300
+                           transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait"
+              >
+                <ArrowClockwise size={12} weight="bold" className={batchState?.active ? 'animate-spin' : ''} />
+                <span>{batchState?.active ? '重推中' : '一键重推'}</span>
+              </button>
+              {/* 问号 tooltip — 向下弹出（header 在顶部，向上弹会被容器裁剪） */}
+              <div className="relative group">
+                <Question size={13} className="text-text-muted cursor-help hover:text-sky-300 transition-colors" />
+                <div className="opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-150
+                                absolute top-full left-1/2 -translate-x-1/2 mt-2 z-[60]
+                                bg-bg-raised border border-border-main rounded-lg px-3 py-2
+                                text-[11px] leading-relaxed text-text-muted w-52 shadow-xl pointer-events-none">
+                  重新推送 24 小时内推送失败的消息<br />每条间隔 3 秒，避免触发 iLink 限速
+                </div>
+              </div>
+            </div>
+          </div>
           <button onClick={onClose} className="p-1.5 rounded-full hover:bg-bg-raised transition-colors text-text-muted hover:text-text-main cursor-pointer">
             <X size={18} />
           </button>
         </div>
+
+        {/* 批量重推进度条 */}
+        {batchState && (
+          <div className="px-5 py-3 border-b border-border-main bg-sky-400/[0.03] shrink-0">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs text-sky-300 font-medium">
+                {batchState.total === 0
+                  ? '没有可重推的推送失败任务'
+                  : batchState.done < batchState.total
+                    ? `正在重推 ${batchState.done + 1}/${batchState.total}...`
+                    : `重推完成：${batchState.success} 成功，${batchState.fail} 失败`}
+              </span>
+              {batchState.active && batchState.total > 0 && (
+                <span className="text-[10px] text-text-muted">间隔 3s</span>
+              )}
+            </div>
+            {batchState.total > 0 && (
+              <div className="h-1 bg-bg-raised rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-sky-400/60 rounded-full transition-all duration-500"
+                  style={{ width: `${Math.min(100, (batchState.done / batchState.total) * 100)}%` }}
+                />
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Status filter tabs */}
         <div className="flex gap-1 px-5 py-3 border-b border-border-main shrink-0">
@@ -213,6 +324,10 @@ export default function TaskCenter({ open, onClose }) {
             const typeMeta = TASK_TYPES[task.task_type] || TASK_TYPES.group_digest
             const statusMeta = STATUS_STYLES[task.status] || STATUS_STYLES.pending
             const TypeIcon = typeMeta.icon
+            // 可重推：推送失败的任务（digest/cron 类 push_status=failed；
+            // 即时提醒 oa_article_alert 推送失败时 status=failed）
+            const canRetry = task.push_status === 'failed' ||
+              (task.task_type === 'oa_article_alert' && task.status === 'failed')
 
             return (
               <motion.div
@@ -242,7 +357,7 @@ export default function TaskCenter({ open, onClose }) {
                   ) : task.status === 'failed' ? (
                     <span className="text-xs text-[#d45656] truncate">{task.error || '执行失败'}</span>
                   ) : task.status === 'completed' ? (
-                    <span className="text-xs text-text-muted">{task.result || '完成'}</span>
+                    <span className="text-xs text-text-muted truncate">{task.result || '完成'}</span>
                   ) : (
                     <span className="text-xs text-text-muted">{task.progress || '准备中'}</span>
                   )}
@@ -278,6 +393,25 @@ export default function TaskCenter({ open, onClose }) {
                     <span className={task.push_status === 'success' ? 'text-brand-green/70' : task.push_status === 'failed' ? 'text-[#d45656]/70' : ''}>
                       {task.push_status === 'success' ? '✓ 已推送' : task.push_status === 'failed' ? '✗ 推送失败' : '推送中'}
                     </span>
+                  )}
+                  {/* 单条重推按钮（仅推送失败的任务显示） */}
+                  {canRetry && (
+                    <button
+                      onClick={() => retryTask(task.id)}
+                      disabled={!!retryingIds[task.id]}
+                      title="重新推送该条消息"
+                      className="ml-auto flex items-center gap-1 px-1.5 py-0.5 rounded-md
+                                 text-sky-400 bg-sky-400/[0.05] border border-sky-400/[0.15]
+                                 hover:bg-sky-400/[0.12] hover:border-sky-400/[0.3] hover:text-sky-300
+                                 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait"
+                    >
+                      {retryingIds[task.id] ? (
+                        <Spinner size={10} className="animate-spin" />
+                      ) : (
+                        <ArrowClockwise size={10} weight="bold" />
+                      )}
+                      <span className="text-[10px] font-medium">{retryingIds[task.id] ? '推送中' : '重推'}</span>
+                    </button>
                   )}
                 </div>
               </motion.div>

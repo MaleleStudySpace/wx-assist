@@ -34,12 +34,13 @@ CREATE TABLE IF NOT EXISTS task_center (
     config          TEXT DEFAULT '',         -- JSON: 执行时的完整任务配置快照
     status          TEXT NOT NULL DEFAULT 'pending',  -- pending | running | completed | failed
     progress        TEXT DEFAULT '',         -- semantic progress text
-    result          TEXT DEFAULT '',         -- completion summary (truncated digest)
+    result          TEXT DEFAULT '',         -- completion summary (digest full text, no truncation)
     error           TEXT DEFAULT '',         -- failure reason
     articles_count  INTEGER DEFAULT 0,
     msg_count       INTEGER DEFAULT 0,
     push_status     TEXT DEFAULT '',         -- '' | 'pending_push' | 'success' | 'failed'
     push_error      TEXT DEFAULT '',
+    outbox_id       INTEGER DEFAULT 0,       -- 关联 outbox 记录（重推时取完整推送内容）
     created_at      TEXT NOT NULL,
     started_at      TEXT,
     finished_at     TEXT
@@ -76,11 +77,16 @@ class TaskCenter:
                 conn.executescript(BASE_SCHEMA)
                 # Schema migration: add config column if missing
                 cols = {row[1] for row in conn.execute("PRAGMA table_info(task_center)").fetchall()}
-                if "config" not in cols:
-                    try:
-                        conn.execute("ALTER TABLE task_center ADD COLUMN config TEXT DEFAULT ''")
-                    except sqlite3.OperationalError:
-                        pass
+                # Schema migration: add columns if missing
+                for col_name, alter_sql in (
+                    ("config", "ALTER TABLE task_center ADD COLUMN config TEXT DEFAULT ''"),
+                    ("outbox_id", "ALTER TABLE task_center ADD COLUMN outbox_id INTEGER DEFAULT 0"),
+                ):
+                    if col_name not in cols:
+                        try:
+                            conn.execute(alter_sql)
+                        except sqlite3.OperationalError:
+                            pass
                 conn.commit()
             # Mark any leftover running tasks as failed (bot restarted)
             self._mark_stale_running_failed()
@@ -112,15 +118,15 @@ class TaskCenter:
 
     def create_task(self, task_type: str, source: str,
                     group_id: str, group_name: str,
-                    config: str = "") -> Optional[int]:
+                    config: str = "", outbox_id: int = 0) -> Optional[int]:
         """Insert a new task with status='pending'. Returns task ID or None on failure."""
         try:
             with self._get_conn() as conn:
                 cur = conn.execute(
                     "INSERT INTO task_center "
-                    "(task_type, source, group_id, group_name, config, status, progress, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, 'pending', '准备中', ?)",
-                    (task_type, source, group_id, group_name, config, _now()),
+                    "(task_type, source, group_id, group_name, config, outbox_id, status, progress, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 'pending', '准备中', ?)",
+                    (task_type, source, group_id, group_name, config, int(outbox_id or 0), _now()),
                 )
                 conn.commit()
                 tid = cur.lastrowid
@@ -165,7 +171,11 @@ class TaskCenter:
 
     def complete_task(self, task_id: int, result: str = "",
                       articles_count: int = 0, msg_count: int = 0) -> bool:
-        """Mark task as completed with result summary."""
+        """Mark task as completed with result summary.
+
+        result 不再截断到 500 字 —— 重推功能需要完整摘要内容。
+        仍保留 50000 字符安全上限（防 cron 超长输出撑爆数据库）。
+        """
         if not task_id:
             return False
         try:
@@ -174,7 +184,7 @@ class TaskCenter:
                     "UPDATE task_center SET status='completed', progress='完成', "
                     "result=?, articles_count=?, msg_count=?, finished_at=? "
                     "WHERE id=?",
-                    (result[:500], articles_count, msg_count, _now(), task_id),
+                    (result[:50000], articles_count, msg_count, _now(), task_id),
                 )
                 conn.commit()
                 logger.info("[TASK-CENTER] Task #%d completed: result_len=%d",
@@ -223,8 +233,15 @@ class TaskCenter:
     # ── Query ─────────────────────────────────────────────────────────
 
     def list_tasks(self, status: str = "", task_type: str = "",
-                   limit: int = 50) -> list[dict]:
-        """Return tasks filtered by status/type, newest first."""
+                   limit: int = 50, exclude: str = "") -> list[dict]:
+        """Return tasks filtered by status/type, newest first.
+
+        Args:
+            exclude: 逗号分隔的 task_type 前缀，SQL 层排除噪音任务
+                （如 'cache_' 排除 cache_oa_*/cache_fav_* 等后台同步任务）。
+                limit 只作用于排除后的真实任务 —— 修复"全部"列表被
+                同步噪音挤占、真实任务显示不全的问题。
+        """
         try:
             where = []
             params: list[object] = []
@@ -244,6 +261,11 @@ class TaskCenter:
                     placeholders = ",".join("?" * len(types))
                     where.append(f"task_type IN ({placeholders})")
                     params.extend(types)
+            if exclude:
+                prefixes = [p.strip() for p in exclude.split(",") if p.strip()]
+                if prefixes:
+                    where.append("(" + " AND ".join("task_type NOT LIKE ?" for _ in prefixes) + ")")
+                    params.extend(p + "%" for p in prefixes)
             clause = " WHERE " + " AND ".join(where) if where else ""
             params.append(max(1, min(int(limit or 50), 200)))
             with self._get_conn() as conn:
@@ -267,6 +289,36 @@ class TaskCenter:
         except Exception as e:
             logger.warning("[TASK-CENTER] get_task #%d failed: %s", task_id, e)
             return None
+
+    def get_failed_push_tasks(self, hours: int = 24) -> list[dict]:
+        """Return retryable push-failed tasks within the last N hours.
+
+        可重推任务 = 两类推送失败：
+          - push_status='failed'（digest/cron 类：任务成功但推送失败）
+          - task_type='oa_article_alert' AND status='failed'
+            （即时提醒推送失败时通过 fail_task 标记，result 为空，
+              重推内容从 outbox 关联记录取）
+
+        Returns:
+            按时间从旧到新排序的任务列表（供批量重推逐条处理）。
+        """
+        try:
+            cutoff = _now_offset(-max(1, int(hours or 24)) * 3600)
+            with self._get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT id, task_type, group_id, group_name, status, result, "
+                    "error, push_status, push_error, outbox_id, created_at "
+                    "FROM task_center "
+                    "WHERE created_at >= ? AND "
+                    "(push_status = 'failed' OR "
+                    " (task_type = 'oa_article_alert' AND status = 'failed')) "
+                    "ORDER BY created_at ASC",
+                    (cutoff,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("[TASK-CENTER] get_failed_push_tasks failed: %s", e)
+            return []
 
     def count_running(self) -> int:
         """Count tasks currently in 'running' status (for badge display)."""

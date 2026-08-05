@@ -1364,6 +1364,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
                              self.path == "/api/mcp/test"
                          ) or (
                              self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 5
+                         ) or (
+                             # 任务重推：POST /api/tasks/retry-batch + POST /api/tasks/:id/retry
+                             post_path == "/api/tasks/retry-batch"
+                         ) or (
+                             self.path.startswith("/api/tasks/") and len(self.path.split("/")) == 5
+                             and self.path.endswith("/retry")
                          ):
             self.do_GET()
         else:
