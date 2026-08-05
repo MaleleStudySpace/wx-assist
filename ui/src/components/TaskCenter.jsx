@@ -99,14 +99,16 @@ export default function TaskCenter({ open, onClose }) {
           setTimeout(() => setBatchState(null), 2500)
         } else {
           setBatchState({ total: data.total, done: 0, success: 0, fail: 0, active: true })
+          // 兜底：WS 全断时 12 分钟后强制收起进度条（批量最长 ~9 分钟）
+          setTimeout(() => setBatchState(null), 12 * 60 * 1000)
         }
       }
     } catch {}
   }
 
-  // 批量重推收尾：全部完成 3s 后收起进度条
+  // 批量重推收尾：全部完成 3.5s 后收起进度条（WS 事件驱动）
   useEffect(() => {
-    if (batchState && batchState.active && batchState.total > 0 && batchState.done >= batchState.total) {
+    if (batchState && batchState.total > 0 && batchState.done >= batchState.total) {
       const t = setTimeout(() => setBatchState(null), 3500)
       return () => clearTimeout(t)
     }
@@ -138,6 +140,15 @@ export default function TaskCenter({ open, onClose }) {
               success: prev.success + (data.success ? 1 : 0),
               fail: prev.fail + (data.success ? 0 : 1),
             }
+          })
+          loadTasks()
+          return
+        }
+        if (data.type === 'task_retry_batch_done') {
+          // 批量全部结束（收尾事件）：即使中间结果丢失也按此收起进度条
+          setBatchState(prev => {
+            if (!prev) return prev
+            return { ...prev, done: prev.total, success: data.success, fail: data.fail }
           })
           loadTasks()
           return

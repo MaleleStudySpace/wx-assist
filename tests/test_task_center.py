@@ -130,12 +130,53 @@ class TestTaskCenter(unittest.TestCase):
         count = self.tc.count_running()
         self.assertEqual(count, 2)
 
-    def test_complete_task_truncates_result(self):
+    def test_complete_task_stores_full_result(self):
+        """result 不再截断到 500 —— 重推功能需要完整摘要内容（上限 50000）。"""
         tid = self.tc.create_task('group_digest', 'manual', 'g1', '群1')
         long_result = 'x' * 1000
         self.tc.complete_task(tid, result=long_result)
         task = self.tc.get_task(tid)
-        self.assertEqual(len(task['result']), 500)  # truncated to 500
+        self.assertEqual(len(task['result']), 1000)  # 完整保存，不截断
+
+    def test_complete_task_result_capped_at_50000(self):
+        """超长输出（如 cron skill）仍受 50000 安全上限保护。"""
+        tid = self.tc.create_task('cron', 'scheduler', 'job1', '任务1')
+        huge = 'x' * 60000
+        self.tc.complete_task(tid, result=huge)
+        task = self.tc.get_task(tid)
+        self.assertEqual(len(task['result']), 50000)
+
+    def test_create_task_with_outbox_id(self):
+        tid = self.tc.create_task('oa_article_alert', 'system', 'gh_1', '公众号 · 文章', outbox_id=42)
+        self.assertIsNotNone(tid)
+        task = self.tc.get_task(tid)
+        self.assertEqual(task['outbox_id'], 42)
+
+    def test_get_failed_push_tasks(self):
+        # 推送失败（digest 类）
+        t1 = self.tc.create_task('oa_digest', 'scheduler', 'g1', '群1')
+        self.tc.complete_task(t1, result='摘要')
+        self.tc.update_push_result(t1, 'failed', 'timeout')
+        # oa_article_alert 推送失败（fail_task 标记）
+        t2 = self.tc.create_task('oa_article_alert', 'system', 'gh_2', '公众号 · 文章')
+        self.tc.fail_task(t2, error='rate limited')
+        # 成功推送的不应出现在列表
+        t3 = self.tc.create_task('oa_digest', 'scheduler', 'g3', '群3')
+        self.tc.complete_task(t3, result='摘要')
+        self.tc.update_push_result(t3, 'success')
+        tasks = self.tc.get_failed_push_tasks(hours=24)
+        ids = {t['id'] for t in tasks}
+        self.assertIn(t1, ids)
+        self.assertIn(t2, ids)
+        self.assertNotIn(t3, ids)
+
+    def test_list_tasks_exclude(self):
+        self.tc.create_task('cache_oa_incremental', 'system', 'g1', 'OA增量同步')
+        self.tc.create_task('cache_fav_incremental', 'system', 'g2', '收藏增量')
+        self.tc.create_task('group_digest', 'manual', 'g3', '群3')
+        tasks = self.tc.list_tasks(exclude='cache_')
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]['task_type'], 'group_digest')
 
 
 if __name__ == '__main__':

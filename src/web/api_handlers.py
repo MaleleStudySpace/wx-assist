@@ -5723,11 +5723,11 @@ def _match_outbox_by_time(task: dict, outbox) -> Optional[dict]:
     取 created_at 与任务最接近且相差 ≤10 分钟的记录；无匹配返回 None。
     仅服务 oa_article_alert 等无 result 兜底的历史任务；digest/cron 有 result 兜底。
     """
+    from datetime import datetime
     group_id = task.get("group_id") or ""
     if not group_id:
         return None
     try:
-        from datetime import datetime
         t_ts = datetime.fromisoformat((task.get("created_at") or "").replace("Z", "+00:00")).timestamp()
     except Exception:
         return None
@@ -5738,7 +5738,6 @@ def _match_outbox_by_time(task: dict, outbox) -> Optional[dict]:
     best, best_diff = None, 600.0  # ±10 分钟窗口
     for c in cands:
         try:
-            from datetime import datetime
             c_ts = datetime.fromisoformat((c.get("created_at") or "").replace("Z", "+00:00")).timestamp()
         except Exception:
             continue
@@ -5901,6 +5900,7 @@ def handle_tasks_retry_batch(params, config: AssistantConfig):
             tasks = tasks[:30]
 
         def _run():
+            _ok_count = _fail_count = 0
             for i, task in enumerate(tasks):
                 if i > 0:
                     time.sleep(3)  # 消息间隔：避免 iLink 限速报错
@@ -5912,6 +5912,8 @@ def handle_tasks_retry_batch(params, config: AssistantConfig):
                 except Exception as e:
                     ok, err = False, str(e)
                     logger.warning("[TASK-RETRY] batch item #%s failed: %s", task["id"], e)
+                _ok_count += 1 if ok else 0
+                _fail_count += 1 if not ok else 0
                 try:
                     broadcast_event("task_retry_result", {
                         "task_id": task["id"],
@@ -5921,6 +5923,15 @@ def handle_tasks_retry_batch(params, config: AssistantConfig):
                     })
                 except Exception:
                     pass
+            # 收尾事件：即使中间有 task_retry_result 丢失，前端也能按 batch_done 收起进度条
+            try:
+                broadcast_event("task_retry_batch_done", {
+                    "total": len(tasks),
+                    "success": _ok_count,
+                    "fail": _fail_count,
+                })
+            except Exception:
+                pass
 
         threading.Thread(target=_run, daemon=True).start()
         return {"ok": True, "total": len(tasks), "queued": True,
