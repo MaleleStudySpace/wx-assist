@@ -112,10 +112,10 @@ class SkillEngine:
 
         if skill_type == "script":
             return self._execute_script(meta, args)
-        elif skill_type in ("agent", "ai"):
-            return self._execute_agent(meta, args)
+        elif skill_type == "prompt":
+            return self._execute_prompt(meta, args)
         else:
-            raise SkillError(f"不支持的 skill 类型: {skill_type}")
+            raise SkillError(f"不支持的 skill 类型: {skill_type}（仅支持 script / prompt）")
 
     def _scripts_dir(self, meta: dict) -> Path:
         """返回 skill 的 scripts 目录。"""
@@ -184,10 +184,10 @@ class SkillEngine:
                 f"脚本退出码 {result.returncode}: {stderr or stdout[:200]}")
         return stdout
 
-    def _execute_agent(self, meta: dict, args: dict) -> str:
-        """执行 AI 类型的 skill。"""
+    def _execute_prompt(self, meta: dict, args: dict) -> str:
+        """执行 prompt 类型的 skill。"""
         if not self._agent_engine:
-            raise SkillError("agent 类型 skill 需要 agent_engine，但未注入")
+            raise SkillError("prompt 类型 skill 需要 agent_engine，但未注入")
 
         prompt = meta.get("prompt", "")
         if not prompt:
@@ -334,11 +334,11 @@ if __name__ == "__main__":
         created.append({"name": "weather", "type": "script", "description": weather_meta["description"]})
         logger.info("[SKILL] 示例 weather 已创建")
 
-        # ── 2. skill-designer (ai) ──────────────────────────────────
+        # ── 2. skill-designer (prompt) ───────────────────────────────
         creator_meta = {
             "name": "skill-designer",
-            "type": "ai",
-            "description": "技能设计助手 — 帮你设计 ai 类型 skill 的方案",
+            "type": "prompt",
+            "description": "技能设计助手 — 帮你设计 prompt 类型 skill 的方案",
             "timeout": 120,
             "args": {
                 "idea": {
@@ -361,20 +361,20 @@ if __name__ == "__main__":
                 "**参数：** xxx（如 {\"city\": {\"type\": \"string\", \"description\": \"城市名\"}}，无需参数就写无）\n\n"
                 "你觉得这个 prompt 怎么样？满意的话告诉我 **「确认创建」**，我就正式创建这个 skill 啦～ 😊，如果你认为哪里要改再告诉我你的想法~\n\n"
                 "注意：\n"
-                "- 只设计 type: ai 的 skill\n"
+                "- 只设计 type: prompt 的 skill\n"
                 "- 指令要具体到执行步骤，不要笼统"
             ),
         }
         skill_dir2 = self._build_skill_dir("skill-designer")
         self._write_skill_md(skill_dir2 / "SKILL.md", creator_meta)
-        created.append({"name": "skill-designer", "type": "ai", "description": creator_meta["description"]})
+        created.append({"name": "skill-designer", "type": "prompt", "description": creator_meta["description"]})
         logger.info("[SKILL] 示例 skill-designer 已创建")
 
         return created
 
     def create_skill(self, name: str, description: str, prompt: str,
                      args_schema: dict = None) -> dict:
-        """创建 ai 类型的 skill（供 create_skill 工具调用）。"""
+        """创建 prompt 类型的 skill（供 create_skill 工具调用）。"""
         import re
         if not re.match(r'^[a-z0-9][a-z0-9_-]{1,31}$', name):
             raise SkillError(f"skill 名 '{name}' 非法：只能包含字母数字下划线，2-32 字符")
@@ -385,7 +385,7 @@ if __name__ == "__main__":
 
         meta = {
             "name": name,
-            "type": "ai",
+            "type": "prompt",
             "description": description,
             "timeout": 60,
             "args": args_schema or {},
@@ -393,4 +393,4 @@ if __name__ == "__main__":
         }
         self._write_skill_md(skill_dir / "SKILL.md", meta)
         logger.info("[SKILL] create_skill: %s", name)
-        return {"name": name, "type": "ai", "path": str(skill_dir / "SKILL.md")}
+        return {"name": name, "type": "prompt", "path": str(skill_dir / "SKILL.md")}

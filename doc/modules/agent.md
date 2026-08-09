@@ -27,7 +27,7 @@ ToolExecutor (src/agent/tools.py)
 |------|------|------|
 | iLink 私聊（主入口） | `router._handle_dm` → `AgentEngine.run()` | 微信发私聊消息给机器人即触发 |
 | Web 本地测试 | `POST /api/agent/test` | 不走 iLink，本地验证 Agent 对话/工具调用流程 |
-| 定时任务（AI 型 skill） | `SkillEngine._execute_agent` → `AgentEngine.run_once()` | cron 触发的 skill 用一次性执行，不保留历史 |
+| 定时任务（prompt 型 skill） | `SkillEngine._execute_prompt` → `AgentEngine.run_once()` | cron 触发的 skill 用一次性执行，不保留历史 |
 | 外部 MCP 客户端 | `POST http://127.0.0.1:17328` | 通过反向 MCP Server 暴露同一套工具 |
 
 ## ReAct 循环（`_react_loop`）

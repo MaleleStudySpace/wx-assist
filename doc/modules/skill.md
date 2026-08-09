@@ -19,7 +19,7 @@ data/skills/{name}/
 ---
 name: weather                 # skill 唯一标识（缺省用目录名）
 description: 天气预报 — 查询指定城市的天气情况
-type: script                  # "script" | "agent" | "ai"（agent 与 ai 等价）
+type: script                  # "script" | "prompt"（prompt = 单次 prompt 驱动 LLM）
 command: weather.py           # script 类型必填，相对 scripts/ 的脚本文件名
 timeout: 45                   # 超时秒数（默认 30，仅 script 类型生效）
 args:
@@ -34,8 +34,8 @@ args:
 ---
 ```
 
-- ai 类型必填 `prompt` 字段（AI 执行指令），无 `command`
-- `timeout` 字段只对 script 类型生效（子进程超时），ai 类型不消费
+- prompt 类型必填 `prompt` 字段（AI 执行指令），无 `command`
+- `timeout` 字段只对 script 类型生效（子进程超时），prompt 类型不消费
 
 ## 执行分派（`SkillEngine.execute()`）
 
@@ -43,7 +43,7 @@ args:
 execute(name, args)
     │
     ├─ type == "script" → _execute_script（子进程）
-    └─ type == "agent"/"ai" → _execute_agent（AI 生成）
+    └─ type == "prompt" → _execute_prompt（单次 prompt 驱动 LLM）
 ```
 
 返回值约定：`"[SILENT]"` 表示无新内容（见下文 [SILENT] 协议）。
@@ -66,10 +66,10 @@ execute(name, args)
 5. 返回 stdout
 ```
 
-## ai 类型执行
+## prompt 类型执行
 
 ```
-_execute_agent(meta, args)
+_execute_prompt(meta, args)
     │
     ▼
 prompt = meta["prompt"]（必填，缺省报错）
@@ -82,7 +82,7 @@ agent_engine.run_once(prompt, system_override=system)
 返回 LLM 输出文本
 ```
 
-ai 类型的 system prompt 固定为：
+prompt 类型的 system prompt 固定为：
 
 > 根据用户的需求执行任务。如果需要外部数据，可以调用提供的工具。
 > **如果确认没有任何新内容可输出（如监控类任务无变化），只回复 [SILENT]。
@@ -98,14 +98,14 @@ ai 类型的 system prompt 固定为：
 | 效果 | CronScheduler 跳过推送；TaskCenter 结果记为空串 |
 | 适用 | 监控/聚合类任务"内容无变化"的场景 |
 
-**错误禁止静默**：script 类型报错应 `print(错误信息); sys.exit(1)`（非零退出码让调度器记 `error_count` 并推送错误）；ai 类型报错必须输出错误说明。内置示例 weather 脚本即按此约定实现（失败重试 2 次后输出错误并退出）。
+**错误禁止静默**：script 类型报错应 `print(错误信息); sys.exit(1)`（非零退出码让调度器记 `error_count` 并推送错误）；prompt 类型报错必须输出错误说明。内置示例 weather 脚本即按此约定实现（失败重试 2 次后输出错误并退出）。
 
 ## 内置示例（`create_sample_skills()`）
 
 | skill | 类型 | 功能 |
 |-------|------|------|
 | `weather` | script | 天气预报 — 调 wttr.in（免费零配置），失败重试 2 次，报错推送 |
-| `skill-designer` | ai | 技能设计助手 — 分析需求输出设计方案，引导用户确认后由助手创建 |
+| `skill-designer` | prompt | 技能设计助手 — 分析需求输出设计方案，引导用户确认后由助手创建 |
 
 可通过 `POST /api/skills?sample=1` 一键生成示例。用户也可在微信里让 Agent 创建自定义 skill（见下）。
 

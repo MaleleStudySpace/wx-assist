@@ -17,16 +17,64 @@ function SkillGuideCard({ embedded }) {
         </div>
       </div>
 
-      {/* SKILL.md 格式 */}
+      {/* 类型速览 */}
       <div className="mb-6">
-        <p className="text-text-main font-semibold mb-3 text-sm">SKILL.md 格式</p>
-        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto">
+        <p className="text-text-main font-semibold mb-3 text-sm">两种类型</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 space-y-4">
+          <div className="flex items-start gap-3">
+            <span className="shrink-0 mt-0.5 px-2.5 py-1 rounded bg-brand-green/15 text-brand-green font-mono text-[12px] font-semibold">script</span>
+            <span className="text-sm text-text-secondary leading-relaxed">子进程跑 Python 脚本。<code className="font-mono px-1.5 py-0.5 rounded bg-bg-raised text-sm">--key value</code> 传参，stdout 出结果。</span>
+          </div>
+          <div className="flex items-start gap-3">
+            <span className="shrink-0 mt-0.5 px-2.5 py-1 rounded bg-[#a78bfa]/20 text-[#a78bfa] font-mono text-[12px] font-semibold">prompt</span>
+            <span className="text-sm text-text-secondary leading-relaxed">单次 prompt 喂给 LLM 出结果，不开子进程、不保留对话历史。</span>
+          </div>
+        </div>
+        <div className="bg-[#d45656]/10 border border-[#d45656]/40 rounded-xl px-4 py-3 mt-3">
+          <p className="text-sm font-semibold text-[#d45656]">⚠️ script 类型 skill 只支持 Python</p>
+        </div>
+      </div>
+
+      {/* 使用场景 */}
+      <div className="mb-6">
+        <p className="text-text-main font-semibold mb-3 text-sm">使用场景</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 space-y-3">
+          <p className="flex items-center gap-3 text-sm text-text-secondary">
+            <span className="text-lg shrink-0">🕐</span>
+            <span>定时调度 — CronScheduler 按 cron 表达式触发，结果自动推微信</span>
+          </p>
+          <p className="flex items-center gap-3 text-sm text-text-secondary">
+            <span className="text-lg shrink-0">🤖</span>
+            <span>AI 助手 — 用户在对话中让 Agent 调用，立即执行</span>
+          </p>
+        </div>
+      </div>
+
+      {/* ─── script 类型教程 ──────────────────────────────── */}
+      <div className="mb-6 pt-2">
+        <div className="flex items-center gap-3 mb-3">
+          <span className="px-3 py-1 rounded bg-brand-green/15 text-brand-green font-mono text-[13px] font-semibold">script</span>
+          <p className="text-text-main font-semibold text-sm">类型教程：跑 Python 脚本</p>
+        </div>
+
+        {/* 目录骨架 */}
+        <p className="text-xs text-text-muted mb-2">目录骨架：</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto mb-4">
+{`data/skills/{skill-name}/
+├── SKILL.md              ← 元数据
+└── scripts/              ← 放 Python 脚本
+    └── myscript.py`}
+        </div>
+
+        {/* SKILL.md 模板 */}
+        <p className="text-xs text-text-muted mb-2">SKILL.md 模板：</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto mb-4">
 {`---
-name: my-skill           # 唯一标识
-type: script             # script(子进程) | ai(AI 生成)
+name: my-skill            # 唯一标识
+type: script              # ← 写 script
 description: 做什么用的
-command: myscript.py     # script 类型必填
-timeout: 30              # 默认 30s
+command: myscript.py      # ← 相对 scripts/ 的脚本名
+timeout: 30               # 超时秒，默认 30
 args:
   location:
     type: string
@@ -34,77 +82,27 @@ args:
     description: 城市名
   days:
     type: integer
-    default: 2         # 可选
+    default: 2
 ---`}
         </div>
-      </div>
 
-      {/* 类型说明 */}
-      <div className="mb-6">
-        <p className="text-text-main font-semibold mb-3 text-sm">类型说明</p>
-        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 space-y-4">
-          <div className="flex items-start gap-3">
-            <span className="shrink-0 mt-0.5 px-2.5 py-1 rounded bg-brand-green/15 text-brand-green font-mono text-[12px] font-semibold">script</span>
-            <span className="text-sm text-text-secondary leading-relaxed">子进程执行。参数通过 <code className="font-mono px-1.5 py-0.5 rounded bg-bg-raised text-sm">--key value</code> 传入，stdout 输出结果。<br/>输出 <code className="font-mono px-1.5 py-0.5 rounded bg-bg-raised text-[#d45656] text-sm">[SILENT]</code> 表示无新内容，跳过推送。</span>
-          </div>
-          <div className="flex items-start gap-3">
-            <span className="shrink-0 mt-0.5 px-2.5 py-1 rounded bg-[#a78bfa]/20 text-[#a78bfa] font-mono text-[12px] font-semibold">ai</span>
-            <span className="text-sm text-text-secondary leading-relaxed">AI 根据 SKILL.md 中 <code className="font-mono px-1.5 py-0.5 rounded bg-bg-raised text-sm">prompt</code> 字段的指令直接生成内容，不走子进程。</span>
-          </div>
-        </div>
-      </div>
+        {/* 参数映射 */}
+        <p className="text-xs text-text-muted mb-2">参数 → CLI 映射：</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto mb-4">
+{`# SKILL.md 写 args = {location: "北京", days: 3, verbose: true}
+# 引擎拼成:
+python scripts/myscript.py --location 北京 --days 3 --verbose
 
-      {/* 仅支持 Python */}
-      <div className="mb-6">
-        <div className="bg-[#d45656]/10 border border-[#d45656]/40 rounded-xl p-4">
-          <p className="text-sm font-semibold text-[#d45656] mb-2">⚠️ script 类型仅支持 Python</p>
-          <p className="text-xs text-text-secondary leading-relaxed mb-2">
-            引擎用 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised text-xs">sys.executable</code> 启动子进程执行
-            <code className="font-mono px-1 py-0.5 rounded bg-bg-raised text-xs">scripts/{`{command}`}</code>，
-            <strong className="text-text-main">.sh / .js / .ps1 不会被识别</strong>，
-            会直接 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised text-xs">SyntaxError</code>。
-          </p>
-          <p className="text-xs text-text-secondary leading-relaxed mb-2">
-            <strong className="text-text-main">这是永久设计，不会扩展支持其他语言。</strong>
-            原因：sys.executable 在 Windows / macOS / Linux 都指向当前 Python 解释器，跨平台零配置；
-            其他语言要么依赖外部 runtime（git-bash / node），要么平台独有（PowerShell），引入大量兼容负担。
-          </p>
-          <p className="text-xs text-text-secondary leading-relaxed">
-            需要 shell / node 脚本？<strong className="text-text-main">用系统自带调度</strong>——
-            Windows 任务计划程序 / macOS launchd / Linux crontab，
-            摘星 skill 体系专注 Python 生态。
-          </p>
-        </div>
-      </div>
-
-      {/* 参数传递 */}
-      <div className="mb-6">
-        <p className="text-text-main font-semibold mb-3 text-sm">参数如何传给脚本</p>
-        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto mb-3">
-{`# SKILL.md 里定义的参数:
-args:
-  location:
-    type: string
-    required: true
-  days:
-    type: integer
-    default: 2
-  verbose:
-    type: boolean
-    default: false
-
-# 调用时传 args = {location: "北京", days: 3, verbose: true}
-# 引擎自动拼成 CLI 参数:
-python scripts/weather.py --location 北京 --days 3 --verbose
-
-# 类型 → CLI 映射规则:
+# 规则:
 #   string/integer/number → --key <值>
-#   True（boolean）        → --key（只传开关，无值）
-#   False（boolean）       → 整个 --key 不传
-#   数组/对象              → str() 后传（JSON 字符串，自己 parse）`}
+#   True (boolean)         → --key（只传开关，无值）
+#   False (boolean)        → 整个 --key 不传
+#   数组/对象              → str() 后传（JSON 字符串，脚本自己 parse）`}
         </div>
-        <p className="text-xs text-text-muted/80 mb-2">在脚本里这样接（推荐用 argparse）：</p>
-        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto">
+
+        {/* Python 脚本示例 */}
+        <p className="text-xs text-text-muted mb-2">Python 脚本里这样接（推荐 argparse）：</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto mb-4">
 {`import argparse, sys
 
 p = argparse.ArgumentParser()
@@ -116,27 +114,87 @@ args = p.parse_args()
 print(f"{args.location} 预报 {args.days} 天（verbose={args.verbose}）")
 sys.exit(0)
 
-# 不推荐 sys.argv 手撕（边界多），argparse 是标准做法
-# 输出想安静就 print("[SILENT]"); sys.exit(0)`}
+# 若本次无新内容可推送，请输出 [SILENT]，调度器将跳过本轮推送`}
         </div>
+
+        {/* 适用场景 */}
+        <p className="text-xs text-text-muted mb-2">适用：拉数据 / 调外部 API / 跑本地计算 / 系统命令封装</p>
       </div>
 
-      {/* 使用场景 */}
-      <div className="mb-6">
-        <p className="text-text-main font-semibold mb-3 text-sm">使用场景</p>
-        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 space-y-3">
-          <p className="flex items-center gap-3 text-sm text-text-secondary">
-            <span className="text-lg shrink-0">🕐</span>
-            <span>定时调度 — CronScheduler 按 cron 表达式触发执行，结果自动推送微信</span>
-          </p>
-          <p className="flex items-center gap-3 text-sm text-text-secondary">
-            <span className="text-lg shrink-0">🤖</span>
-            <span>AI 助手 — 用户在对话中可让 Agent 调用 skill，无需手动配置</span>
-          </p>
+      {/* ─── prompt 类型教程 ──────────────────────────────── */}
+      <div className="mb-6 pt-2">
+        <div className="flex items-center gap-3 mb-3">
+          <span className="px-3 py-1 rounded bg-[#a78bfa]/20 text-[#a78bfa] font-mono text-[13px] font-semibold">prompt</span>
+          <p className="text-text-main font-semibold text-sm">类型教程：单次 prompt 驱动 LLM</p>
         </div>
+
+        {/* 目录骨架 */}
+        <p className="text-xs text-text-muted mb-2">目录骨架（不需要 scripts/）：</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto mb-4">
+{`data/skills/{skill-name}/
+└── SKILL.md              ← prompt 写在 SKILL.md 里`}
+        </div>
+
+        {/* SKILL.md 模板 */}
+        <p className="text-xs text-text-muted mb-2">SKILL.md 模板：</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto mb-4">
+{`---
+name: my-skill            # 唯一标识
+type: prompt              # ← 写 prompt
+description: 做什么用的
+timeout: 60               # 留给 LLM 的思考时间（默认 60）
+args:
+  topic:
+    type: string
+    required: true
+    description: 话题
+  style:
+    type: string
+    default: 幽默
+    description: 风格
+prompt: |
+  你是 XXX 助手。用户会给你一个话题（topic 参数）和风格（style 参数）。
+
+  请按以下步骤执行：
+  1. 先复述话题，确认理解
+  2. 按 style 风格输出 3 条候选
+  3. 每条 1-2 句话，不超过 80 字
+
+  若话题不合适处理，输出 [SILENT]。
+---`}
+        </div>
+
+        {/* args 注入方式 */}
+        <p className="text-xs text-text-muted mb-2">参数注入方式：</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto mb-4">
+{`# 调用时传 args = {topic: "AI", style: "严肃"}
+# 引擎会自动在 prompt 末尾追加:
+
+## 参数
+{
+  "topic": "AI",
+  "style": "严肃"
+}
+
+# prompt 里直接引用 topic / style 即可，引擎会把 args 字典
+# 转成 JSON 块喂给 LLM（ensure_ascii=False 中文可读）`}
+        </div>
+
+        {/* prompt 写法要点 */}
+        <p className="text-xs text-text-muted mb-2">prompt 写法要点：</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 text-sm leading-relaxed space-y-2">
+          <p>• <strong className="text-text-main">写步骤</strong>：让 LLM 按 1/2/3 走，比笼统指令稳定</p>
+          <p>• <strong className="text-text-main">指明输出格式</strong>：Markdown / 列表 / 字数限制，避免自由发挥</p>
+          <p>• <strong className="text-text-main">给反例</strong>：&ldquo;不要&rdquo;比 &ldquo;应该&rdquo;管用</p>
+          <p>• <strong className="text-text-main">无内容就 [SILENT]</strong>：监控类任务让 LLM 输出 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised text-xs">[SILENT]</code> 跳过推送</p>
+        </div>
+
+        {/* 适用场景 */}
+        <p className="text-xs text-text-muted mt-3 mb-2">适用：内容生成 / 文案润色 / 数据分析 / 分类汇总 / 翻译总结</p>
       </div>
 
-      <p className="text-text-muted/60 text-xs">创建后重启 bot 自动加载。CRUD 操作热更新，无需重启。</p>
+      {/* 热更新 */}
+      <p className="text-text-muted/60 text-xs pt-2 border-t border-border-main/50">创建/修改 SKILL.md 后下次执行立即生效，无需重启 bot。</p>
     </div>
   )
 
@@ -247,7 +305,7 @@ export default function SkillLibrary({ skills, onRefresh }) {
                   {s.name}
                   <span className={`ml-2 inline-block text-xs px-2 py-0.5 rounded font-medium
                     ${s.type === 'script' ? 'bg-brand-green/15 text-brand-green' : 'bg-[#a78bfa]/20 text-[#a78bfa]'}`}>
-                    {s.type === 'agent' ? 'ai' : s.type}
+                    {s.type}
                   </span>
                 </div>
                 {s.description && <div className="text-xs text-text-muted mt-1 line-clamp-2 leading-relaxed">{s.description}</div>}
@@ -292,7 +350,7 @@ export default function SkillLibrary({ skills, onRefresh }) {
               <h3 className="text-base font-semibold text-text-main">{selected.name}</h3>
               <span className={`text-xs px-2.5 py-1 rounded font-medium
                 ${selected.type === 'script' ? 'bg-brand-green/15 text-brand-green' : 'bg-[#a78bfa]/20 text-[#a78bfa]'}`}>
-                {selected.type === 'agent' ? 'ai' : selected.type}
+                {selected.type}
               </span>
             </div>
             <div className="space-y-4 text-sm">
