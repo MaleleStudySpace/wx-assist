@@ -76,15 +76,22 @@ export default function App() {
   useEffect(() => {
     if (!onboardingDone) return
     function poll() {
-      const since = localStorage.getItem('taskCenterLastRead') || ''
-      const url = since
-        ? `${API_BASE}/api/tasks/badge?since=${encodeURIComponent(since)}`
+      const sinceAtStart = localStorage.getItem('taskCenterLastRead') || ''
+      const url = sinceAtStart
+        ? `${API_BASE}/api/tasks/badge?since=${encodeURIComponent(sinceAtStart)}`
         : `${API_BASE}/api/tasks/badge`
       fetch(url)
         .then(r => r.json())
         .then(d => {
-          if (d.ok) {
-            setRunningTaskCount(d.running || 0)
+          if (!d.ok) return
+          // running 不依赖 since, 直接更新
+          setRunningTaskCount(d.running || 0)
+          // failed 受 since 影响: 若用户在本次 poll 期间打开了 TaskCenter
+          // (since 已被新值覆盖), 本次响应的 failed 是基于旧 since 的,
+          // 直接 setFailedTaskCount 会把刚才的 0 覆盖回旧值, 角标短暂回弹。
+          // 此时丢弃本次 failed 计数, 等下次 10s 后用最新 since 重发。
+          const sinceNow = localStorage.getItem('taskCenterLastRead') || ''
+          if (sinceAtStart === sinceNow) {
             setFailedTaskCount(d.failed || 0)
           }
         })

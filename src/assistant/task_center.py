@@ -339,8 +339,13 @@ class TaskCenter:
         If since is empty, counts all failed tasks.
 
         Args:
-            since: ISO-8601 timestamp string (e.g. "2026-08-03T12:00:00").
+            since: ISO-8601 timestamp string (e.g. "2026-08-03T12:00:00.000Z").
                    Only tasks with created_at > since are counted.
+                   内部统一转为本地时间字符串再与 created_at (本地时间) 比较,
+                   避免 UTC ISO vs 本地时间 字符串字典序错位导致的过滤失效
+                   (例: 用户在 UTC+8, DB created_at="2026-08-09T21:00:00",
+                   frontend since="2026-08-09T13:00:00.000Z", 字符串比较会
+                   误判 created_at > since 为 True, 即便真实时间任务更早)。
 
         Returns:
             Number of matching failed tasks.
@@ -348,11 +353,14 @@ class TaskCenter:
         try:
             with self._get_conn() as conn:
                 if since:
+                    # 前端传 UTC ISO (含 Z 或 +00:00), 转为本地时间字符串
+                    # 与 created_at 同格式 (time.strftime %Y-%m-%dT%H:%M:%S)
+                    local_since = _iso_to_local_str(since) or since
                     row = conn.execute(
                         "SELECT COUNT(*) FROM task_center "
                         "WHERE (status='failed' OR push_status='failed') "
                         "AND created_at > ?",
-                        (since,),
+                        (local_since,),
                     ).fetchone()
                 else:
                     row = conn.execute(
@@ -398,3 +406,28 @@ def _now() -> str:
 
 def _now_offset(offset_sec: int) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() + offset_sec))
+
+
+def _iso_to_local_str(iso: str) -> Optional[str]:
+    """把 ISO-8601 (含 'Z' 或 '+HH:MM') 转为本地时间字符串, 格式与 _now() 一致。
+
+    用于 count_failed_since: 前端 localStorage 存的是 Date.toISOString()
+    (UTC 带毫秒和 Z 后缀), 而 DB created_at 是 _now() (本地时间无后缀),
+    直接字符串字典序比较会因为时区错位误判 (UTC+8 用户下午创建的
+    任务本地小时 > UTC 小时, 永远大于前端 since)。统一转本地再比较。
+
+    Returns None if input 不可解析 (调用方 fallback 用原字符串)。
+    """
+    if not iso:
+        return None
+    try:
+        from datetime import datetime
+        # Python 3.11+ 支持 'Z' 直接 parse; 老版本需替换
+        s = iso.replace("Z", "+00:00") if iso.endswith("Z") else iso
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            # 无时区信息, 视为本地时间, 直接截断到秒
+            return dt.strftime("%Y-%m-%dT%H:%M:%S")
+        return dt.astimezone().strftime("%Y-%m-%dT%H:%M:%S")
+    except Exception:
+        return None

@@ -178,6 +178,65 @@ class TestTaskCenter(unittest.TestCase):
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]['task_type'], 'group_digest')
 
+    def test_count_failed_since_filters_correctly(self):
+        """count_failed_since 应正确过滤早于 since 的任务 (含失败 status 和 push_status)。"""
+        import time as time_mod
+        old = self.tc.create_task('oa_digest', 'scheduler', 'g1', '群1')
+        self.tc.complete_task(old, result='旧摘要')
+        self.tc.update_push_result(old, 'failed', 'old')
+        # 把 created_at 改到 1 小时前
+        old_time = time_mod.strftime('%Y-%m-%dT%H:%M:%S',
+                                     time_mod.localtime(time_mod.time() - 3600))
+        import sqlite3
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute("UPDATE task_center SET created_at=? WHERE id=?",
+                         (old_time, old))
+            conn.commit()
+        # since 用 5 秒前 (前端 ISO 格式) — 留余量避免同秒边界
+        import datetime as dt
+        since_dt = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=5)
+        since_iso = since_dt.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        # 旧任务 (1h 前) 应被过滤
+        self.assertEqual(self.tc.count_failed_since(since_iso), 0)
+        # 没传 since 应返回全部
+        self.assertEqual(self.tc.count_failed_since(''), 1)
+        # 新失败任务应被计入 (创建于 since 之后)
+        new = self.tc.create_task('oa_digest', 'scheduler', 'g2', '群2')
+        self.tc.complete_task(new, result='新摘要')
+        self.tc.update_push_result(new, 'failed', 'new')
+        self.assertEqual(self.tc.count_failed_since(since_iso), 1)
+
+    def test_count_failed_since_handles_malformed_since(self):
+        """since 解析失败时 fallback 到原字符串, 不抛异常。"""
+        self.tc.create_task('oa_digest', 'scheduler', 'g1', '群1')
+        self.tc.complete_task(self.tc.create_task('oa_digest', 'scheduler', 'g2', 'g2'), result='x')
+        self.tc.update_push_result(self.tc.list_tasks()[0]['id'], 'failed', 'err')
+        # 无法解析的字符串: 走 fallback (原字符串比较), 不抛异常即可
+        try:
+            n = self.tc.count_failed_since('not-a-date')
+            self.assertIsInstance(n, int)
+        except Exception as e:
+            self.fail(f'count_failed_since 不应抛异常: {e}')
+
+    def test_iso_to_local_str(self):
+        """_iso_to_local_str: UTC ISO 转本地时间字符串, 与 _now() 同格式。"""
+        from src.assistant.task_center import _iso_to_local_str
+        import datetime as dt
+        # 已知 UTC 2026-08-09T13:00:00Z 在 UTC+8 应是 21:00:00
+        utc = dt.datetime(2026, 8, 9, 13, 0, 0, tzinfo=dt.timezone.utc)
+        local_str = _iso_to_local_str(utc.isoformat().replace('+00:00', 'Z'))
+        # 不强求具体时区 (CI/测试机可能不是 UTC+8), 只验证格式 & 解析正确
+        self.assertRegex(local_str, r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$')
+        parsed_back = dt.datetime.fromisoformat(local_str)
+        self.assertEqual(parsed_back.year, 2026)
+        # 跨时区再转回 UTC, 时差应等于 0
+        re_utc = parsed_back.replace(tzinfo=dt.datetime.now().astimezone().tzinfo) \
+            .astimezone(dt.timezone.utc)
+        self.assertEqual(re_utc.hour, 13)
+        # 空字符串/非法输入返回 None
+        self.assertIsNone(_iso_to_local_str(''))
+        self.assertIsNone(_iso_to_local_str('garbage'))
+
 
 if __name__ == '__main__':
     unittest.main()
