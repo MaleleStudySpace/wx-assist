@@ -1877,18 +1877,20 @@ export default function OATab() {
           </div>
         </div>
 
-        {/* 忽略列表：点击下拉 */}
-        <div className="mt-4">
-          <button
-            onClick={() => setFullTextDropdownOpen(!fullTextDropdownOpen)}
-            className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-bg-raised border border-border-main hover:border-brand-green/40 transition-colors cursor-pointer"
-          >
-            <span className="flex items-center gap-2 text-sm text-text-main">⛔ 忽略以下公众号（不抓取全文）</span>
-            <span className="flex items-center gap-2 text-xs text-text-muted">
-              {ignoredGhIds.length > 0 && <span className="text-amber-500 font-medium">已忽略 {ignoredGhIds.length} 个</span>}
-              <span className={`transition-transform ${fullTextDropdownOpen ? 'rotate-180' : ''}`}>▾</span>
-            </span>
-          </button>
+        {/* 忽略列表：仅在开关开启时显示（关闭时无效，隐藏避免误导） */}
+        {fullTextEnabled && (
+          <>
+            <div className="mt-4">
+              <button
+                onClick={() => setFullTextDropdownOpen(!fullTextDropdownOpen)}
+                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-bg-raised border border-border-main hover:border-brand-green/40 transition-colors cursor-pointer"
+              >
+                <span className="flex items-center gap-2 text-sm text-text-main">⛔ 忽略以下公众号（不抓取全文）</span>
+                <span className="flex items-center gap-2 text-xs text-text-muted">
+                  {ignoredGhIds.length > 0 && <span className="text-amber-500 font-medium">已忽略 {ignoredGhIds.length} 个</span>}
+                  <span className={`transition-transform ${fullTextDropdownOpen ? 'rotate-180' : ''}`}>▾</span>
+                </span>
+              </button>
 
           {fullTextDropdownOpen && (
             <div className="mt-2 rounded-lg border border-border-main overflow-hidden">
@@ -1949,11 +1951,12 @@ export default function OATab() {
             </div>
           )}
         </div>
+          </>
+        )}
 
-        {/* 保存 + 状态：仅在设置发生变更时显示，避免与其他配置混用 */}
-        {(() => {
-          const changed = fullTextEnabled !== savedFullTextEnabled
-            || ignoredGhIds.length !== savedIgnoredGhIds.length
+        {/* 保存按钮：仅在忽略列表变更时显示（开关本身已自动保存） */}
+        {fullTextEnabled && (() => {
+          const changed = ignoredGhIds.length !== savedIgnoredGhIds.length
             || ignoredGhIds.some(id => !savedIgnoredGhIds.includes(id))
             || savedIgnoredGhIds.some(id => !ignoredGhIds.includes(id))
           if (!changed) return null
