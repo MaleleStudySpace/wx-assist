@@ -179,7 +179,7 @@ function KeywordAlertCard({ onTabChange }) {
                     transition={{ duration: 0.25, delay: i * 0.04 }}
                     className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl bg-bg-raised/40 dark:bg-bg-raised/20 border border-border-main/30 hover:border-border-main/60 transition-colors"
                   >
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-amber-500/[0.08] text-amber-500 dark:bg-amber-500/[0.10]">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-brand-green/[0.08] text-brand-green dark:bg-brand-green/[0.12]">
                       <Bell size={14} weight="fill" />
                     </div>
                     <div className="flex-1 min-w-0">
@@ -193,7 +193,7 @@ function KeywordAlertCard({ onTabChange }) {
                         )}
                       </div>
                     </div>
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${mg.enabled !== false ? 'bg-amber-500' : 'bg-text-muted/30'}`} />
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${mg.enabled !== false ? 'bg-brand-green' : 'bg-text-muted/30'}`} />
                   </motion.div>
                 ))}
               </div>

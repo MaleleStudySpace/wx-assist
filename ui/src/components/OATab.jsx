@@ -1149,8 +1149,6 @@ export default function OATab() {
   const [fullTextDropdownOpen, setFullTextDropdownOpen] = useState(false)
   const [fullTextSearch, setFullTextSearch] = useState('')
   const [fullTextSaving, setFullTextSaving] = useState(false)
-  const [fullTextSaved, setFullTextSaved] = useState(false)
-  const [fullTextError, setFullTextError] = useState('')
 
   // "已关注公众号" collapse
   const [showAllAccounts, setShowAllAccounts] = useState(false)
@@ -1184,6 +1182,13 @@ export default function OATab() {
 
   // WebSocket for digest + monitor push results
   const [monitorToast, setMonitorToast] = useState(null)
+  // 保存/删除等本地操作的 toast 反馈
+  const [actionToast, setActionToast] = useState(null)
+
+  function showActionToast(success, message) {
+    setActionToast({ success, message })
+    setTimeout(() => setActionToast(null), success ? 1500 : 2500)
+  }
 
   useEffect(() => {
     const handleMessage = (e) => {
@@ -1283,11 +1288,19 @@ export default function OATab() {
 
   async function handleDeleteGroup(id) {
     if (!confirm('确定删除此分组？')) return
+    const target = groups.find(g => g.id === id)
     try {
       const res = await fetch(`${API_BASE}/api/oa/groups/${id}`, { method: 'DELETE' })
       const result = await res.json()
-      if (result.ok) loadData()
-    } catch {}
+      if (result.ok) {
+        loadData()
+        showActionToast(true, `✓ 已删除：${target?.name || id}`)
+      } else {
+        showActionToast(false, `⚠ 删除失败：${result.error || '未知错误'}`)
+      }
+    } catch (e) {
+      showActionToast(false, `⚠ 删除失败：${e.message || '网络错误'}`)
+    }
   }
 
   async function handleRunDigest(groupId) {
@@ -1350,6 +1363,36 @@ export default function OATab() {
   }
 
   // ── 公众号缓存全文设置（保存后热更新，只影响全文抓取线程）──
+  // 全文开关走自动保存（与关注组开关一致），忽略列表保留批量保存
+  async function handleToggleFullText() {
+    const nextEnabled = !fullTextEnabled
+    setFullTextEnabled(nextEnabled)
+    try {
+      const res = await fetch(`${API_BASE}/api/assistant/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          oa_full_text_fetch: {
+            enabled: nextEnabled,
+            ignore_gh_ids: ignoredGhIds,
+          },
+        }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        setSavedFullTextEnabled(nextEnabled)
+        showActionToast(true, nextEnabled ? '✓ 全文缓存已启用' : '✓ 全文缓存已停用')
+      } else {
+        // 回滚
+        setFullTextEnabled(!nextEnabled)
+        showActionToast(false, `⚠ 保存失败：${data.error || '未知错误'}`)
+      }
+    } catch (e) {
+      setFullTextEnabled(!nextEnabled)
+      showActionToast(false, `⚠ 保存失败：${e.message || '网络错误'}`)
+    }
+  }
+
   async function handleSaveFullText() {
     setFullTextSaving(true)
     try {
@@ -1365,16 +1408,14 @@ export default function OATab() {
       })
       const data = await res.json()
       if (data.ok) {
-        setFullTextSaved(true)
         // 同步基准值：保存成功后若无新变更，保存按钮自动隐藏
-        setSavedFullTextEnabled(fullTextEnabled)
         setSavedIgnoredGhIds([...ignoredGhIds])
-        setTimeout(() => setFullTextSaved(false), 1800)
+        showActionToast(true, '✓ 已保存忽略列表')
       } else {
-        setFullTextError(data.error || '保存失败')
+        showActionToast(false, `⚠ 保存失败：${data.error || '未知错误'}`)
       }
-    } catch {
-      setFullTextError('保存失败')
+    } catch (e) {
+      showActionToast(false, `⚠ 保存失败：${e.message || '网络错误'}`)
     }
     setFullTextSaving(false)
   }
@@ -1423,15 +1464,27 @@ export default function OATab() {
 
   async function handleDeleteMonitor(id) {
     if (!confirm('确定删除此关注？')) return
+    const target = monitorGroups.find(g => g.id === id)
     const updated = monitorGroups.filter(g => g.id !== id)
-    await saveMonitorConfig(updated)
+    const ok = await saveMonitorConfig(updated)
+    if (ok) {
+      showActionToast(true, `✓ 已删除：${target?.name || id}`)
+    } else {
+      showActionToast(false, '⚠ 删除失败，请重试')
+    }
   }
 
   async function handleToggleMonitor(group) {
     const updated = monitorGroups.map(g =>
       g.id === group.id ? { ...g, enabled: !g.enabled } : g
     )
-    await saveMonitorConfig(updated)
+    const ok = await saveMonitorConfig(updated)
+    if (ok) {
+      const newEnabled = !group.enabled
+      showActionToast(true, newEnabled ? `✓ 已启用：${group.name || group.id}` : `✓ 已停用：${group.name || group.id}`)
+    } else {
+      showActionToast(false, '⚠ 操作失败，请重试')
+    }
   }
 
   return (
@@ -1814,7 +1867,7 @@ export default function OATab() {
                 </div>
               </div>
               <button
-                onClick={() => setFullTextEnabled(!fullTextEnabled)}
+                onClick={handleToggleFullText}
                 className={`w-11 h-6 rounded-full relative transition-colors cursor-pointer shrink-0 ${fullTextEnabled ? 'bg-brand-green' : 'bg-bg-raised border border-border-main'}`}
               >
                 <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${fullTextEnabled ? 'left-[22px]' : 'left-0.5'}`} />
@@ -1913,8 +1966,6 @@ export default function OATab() {
               >
                 {fullTextSaving ? '保存中...' : '保存设置'}
               </button>
-              {fullTextSaved && <span className="text-xs text-brand-green">✓ 已保存，全文抓取设置已生效</span>}
-              {fullTextError && <span className="text-xs text-status-error">{fullTextError}</span>}
             </div>
           )
         })()}
@@ -1950,6 +2001,22 @@ export default function OATab() {
                 </div>
               : `⚠ 推送失败: ${monitorToast.group_name}${monitorToast.error ? ' — ' + monitorToast.error : ''}`
           }
+        </div>
+      )}
+
+      {/* Action toast (本地保存/删除等操作的悬浮反馈，右下角，与群聊助手风格一致) */}
+      {actionToast && (
+        <div className={`fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg transition-all
+          ${actionToast.success
+            ? 'bg-brand-green/90 text-white'
+            : 'bg-status-error/90 text-white'
+          }`}>
+          {actionToast.success ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z"/></svg>
+          )}
+          {actionToast.message}
         </div>
       )}
     </motion.div>
