@@ -227,7 +227,6 @@ function DashboardTaskStats({ url, label }) {
 
   const total = data.length || data.total || 0
   const enabled = data.filter ? data.filter(t => t.enabled !== false).length : 0
-  const hasErrors = data.filter ? data.filter(t => (t.error_count || 0) > 0).length : 0
 
   return (
     <div className="flex items-center gap-2">
@@ -235,9 +234,6 @@ function DashboardTaskStats({ url, label }) {
       <span className="text-xs text-text-muted">{label}</span>
       {enabled > 0 && (
         <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-brand-green/15 text-brand-green">{enabled} 启用</span>
-      )}
-      {hasErrors > 0 && (
-        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#d45656]/15 text-[#d45656]">{hasErrors} 失败</span>
       )}
     </div>
   )
@@ -280,9 +276,6 @@ function CronTasksCard() {
                 </div>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                {(task.error_count || 0) > 0 && (
-                  <span className="text-[10px] font-mono text-[#d45656]">{task.error_count}❌</span>
-                )}
                 <span className={`w-1.5 h-1.5 rounded-full ${task.enabled !== false ? 'bg-brand-green' : 'bg-text-muted/30'}`} />
               </div>
             </div>
