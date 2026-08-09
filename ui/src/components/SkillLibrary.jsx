@@ -12,7 +12,7 @@ function SkillGuideCard({ embedded }) {
         <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto">
 {`data/skills/{skill-name}/
 ├── SKILL.md         ← 元数据（YAML frontmatter）
-├── scripts/         ← script 类型脚本目录（.py / .sh / .js）
+├── scripts/         ← script 类型脚本目录（仅 .py）
 └── examples/        ← 可选：使用示例`}
         </div>
       </div>
@@ -51,6 +51,73 @@ args:
             <span className="shrink-0 mt-0.5 px-2.5 py-1 rounded bg-[#a78bfa]/20 text-[#a78bfa] font-mono text-[12px] font-semibold">ai</span>
             <span className="text-sm text-text-secondary leading-relaxed">AI 根据 SKILL.md 中 <code className="font-mono px-1.5 py-0.5 rounded bg-bg-raised text-sm">prompt</code> 字段的指令直接生成内容，不走子进程。</span>
           </div>
+        </div>
+      </div>
+
+      {/* 仅支持 Python */}
+      <div className="mb-6">
+        <div className="bg-[#d45656]/10 border border-[#d45656]/40 rounded-xl p-4">
+          <p className="text-sm font-semibold text-[#d45656] mb-2">⚠️ script 类型仅支持 Python</p>
+          <p className="text-xs text-text-secondary leading-relaxed mb-2">
+            引擎用 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised text-xs">sys.executable</code> 启动子进程执行
+            <code className="font-mono px-1 py-0.5 rounded bg-bg-raised text-xs">scripts/{`{command}`}</code>，
+            <strong className="text-text-main">.sh / .js / .ps1 不会被识别</strong>，
+            会直接 <code className="font-mono px-1 py-0.5 rounded bg-bg-raised text-xs">SyntaxError</code>。
+          </p>
+          <p className="text-xs text-text-secondary leading-relaxed mb-2">
+            <strong className="text-text-main">这是永久设计，不会扩展支持其他语言。</strong>
+            原因：sys.executable 在 Windows / macOS / Linux 都指向当前 Python 解释器，跨平台零配置；
+            其他语言要么依赖外部 runtime（git-bash / node），要么平台独有（PowerShell），引入大量兼容负担。
+          </p>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            需要 shell / node 脚本？<strong className="text-text-main">用系统自带调度</strong>——
+            Windows 任务计划程序 / macOS launchd / Linux crontab，
+            摘星 skill 体系专注 Python 生态。
+          </p>
+        </div>
+      </div>
+
+      {/* 参数传递 */}
+      <div className="mb-6">
+        <p className="text-text-main font-semibold mb-3 text-sm">参数如何传给脚本</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto mb-3">
+{`# SKILL.md 里定义的参数:
+args:
+  location:
+    type: string
+    required: true
+  days:
+    type: integer
+    default: 2
+  verbose:
+    type: boolean
+    default: false
+
+# 调用时传 args = {location: "北京", days: 3, verbose: true}
+# 引擎自动拼成 CLI 参数:
+python scripts/weather.py --location 北京 --days 3 --verbose
+
+# 类型 → CLI 映射规则:
+#   string/integer/number → --key <值>
+#   True（boolean）        → --key（只传开关，无值）
+#   False（boolean）       → 整个 --key 不传
+#   数组/对象              → str() 后传（JSON 字符串，自己 parse）`}
+        </div>
+        <p className="text-xs text-text-muted/80 mb-2">在脚本里这样接（推荐用 argparse）：</p>
+        <div className="bg-[#0a0a0e] border border-border-main rounded-xl p-5 font-mono text-sm leading-loose whitespace-pre overflow-x-auto">
+{`import argparse, sys
+
+p = argparse.ArgumentParser()
+p.add_argument("--location", required=True)
+p.add_argument("--days", type=int, default=2)
+p.add_argument("--verbose", action="store_true")
+args = p.parse_args()
+
+print(f"{args.location} 预报 {args.days} 天（verbose={args.verbose}）")
+sys.exit(0)
+
+# 不推荐 sys.argv 手撕（边界多），argparse 是标准做法
+# 输出想安静就 print("[SILENT]"); sys.exit(0)`}
         </div>
       </div>
 
