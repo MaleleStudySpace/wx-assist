@@ -274,10 +274,10 @@ class RAGEngine:
         try:
             groups = tracked_groups
             if not groups:
-                # 查询所有群
+                # 查询所有会话（messages 表存的就是全部消息，无需排除任何前缀）
                 try:
                     rows = db_conn.execute(
-                        "SELECT DISTINCT chat_id FROM messages WHERE chat_id NOT LIKE 'ilink_%'"
+                        "SELECT DISTINCT chat_id FROM messages"
                     ).fetchall()
                     groups = [r["chat_id"] for r in rows] if rows else []
                 except Exception as e:
