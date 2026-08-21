@@ -682,15 +682,14 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
 
 // ── OA Monitor Group Card ────────────────────────────────────────────
 
-function MonitorGroupCard({ group, accounts, onEdit, onDelete, onToggle }) {
+function MonitorGroupCard({ group, accounts, onEdit, onDelete, onToggle, onViewAccount }) {
   const [expanded, setExpanded] = useState(false)
 
-  const accountNames = (group.accounts || [])
-    .filter(gh => accounts?.some(a => a.username === gh))
-    .map(gh => {
-      const acc = accounts?.find(a => a.username === gh)
-      return acc ? acc.nickname : gh
-    })
+  // 保留 username + nickname：username 用于调 /api/oa/articles，nickname 用于面板标题
+  const accountChips = (group.accounts || []).map(gh => {
+    const acc = accounts?.find(a => a.username === gh)
+    return { username: gh, nickname: acc?.nickname || gh }
+  })
 
   return (
     <div className={`border rounded-xl overflow-hidden bg-bg-card transition-colors
@@ -703,7 +702,7 @@ function MonitorGroupCard({ group, accounts, onEdit, onDelete, onToggle }) {
             <p className="text-sm font-medium text-text-main truncate">{group.name || '未命名关注'}</p>
           </div>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-sm text-text-muted">{accountNames.length} 个公众号</span>
+            <span className="text-sm text-text-muted">{accountChips.length} 个公众号</span>
             {group.push_target === 'ilink' && (
               <>
                 <span className="text-sm text-text-muted">·</span>
@@ -742,16 +741,20 @@ function MonitorGroupCard({ group, accounts, onEdit, onDelete, onToggle }) {
         </div>
       </div>
 
-      {expanded && accountNames.length > 0 && (
+      {expanded && accountChips.length > 0 && (
         <div className="px-3.5 pb-3.5 pt-1 border-t border-border-main">
           <div className="flex flex-wrap gap-1.5 mt-2">
-            {accountNames.map((name, i) => (
-              <span
-                key={i}
-                className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/15"
+            {accountChips.map(({ username, nickname }) => (
+              <button
+                key={username}
+                type="button"
+                title="点击查看历史文章"
+                onClick={() => onViewAccount?.(username, nickname)}
+                className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/15
+                  hover:bg-amber-500/20 hover:border-amber-500/30 transition-colors cursor-pointer"
               >
-                {name}
-              </span>
+                {nickname}
+              </button>
             ))}
           </div>
         </div>
@@ -1757,6 +1760,7 @@ export default function OATab() {
                 onEdit={(g) => { setEditingMonitor(g); setShowMonitorEditor(true) }}
                 onDelete={handleDeleteMonitor}
                 onToggle={handleToggleMonitor}
+                onViewAccount={handleViewAccount}
               />
             ))}
           </div>
