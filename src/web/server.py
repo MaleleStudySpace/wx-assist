@@ -1346,6 +1346,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          "/api/wechat-data-dir/detect",
                          "/api/agent/test",
                          "/api/skills/sample",
+                         "/api/platforms",
                          "/webhook/feishu") or (
                              self.path.startswith("/api/assistant/notifications/")
                              and (self.path.endswith("/ack") or self.path.endswith("/ignore"))
@@ -2053,6 +2054,45 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 })
             return
 
+        # ── API: platform delivery overview ────────────────────────
+        if self.path == "/api/platforms":
+            try:
+                from src.im.registry import get_global_registry
+                from src.im.config_schema import load_platforms_config
+                configs = {item.name: item for item in load_platforms_config()}
+                registry = get_global_registry()
+                health = registry.get_health() if registry else {}
+                platforms = [
+                    {
+                        "name": "wechat",
+                        "label": "微信",
+                        "enabled": True,
+                        "configurable": True,
+                        "status": {
+                            "ok": bool(_status.wechat_online),
+                            "detail": "已连接" if _status.wechat_online else "未连接",
+                        },
+                    },
+                    {
+                        "name": "qqbot",
+                        "label": "QQ",
+                        "enabled": bool(configs.get("qqbot", None) and configs["qqbot"].enabled),
+                        "configurable": True,
+                        "status": health.get("qqbot", {"ok": False, "detail": "未配置"}),
+                    },
+                    {
+                        "name": "feishu",
+                        "label": "飞书",
+                        "enabled": bool(configs.get("feishu", None) and configs["feishu"].enabled),
+                        "configurable": True,
+                        "status": health.get("feishu", {"ok": False, "detail": "未配置"}),
+                    },
+                ]
+                self.send_json({"ok": True, "platforms": platforms})
+            except Exception as exc:
+                logger.warning("[platforms] status failed: %s", exc)
+            return
+
         # ── API: Get status ───────────────────────────────────────────
         if self.path == "/api/status":
             self.send_response(200)
@@ -2060,6 +2100,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(_status.snapshot(), ensure_ascii=False).encode())
+            return
+
             return
 
         # ── API: Get logs ────────────────────────────────────────────

@@ -732,7 +732,7 @@ export default function AssistantPanel() {
           title="关键词即时提醒"
           accent="#f59e0b"
           icon={Lightning}
-          subtitle="检测到关键词时即时提醒，可推送到微信"
+          subtitle="检测到关键词时即时提醒，可推送到 IM"
         />
         <div className={`bg-bg-card rounded-2xl border border-border-main shadow-sm overflow-hidden transition-opacity duration-300 ${!assistantOn ? 'opacity-40' : ''}`}>
           <div className="p-6 space-y-3">
@@ -910,7 +910,7 @@ export default function AssistantPanel() {
           title="定时群摘要"
           accent="var(--status-warn)"
           icon={Clock}
-          subtitle="定时生成群聊摘要，可推送到微信"
+          subtitle="定时生成群聊摘要，可推送到 IM"
         />
         <div className={`bg-bg-card rounded-2xl border border-border-main shadow-sm overflow-hidden transition-opacity duration-300 ${!assistantOn ? 'opacity-40' : ''}`}>
           <div className="p-6 space-y-3">
@@ -1324,8 +1324,8 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
               {/* Push to WeChat toggle */}
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm text-text-main/80 font-medium">推送到微信</p>
-                  <p className="text-xs text-text-muted mt-0.5">开启后关键词命中时自动推送到微信私聊（需先绑定 iLink Bot）</p>
+                  <p className="text-sm text-text-main/80 font-medium">推送方式</p>
+                  <p className="text-xs text-text-muted mt-0.5">开启后自动推送到已配置的 IM 平台（请在「系统配置 → 消息推送」中完成配置）</p>
                 </div>
                 <Toggle
                   enabled={values.push_target === 'ilink'}
@@ -1723,8 +1723,8 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
               {/* Push to WeChat toggle — 加深标签 */}
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm text-text-main/80 font-medium">推送到微信</p>
-                  <p className="text-xs text-text-muted mt-0.5">开启后摘要结果自动推送到微信私聊（需先绑定 iLink Bot）</p>
+                  <p className="text-sm text-text-main/80 font-medium">推送方式</p>
+                  <p className="text-xs text-text-muted mt-0.5">开启后摘要结果自动推送到已配置的 IM 平台（请在「系统配置 → 消息推送」中完成配置）</p>
                 </div>
                 <Toggle
                   enabled={values.push_target === 'ilink'}
@@ -1890,8 +1890,8 @@ function AlertGroupEditor({ draft, groups, error, onDraftChange, onSave, onCance
       {/* Push to WeChat toggle */}
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm text-text-main/80 font-medium">推送到微信</p>
-          <p className="text-xs text-text-muted mt-0.5">开启后关键词命中时自动推送到微信私聊（需先绑定 iLink Bot）</p>
+          <p className="text-sm text-text-main/80 font-medium">推送方式</p>
+          <p className="text-xs text-text-muted mt-0.5">开启后自动推送到已配置的 IM 平台（请在「系统配置 → 消息推送」中完成配置）</p>
         </div>
         <Toggle enabled={draft.push_target === 'ilink'} onChange={v => onDraftChange({ ...draft, push_target: v ? 'ilink' : '' })} />
       </div>
@@ -1983,11 +1983,11 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
         </div>
         <Toggle enabled={draft.unread_only || false} onChange={v => onDraftChange({ ...draft, unread_only: v })} />
       </div>
-      {/* 推送到微信 */}
+      {/* 推送方式 */}
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm text-text-main/80 font-medium">推送到微信</p>
-          <p className="text-xs text-text-muted mt-0.5">开启后摘要结果自动推送到微信私聊（需先绑定 iLink Bot）</p>
+          <p className="text-sm text-text-main/80 font-medium">推送方式</p>
+          <p className="text-xs text-text-muted mt-0.5">开启后摘要结果自动推送到已配置的 IM 平台（请在「系统配置 → 消息推送」中完成配置）</p>
         </div>
         <Toggle enabled={draft.push_target === 'ilink'} onChange={v => onDraftChange({ ...draft, push_target: v ? 'ilink' : '' })} />
       </div>

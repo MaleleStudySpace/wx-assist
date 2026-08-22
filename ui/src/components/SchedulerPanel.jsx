@@ -474,8 +474,8 @@ function TaskForm({ skills, initial, onSave, onCancel, onRefresh }) {
           <label className="block text-xs text-text-muted mb-1 text-xs">投递方式</label>
           <div className="flex items-center justify-between py-2.5">
             <div className="flex flex-col gap-0.5">
-              <span className="text-sm text-text-main font-medium">推送到微信</span>
-              <span className="text-[11px] text-text-muted/60">执行结果通过 iLink 推送</span>
+              <span className="text-sm text-text-main font-medium">推送方式</span>
+              <span className="text-[11px] text-text-muted/60">执行结果通过已配置的 IM 平台推送</span>
             </div>
             <Toggle enabled={pushEnabled} onChange={setPushEnabled} />
           </div>

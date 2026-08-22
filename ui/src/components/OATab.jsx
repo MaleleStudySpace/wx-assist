@@ -639,8 +639,8 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
             <div className="flex items-center gap-2.5">
               <Export size={18} className={pushTarget ? 'text-brand-green' : 'text-text-muted'} />
               <div>
-                <p className="text-sm font-medium text-text-main">推送到微信</p>
-                <p className="text-sm text-text-muted">摘要自动推送至私聊</p>
+                <p className="text-sm font-medium text-text-main">推送方式</p>
+                <p className="text-sm text-text-muted">摘要自动推送至已配置的 IM 平台</p>
               </div>
             </div>
             <Toggle enabled={pushTarget} onChange={setPushTarget} />
@@ -937,8 +937,8 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
         <div className="flex items-center gap-2.5">
           <Export size={18} className={pushTarget ? 'text-brand-green' : 'text-text-muted'} />
           <div>
-            <p className="text-sm font-medium text-text-main">推送到微信</p>
-            <p className="text-sm text-text-muted">新文章即时推送至私聊</p>
+            <p className="text-sm font-medium text-text-main">推送方式</p>
+            <p className="text-sm text-text-muted">新文章即时推送至已配置的 IM 平台</p>
           </div>
         </div>
         <Toggle enabled={pushTarget} onChange={setPushTarget} />

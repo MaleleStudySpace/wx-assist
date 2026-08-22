@@ -797,14 +797,14 @@ function AgentPage() {
                     </div>
                     <div className="flex items-start gap-2 text-[14px]">
                       <div className="w-[18px] h-[18px] rounded-full flex items-center justify-center shrink-0 mt-0.5 text-[9px] font-bold bg-[#07c160]/15 border border-[#07c160]/30 text-[#07c160]">{'\u{2713}'}</div>
-                      <div><div className="font-semibold">推送到微信</div><div className="text-[#07c160] text-[13px]">{'\u{2705}'} 已推送</div></div>
+                      <div><div className="font-semibold">推送方式</div><div className="text-[#07c160] text-[13px]">{'\u{2705}'} 已推送</div></div>
                     </div>
                   </div>
                   <hr className="my-2 border-t border-dashed border-black/[0.08]" />
                   <span>全部完成 {'\u{1F64C}'}</span>
                   <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-[#07c160]/10 text-[#07c160] mt-2">
                     <svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor"><path d="M128 24a104 104 0 1 0 104 104A104.2 104.2 0 0 0 128 24Zm49.5 85.8-58.6 56a8.1 8.1 0 0 1-5.6 2.2 7.7 7.7 0 0 1-5.5-2.2l-29.3-28a8 8 0 1 1 11-11.6l23.8 22.7 53.2-50.7a8 8 0 0 1 11 11.6Z" /></svg>
-                    已推送微信
+                    已推送至 IM
                   </div>
                 </div>
                 <div className="bg-white border border-black/[0.06] rounded-[10px] overflow-hidden shadow-[0_2px_4px_rgba(0,0,0,0.05)]">
@@ -836,7 +836,7 @@ function AgentPage() {
                   {'\u{1F514}'} 搞定！已为你配置：<br /><br />
                   公众号：<strong style={{ color: '#07c160' }}>36氪</strong><br />
                   触发：有新文章发布时<br />
-                  动作：即时推送 AI 速读摘要到微信<br /><br />
+                  动作：即时推送 AI 速读摘要到 IM<br /><br />
                   下次 36氪 发文，你会第一时间收到通知 {'\u{2728}'}
                   <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-[#07c160]/10 text-[#07c160] mt-2">
                     <svg width="12" height="12" viewBox="0 0 256 256" fill="currentColor"><path d="M128 24a104 104 0 1 0 104 104A104.2 104.2 0 0 0 128 24Zm49.5 85.8-58.6 56a8.1 8.1 0 0 1-5.6 2.2 7.7 7.7 0 0 1-5.5-2.2l-29.3-28a8 8 0 1 1 11-11.6l23.8 22.7 53.2-50.7a8 8 0 0 1 11 11.6Z" /></svg>
@@ -875,7 +875,7 @@ function AgentPage() {
                     </div>
                   </div>
                   <div className="mt-3 pt-2 border-t border-dashed border-black/[0.06]">
-                    <span style={{ color: '#07c160', fontWeight: 600 }}>{'\u{1F4CC}'} 已推送微信 · 查看完整内容</span>
+                    <span style={{ color: '#07c160', fontWeight: 600 }}>{'\u{1F4CC}'} 已推送至 IM · 查看完整内容</span>
                   </div>
                 </div>
               </div>

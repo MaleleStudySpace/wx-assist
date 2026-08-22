@@ -413,7 +413,7 @@ function FeaturesSection({ form, update }) {
   )
 }
 
-const sectionTitles = { ai: 'AI 后端配置', identity: '聊天范围', data: '数据配置', features: '功能开关', push: '微信推送', sandbox: 'AI 调试台' }
+const sectionTitles = { ai: 'AI 后端配置', identity: '聊天范围', data: '数据配置', features: '功能开关', push: '消息推送', sandbox: 'AI 调试台' }
 const sectionAccents = { ai: 'var(--brand-green)', identity: 'var(--status-info)', data: 'var(--brand-green)', features: 'var(--status-warn)', push: 'var(--brand-green)', sandbox: 'var(--color-purple-500, #8b5cf6)' }
 
 // ── Credentials Section (连接凭证配置) ─────────────────────────────────
@@ -2093,7 +2093,7 @@ function PushSection() {
         <div className="space-y-2 text-xs text-text-muted leading-relaxed">
           <p>1. 在此页面绑定 iLink Bot（扫描二维码）</p>
           <p>2. 在微信中给 Bot 发一条消息激活</p>
-          <p>3. 在「群聊助手」或「公众号助手」中开启「推送到微信」</p>
+          <p>3. 在「群聊助手」或「公众号助手」中选择推送方式</p>
           <p>4. 定时摘要触发后，内容会自动推送到你的微信私聊</p>
           <p className="text-text-muted mt-3 border-t border-border-main/30 pt-3">
             iLink 推送是独立通道，不影响现有的微信窗口操控功能。消息限制 4000 字符，超出自动截断。
@@ -2107,6 +2107,76 @@ function PushSection() {
   )
 }
 
+
+function PushPlatformOverview({ platforms, onSelect }) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h4 className="text-[15px] font-semibold text-text-main">多平台调度</h4>
+        <p className="text-xs text-text-muted mt-1">统一查看和管理各 IM 平台的连接状态。微信助手名称和微信功能保持不变。</p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {platforms.map(platform => {
+          const ok = platform.status?.ok
+          return (
+            <button key={platform.name} type="button" onClick={() => onSelect(platform.name)}
+              className="text-left rounded-xl border border-border-main p-4 hover:border-brand-green/50 hover:shadow-sm transition-all cursor-pointer">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-semibold text-text-main">{platform.label}</span>
+                <span className={`w-2.5 h-2.5 rounded-full ${ok ? 'bg-status-ok' : 'bg-status-warn'}`} />
+              </div>
+              <p className="text-xs text-text-muted mt-2">{platform.status?.detail || '未配置'}</p>
+              <p className="text-xs text-brand-green-hover mt-4">{platform.configurable ? '进入配置 →' : '暂未支持'}</p>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function PushPlatformView() {
+  const [tab, setTab] = useState('overview')
+  const [platforms, setPlatforms] = useState([])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${API_BASE}/api/platforms`)
+      .then(res => res.json())
+      .then(data => { if (!cancelled) setPlatforms(data.platforms || []) })
+      .catch(() => { if (!cancelled) setPlatforms([]) })
+    return () => { cancelled = true }
+  }, [])
+
+  const tabs = [
+    { id: 'overview', label: '多平台调度' },
+    { id: 'wechat', label: '微信' },
+    { id: 'qqbot', label: 'QQ' },
+    { id: 'feishu', label: '飞书' },
+  ]
+
+  return (
+    <div>
+      <div className="flex items-center gap-1 border-b border-border-main mb-6 overflow-x-auto">
+        {tabs.map(item => (
+          <button key={item.id} type="button" onClick={() => setTab(item.id)}
+            className={`px-4 py-2.5 text-sm whitespace-nowrap border-b-2 transition-colors ${tab === item.id ? 'border-brand-green text-brand-green-hover font-semibold' : 'border-transparent text-text-muted hover:text-text-main'}`}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'overview' && <PushPlatformOverview platforms={platforms} onSelect={setTab} />}
+      {tab === 'wechat' && <PushSection />}
+      {tab !== 'overview' && tab !== 'wechat' && (
+        <div className="rounded-xl border border-border-main p-6 space-y-2">
+          <h4 className="font-semibold text-text-main">{tab === 'qqbot' ? 'QQ' : '飞书'} 配置</h4>
+          <p className="text-sm text-text-muted">请先在平台配置文件中完成凭证配置，连接状态会在此页显示。</p>
+          <p className="text-xs text-text-muted">当前状态：{platforms.find(p => p.name === tab)?.status?.detail || '未配置'}</p>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function ConfigPanel({ activeSection, onNavigate }) {
   const [saved, setSaved] = useState(false)
@@ -2348,7 +2418,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
                   </div>
                 )}
                 {activeSection === 'features' && <FeaturesSection form={form} update={update} />}
-                {activeSection === 'push' && <PushSection />}
+                {activeSection === 'push' && <PushPlatformView />}
               </div>
             </div>
           </motion.div>
