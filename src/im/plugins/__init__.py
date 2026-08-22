@@ -30,4 +30,11 @@ def register_plugin_push_channel(name: str, channel: Any) -> None:
 
 
 def get_plugin_push_channel(name: str) -> Any:
-    return _PUSH_CHANNELS.get(name)
+    """Return a registered channel while preserving the legacy iLink value."""
+    channel = _PUSH_CHANNELS.get(name)
+    if channel is not None:
+        return channel
+    if name == "ilink":
+        from .wechat.push import get_wechat_push_channel
+        return get_wechat_push_channel()
+    return None

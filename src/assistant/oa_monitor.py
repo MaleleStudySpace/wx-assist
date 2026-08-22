@@ -549,15 +549,15 @@ class OAMonitorEngine:
             (push_ok, push_err): 推送是否成功 + 错误信息（供调用方完结任务中心任务）。
         """
         try:
-            from src.wechat.ilink_push import get_ilink_push, format_for_wechat
+            from src.im.plugins import get_plugin_push_channel
             import json as _json
-            ilink = get_ilink_push()
-            if ilink.is_available():
+            channel = get_plugin_push_channel("ilink")
+            if channel.is_available():
                 # Extract display text from JSON content (not raw JSON)
                 push_data = _json.loads(content) if isinstance(content, str) else content
                 push_text = push_data.get("display", content)
-                push_msg = format_for_wechat(title, push_text)
-                result = ilink.send_message(push_msg)
+                push_msg = channel.format_message(title, push_text)
+                result = channel.send_message(push_msg)
                 push_ok = result.get("success", False)
                 push_err = result.get("error", "") if not push_ok else ""
                 self._outbox.update_push_result(

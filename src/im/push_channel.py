@@ -36,6 +36,12 @@ class PushChannel(ABC):
                      target: Optional[str] = None) -> dict:
         """Send text and return ``success`` plus optional ``error``."""
 
+    def format_message(self, title: str, content: str) -> str:
+        """Format a title/body pair for this platform; plain text by default."""
+        if not title:
+            return content
+        return f"{title}\n\n{content}" if content else title
+
     @abstractmethod
     def get_status(self) -> dict:
         """Return a serializable status snapshot for the Web UI."""

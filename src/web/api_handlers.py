@@ -4936,14 +4936,14 @@ def _push_oa_digest(result, group, config):
 
     try:
         if group.push_target == "ilink":
-            from src.wechat.ilink_push import get_ilink_push, format_for_wechat
-            ilink = get_ilink_push()
-            if ilink.is_available():
+            from src.im.plugins import get_plugin_push_channel
+            channel = get_plugin_push_channel("ilink")
+            if channel.is_available():
                 title = f"📰 {group.name} · 公众号摘要"
                 ac = result.get("articles_count", 0)
                 content = f"📄 {ac} 篇文章\n\n{result['digest_text']}"
-                msg = format_for_wechat(title, content)
-                push_result = ilink.send_message(msg)
+                msg = channel.format_message(title, content)
+                push_result = channel.send_message(msg)
                 push_ok = push_result.get("success", False)
                 push_err = push_result.get("error", "") if not push_ok else ""
                 if oa_nid:
@@ -5797,9 +5797,9 @@ def _do_task_retry_push(task: dict) -> dict:
         return {"success": False, "error": "任务无可用推送内容（result 为空且无 outbox 关联）"}
     title, content = payload
 
-    from src.wechat.ilink_push import get_ilink_push, format_for_wechat
-    ilink = get_ilink_push()
-    if not ilink.is_available():
+    from src.im.plugins import get_plugin_push_channel
+    channel = get_plugin_push_channel("ilink")
+    if not channel.is_available():
         return {"success": False, "error": "iLink 未绑定，无法推送"}
 
     # outbox content 是 JSON（含 display 展示文本）；纯文本直接推送
@@ -5810,8 +5810,8 @@ def _do_task_retry_push(task: dict) -> dict:
             push_text = _d.get("display", content)
         except Exception:
             push_text = content
-    msg = format_for_wechat(title, push_text)
-    return ilink.send_message(msg)
+    msg = channel.format_message(title, push_text)
+    return channel.send_message(msg)
 
 
 def _task_retry_after(tc, task: dict, ok: bool, err: str) -> None:

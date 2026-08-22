@@ -270,11 +270,11 @@ class CronScheduler:
             push_cfg = job.get("push", {})
             push_status = "skipped"
             if push_cfg.get("target") == "ilink":
-                from src.wechat.ilink_push import get_ilink_push, format_for_wechat
-                ilink = get_ilink_push()
-                if ilink and ilink.is_available():
-                    msg = format_for_wechat(f"⏰ {job_name}", text)
-                    result = ilink.send_message(msg)
+                from src.im.plugins import get_plugin_push_channel
+                channel = get_plugin_push_channel("ilink")
+                if channel and channel.is_available():
+                    msg = channel.format_message(f"⏰ {job_name}", text)
+                    result = channel.send_message(msg)
                     ok = result.get("success", False)
                     err = result.get("error", "") if not ok else ""
                     self._outbox.update_push_result(

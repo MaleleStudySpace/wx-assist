@@ -409,12 +409,12 @@ class ILinkReceiver:
                 return
 
             if reply and reply.strip():
-                from .ilink_push import get_ilink_push
-                push = get_ilink_push()
+                from src.im.plugins.wechat.push import get_wechat_push_channel
+                push = get_wechat_push_channel()
                 if push.is_available():
                     push.send_message(reply)
                 else:
-                    logger.warning("[iLink] Cannot reply: iLink not bound")
+                    logger.warning("[iLink] Cannot reply: WeChat push channel not bound")
             else:
                 logger.debug("[iLink] No reply to send")
 

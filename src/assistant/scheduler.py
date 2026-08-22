@@ -616,14 +616,14 @@ class DigestScheduler:
         # 7. Push to WeChat via iLink (if configured)
         if dg.push_target == "ilink":
             try:
-                from src.wechat.ilink_push import get_ilink_push, format_for_wechat
+                from src.im.plugins import get_plugin_push_channel
                 import json as _json
-                ilink = get_ilink_push()
-                if ilink.is_available():
+                channel = get_plugin_push_channel("ilink")
+                if channel.is_available():
                     push_data = _json.loads(content) if isinstance(content, str) else content
                     push_text = push_data.get("display", content)
-                    msg = format_for_wechat(title, push_text)
-                    result = ilink.send_message(msg)
+                    msg = channel.format_message(title, push_text)
+                    result = channel.send_message(msg)
                     # Update push audit in outbox
                     push_ok = result.get("success", False)
                     push_err = result.get("error", "") if not push_ok else ""
@@ -801,14 +801,14 @@ class DigestScheduler:
         # Push to WeChat via iLink (if configured)
         if oa.push_target == "ilink":
             try:
-                from src.wechat.ilink_push import get_ilink_push, format_for_wechat
+                from src.im.plugins import get_plugin_push_channel
                 import json as _json
-                ilink = get_ilink_push()
-                if ilink.is_available():
+                channel = get_plugin_push_channel("ilink")
+                if channel.is_available():
                     push_data = _json.loads(content) if isinstance(content, str) else content
                     push_text = push_data.get("display", content)
-                    msg = format_for_wechat(title, push_text)
-                    push_result = ilink.send_message(msg)
+                    msg = channel.format_message(title, push_text)
+                    push_result = channel.send_message(msg)
                     push_ok = push_result.get("success", False)
                     push_err = push_result.get("error", "") if not push_ok else ""
                     self._outbox.update_push_result(
@@ -936,11 +936,11 @@ class DigestScheduler:
             # 推送到 ilink
             if oa.push_target == "ilink":
                 try:
-                    from src.wechat.ilink_push import get_ilink_push, format_for_wechat
-                    ilink = get_ilink_push()
-                    if ilink.is_available():
-                        msg = format_for_wechat(title, display)
-                        ilink.send_message(msg)
+                    from src.im.plugins import get_plugin_push_channel
+                    channel = get_plugin_push_channel("ilink")
+                    if channel.is_available():
+                        msg = channel.format_message(title, display)
+                        channel.send_message(msg)
                         logger.info("[OA-DIGEST] 失败通知已推送: '%s'", oa.name)
                 except Exception as e:
                     logger.warning("[OA-DIGEST] 失败通知推送失败: %s", e)

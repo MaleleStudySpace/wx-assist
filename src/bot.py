@@ -147,9 +147,8 @@ class HealthMonitor:
         is open.
         """
         try:
-            from src.wechat.ilink_push import get_ilink_push
-            ilink = get_ilink_push()
-            return ilink.is_healthy()
+            from src.im.plugins.wechat.push import get_wechat_push_channel
+            return get_wechat_push_channel().is_healthy()
         except Exception:
             return False
 
@@ -483,12 +482,12 @@ class Bot:
                 mcp_manager = None
             # ── end MCP Init ──────────────────────────────────────
 
-            # ── iLink progress callback: push thinking status during Agent loop ──
+            # ── WeChat progress callback: route through the IM channel wrapper ──
             _agent_progress_callback = None
             try:
-                from src.wechat.ilink_push import get_ilink_push as _get_ilink
-                _ilink = _get_ilink()
-                if _ilink.is_available():
+                from src.im.plugins.wechat.push import get_wechat_push_channel
+                _wechat_channel = get_wechat_push_channel()
+                if _wechat_channel.is_available():
                     def _on_agent_progress(step, max_steps, tool_names, reasoning):
                         import logging as _lg
                         try:
@@ -496,15 +495,15 @@ class Bot:
                             if reasoning:
                                 parts.append(f"💭 {reasoning.strip()}")
                             parts.append(f"🔧 正在执行: {tool_names}")
-                            _ilink.send_message("\n".join(parts))
+                            _wechat_channel.send_message("\n".join(parts))
                         except Exception as _e:
                             _lg.getLogger(__name__).warning(
-                                "iLink progress push failed: %s", _e
+                                "WeChat progress push failed: %s", _e
                             )
                     _agent_progress_callback = _on_agent_progress
-                    logger.info("[Agent] iLink progress push enabled")
+                    logger.info("[Agent] WeChat IM progress push enabled")
             except Exception as _e:
-                logger.debug("[Agent] iLink progress push not available: %s", _e)
+                logger.debug("[Agent] WeChat IM progress push not available: %s", _e)
 
             agent_engine = AgentEngine(
                 summarizer=summarizer,
@@ -767,16 +766,15 @@ class Bot:
         except Exception as e:
             logger.debug("iLink callback not registered: %s", e)
 
-        # ── 7e. Auto-start iLink receiver if account was bound ──────
+        # ── 7e. Auto-start WeChat iLink receiver if account was bound ──
         try:
-            from src.wechat.ilink_push import get_ilink_push
-            ilink = get_ilink_push()
-            if ilink.is_available():
+            from src.im.plugins.wechat.push import get_wechat_push_channel
+            if get_wechat_push_channel().is_available():
                 from .web.server import _start_ilink_receiver
                 _start_ilink_receiver()
-                logger.info("iLink receiver auto-started (bound account found)")
+                logger.info("WeChat iLink receiver auto-started (bound account found)")
         except Exception as e:
-            logger.debug("iLink auto-start skipped: %s", e)
+            logger.debug("WeChat iLink auto-start skipped: %s", e)
 
         # Wrap callback to include assistant alert checking.
         # IMPORTANT: alert.check() must always run even if router.handle()
