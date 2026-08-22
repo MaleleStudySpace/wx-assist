@@ -110,7 +110,6 @@ class QQBotAdapter(BasePlatformAdapter):
                 url = self._client.get_gateway_url()
                 ws = websocket.create_connection(url, timeout=20)
                 self._ws = ws
-                self._connected = True
                 self._ws_reader(ws)
                 backoff_index = 0
             except Exception as exc:
@@ -156,6 +155,7 @@ class QQBotAdapter(BasePlatformAdapter):
             elif op == 11:
                 continue
             elif op == 0 and event == "READY":
+                self._connected = True
                 self._session_id = str(data.get("session_id", ""))
             elif op == 0 and event == "C2C_MESSAGE_CREATE":
                 self._handle_c2c(data)

@@ -27,6 +27,11 @@ def load_builtin_plugins() -> None:
     except Exception:
         # Optional QQ dependencies/config must not affect WeChat startup.
         pass
+    try:
+        from . import feishu  # noqa: F401
+    except Exception:
+        # Optional Feishu dependencies/config must not affect other platforms.
+        pass
 
 
 def get_plugin(name: str) -> Type[BasePlatformAdapter]:

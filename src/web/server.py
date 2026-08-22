@@ -1345,7 +1345,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          "/api/ilink/test-push",
                          "/api/wechat-data-dir/detect",
                          "/api/agent/test",
-                         "/api/skills/sample") or (
+                         "/api/skills/sample",
+                         "/webhook/feishu") or (
                              self.path.startswith("/api/assistant/notifications/")
                              and (self.path.endswith("/ack") or self.path.endswith("/ignore"))
                          ) or (
@@ -1385,7 +1386,27 @@ class _UIHandler(SimpleHTTPRequestHandler):
         req_t0 = time.monotonic()
         if self.path.startswith("/api/chat/") or self.path.startswith("/api/fav/"):
             logger.info("[REQ-TRACE] start %s %s thread=%s", self.command, self.path, threading.current_thread().name)
-        # ── LAN pairing (one-time token from QR code) ──────────
+        # ── Feishu event webhook ───────────────────────────────────
+        if self.path == "/webhook/feishu" and self.command == "POST":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > 2 * 1024 * 1024:
+                    self.send_json({"code": 400, "msg": "invalid body"}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                from src.im.registry import get_global_registry
+                registry = get_global_registry()
+                adapter = registry.get_adapter("feishu") if registry else None
+                if adapter is None:
+                    self.send_json({"code": 503, "msg": "feishu not configured"}, 503)
+                    return
+                result = adapter.handle_webhook(payload)
+                self.send_json(result)
+            except Exception as exc:
+                logger.warning("[feishu] webhook failed: %s", exc)
+                self.send_json({"code": 400, "msg": str(exc)}, 400)
+            return
+
         client_ip = self.client_address[0]
         if self.path.startswith("/?lan=") and self.command == "GET":
             token = self.path.split("=", 1)[1]
