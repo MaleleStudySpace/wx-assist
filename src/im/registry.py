@@ -41,7 +41,8 @@ class PlatformRegistry:
         self._lock = threading.RLock()
 
     def start_all(self, configs: list[PlatformConfig],
-                  message_callback: MessageCallback) -> dict:
+                  message_callback: MessageCallback,
+                  on_adapter: Optional[Callable[[PlatformConfig, BasePlatformAdapter], None]] = None) -> dict:
         started: list[str] = []
         failed: dict[str, str] = {}
         with self._lock:
@@ -56,6 +57,8 @@ class PlatformRegistry:
                     self._configs[config.name] = config
                     self._errors.pop(config.name, None)
                     started.append(config.name)
+                    if on_adapter is not None:
+                        on_adapter(config, adapter)
                 except Exception as exc:
                     self._errors[config.name] = str(exc)
                     failed[config.name] = str(exc)
@@ -93,5 +96,6 @@ class PlatformRegistry:
     def _instantiate(self, config: PlatformConfig) -> BasePlatformAdapter:
         if self._factory is not None:
             return self._factory(config)
-        from .plugins import get_plugin
+        from .plugins import load_builtin_plugins, get_plugin
+        load_builtin_plugins()
         return get_plugin(config.name)(config)

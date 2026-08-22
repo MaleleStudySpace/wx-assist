@@ -119,8 +119,10 @@ class MessageRouter:
         if self._rag:
             self._rag.ingest_one(msg, source="msg")
 
-        # ── iLink DM → Agent path ──
-        if msg["chat_id"].startswith("ilink_"):
+        # ── IM DM → Agent path ──
+        chat_id = str(msg.get("chat_id", ""))
+        is_qq_dm = chat_id.startswith("qqbot:") and self._message_is_dm(msg)
+        if chat_id.startswith("ilink_") or is_qq_dm:
             return self._handle_dm(msg)
 
         # ── WCDB group message → memory consolidation ──
@@ -128,6 +130,11 @@ class MessageRouter:
             self._memory.check_and_consolidate(msg["chat_id"])
 
         return None
+
+    @staticmethod
+    def _message_is_dm(msg: dict) -> bool:
+        """Use explicit chat_type when present; never infer QQ groups as DMs."""
+        return msg.get("chat_type") == "dm" or msg.get("is_group") is False
 
     def _handle_dm(self, msg: dict) -> Optional[str]:
         """Handle an iLink DM message via Agent."""
@@ -143,7 +150,12 @@ class MessageRouter:
         welcome_text = self._check_welcome(msg["chat_id"])
 
         try:
-            reply = self._agent_engine.run(user_message=clean)
+            source_platform = "qqbot" if chat_id.startswith("qqbot:") else "wechat"
+            reply = self._agent_engine.run(
+                user_message=clean,
+                source_platform=source_platform,
+                source_target=chat_id if source_platform == "qqbot" else None,
+            )
         except Exception as e:
             logger.exception("Agent run failed")
             return f"处理失败：{e}"

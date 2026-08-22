@@ -23,8 +23,14 @@ class ProgressRouter:
     def unregister(self, platform: str) -> None:
         self._channels.pop(platform, None)
 
-    def push(self, platform: Optional[str], text: str) -> bool:
-        """Send progress if a usable channel exists; never raise to Agent."""
+    def push(self, platform: Optional[str], text: str,
+             target: Optional[str] = None) -> bool:
+        """Send progress if a usable channel exists; never raise to Agent.
+
+        ``target`` is required by multi-account or per-conversation channels
+        such as QQ.  WeChat iLink intentionally ignores it because it is a
+        single bound account.
+        """
         if not platform or not text:
             return False
         channel = self._channels.get(platform)
@@ -34,7 +40,7 @@ class ProgressRouter:
         try:
             if not channel.is_available():
                 return False
-            result = channel.send_message(text)
+            result = channel.send_message(text, target=target)
             return bool(result.get("success", False)) if isinstance(result, dict) else bool(result)
         except Exception as exc:
             logger.warning("[progress] %s push failed: %s", platform, exc)

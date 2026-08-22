@@ -100,7 +100,8 @@ class AgentEngine:
 
     # ── Public API ─────────────────────────────────────────────────
 
-    def run(self, user_message: str) -> str:
+    def run(self, user_message: str, *, source_platform: str = "wechat",
+            source_target: str | None = None) -> str:
         """Run the ReAct loop and return the final reply.
 
         If there is a pending confirmation from a previous run(),
@@ -117,7 +118,12 @@ class AgentEngine:
         if self._pending_confirm is not None:
             logger.info("[Agent] Pending confirm exists, routing to _handle_confirm_response")
             messages = [{"role": "user", "content": user_message}]
-            return self._handle_confirm_response(user_message, messages)
+            return self._handle_confirm_response(
+                user_message,
+                messages,
+                source_platform=source_platform,
+                source_target=source_target,
+            )
 
         # ── Phase 2: Build messages with memory context ──────────────
         messages: list[dict] = []
@@ -138,7 +144,12 @@ class AgentEngine:
         logger.info("[Agent] Entering _react_loop — tools=%s",
                     [t["function"]["name"] for t in self._tools.registry.get_all_schemas()])
 
-        reply = self._react_loop(system, messages)
+        reply = self._react_loop(
+            system,
+            messages,
+            source_platform=source_platform,
+            source_target=source_target,
+        )
 
         # ── Save to short-term history ───────────────────────────────
         self._history.append((user_message, reply))
@@ -166,7 +177,9 @@ class AgentEngine:
     # ── ReAct loop core ────────────────────────────────────────────
 
     def _react_loop(self, system: str,
-                    messages: list[dict]) -> str:
+                    messages: list[dict], *,
+                    source_platform: str = "wechat",
+                    source_target: str | None = None) -> str:
         """The main ReAct reasoning + acting loop."""
         for step in range(1, self._max_steps + 1):
             logger.info("[Agent] Step %d/%d — messages=%d",
@@ -196,8 +209,14 @@ class AgentEngine:
                     tc["function"]["name"] for tc in tool_calls
                 )
                 try:
-                    self._progress_callback(step, self._max_steps,
-                                            tool_names, reasoning)
+                    self._progress_callback(
+                        step,
+                        self._max_steps,
+                        tool_names,
+                        reasoning,
+                        source_platform=source_platform,
+                        source_target=source_target,
+                    )
                 except Exception as e:
                     logger.warning("[Agent] progress_callback failed: %s", e)
 
@@ -347,7 +366,10 @@ class AgentEngine:
 
     def _handle_confirm_response(self,
                                  user_message: str,
-                                 fresh_messages: list[dict]) -> str:
+                                 fresh_messages: list[dict],
+                                 *,
+                                 source_platform: str = "wechat",
+                                 source_target: str | None = None) -> str:
         """Handle user's response to a pending confirmation question.
 
         If the user confirms, executes pending action_tcs directly
@@ -399,7 +421,11 @@ class AgentEngine:
             self._pending_confirm = None
             # Set bypass for the next ReAct step (post-confirm tool calls)
             self._bypass_confirm = True
-            return self._react_loop(pending["system"], pending["messages"])
+            return self._react_loop(
+                pending["system"], pending["messages"],
+                source_platform=source_platform,
+                source_target=source_target,
+            )
 
         # ── User cancelled: inject cancellation for all actions ──────
         if self._is_confirm_no(clean):
@@ -419,7 +445,11 @@ class AgentEngine:
             # Append user's cancel message so LLM sees it
             pending["messages"].extend(fresh_messages)
             self._pending_confirm = None
-            return self._react_loop(pending["system"], pending["messages"])
+            return self._react_loop(
+                pending["system"], pending["messages"],
+                source_platform=source_platform,
+                source_target=source_target,
+            )
 
         # ── Unclear — re-ask ─────────────────────────────────────
         logger.info("[Agent] Confirm response unclear, re-asking: '%s'", clean[:60])

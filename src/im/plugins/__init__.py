@@ -19,6 +19,16 @@ def register(name: str):
     return decorator
 
 
+def load_builtin_plugins() -> None:
+    """Import built-in adapters explicitly before registry lookup."""
+    from . import wechat  # noqa: F401
+    try:
+        from . import qqbot  # noqa: F401
+    except Exception:
+        # Optional QQ dependencies/config must not affect WeChat startup.
+        pass
+
+
 def get_plugin(name: str) -> Type[BasePlatformAdapter]:
     if name not in _ADAPTERS:
         raise KeyError(f"platform plugin is not registered: {name}")

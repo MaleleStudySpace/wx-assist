@@ -482,28 +482,38 @@ class Bot:
                 mcp_manager = None
             # ── end MCP Init ──────────────────────────────────────
 
-            # ── WeChat progress callback: route through the IM channel wrapper ──
+            # ── IM progress callback: route Agent progress by source platform ──
             _agent_progress_callback = None
             try:
                 from src.im.plugins.wechat.push import get_wechat_push_channel
                 _wechat_channel = get_wechat_push_channel()
-                if _wechat_channel.is_available():
-                    def _on_agent_progress(step, max_steps, tool_names, reasoning):
-                        import logging as _lg
-                        try:
-                            parts = [f"🤔 思考中 [{step}/{max_steps}]"]
-                            if reasoning:
-                                parts.append(f"💭 {reasoning.strip()}")
-                            parts.append(f"🔧 正在执行: {tool_names}")
-                            _wechat_channel.send_message("\n".join(parts))
-                        except Exception as _e:
-                            _lg.getLogger(__name__).warning(
-                                "WeChat progress push failed: %s", _e
-                            )
-                    _agent_progress_callback = _on_agent_progress
-                    logger.info("[Agent] WeChat IM progress push enabled")
+
+                def _on_agent_progress(step, max_steps, tool_names, reasoning,
+                                       *, source_platform="wechat",
+                                       source_target=None):
+                    import logging as _lg
+                    try:
+                        parts = [f"🤔 思考中 [{step}/{max_steps}]"]
+                        if reasoning:
+                            parts.append(f"💭 {reasoning.strip()}")
+                        parts.append(f"🔧 正在执行: {tool_names}")
+                        if source_platform == "wechat":
+                            if _wechat_channel.is_available():
+                                _wechat_channel.send_message("\n".join(parts))
+                        else:
+                            from src.im.plugins import get_plugin_push_channel
+                            channel = get_plugin_push_channel(source_platform)
+                            if channel and channel.is_available():
+                                channel.send_message("\n".join(parts), target=source_target)
+                    except Exception as _e:
+                        _lg.getLogger(__name__).warning(
+                            "IM progress push failed: %s", _e
+                        )
+
+                _agent_progress_callback = _on_agent_progress
+                logger.info("[Agent] IM progress router enabled")
             except Exception as _e:
-                logger.debug("[Agent] WeChat IM progress push not available: %s", _e)
+                logger.debug("[Agent] IM progress router not available: %s", _e)
 
             agent_engine = AgentEngine(
                 summarizer=summarizer,
@@ -795,6 +805,34 @@ class Bot:
             return reply
 
         try:
+            from src.im.config_schema import load_platforms_config
+            from src.im.plugins import load_builtin_plugins, register_plugin_push_channel
+            from src.im.registry import PlatformRegistry
+            from src.im.plugins.qqbot.push import QQBotPushChannel
+
+            # Explicit configuration only: missing platforms.json leaves the
+            # existing WeChat startup path untouched.
+            load_builtin_plugins()
+            im_registry = PlatformRegistry()
+            platform_configs = load_platforms_config()
+            def _on_optional_adapter(config, adapter):
+                if config.name == "qqbot":
+                    register_plugin_push_channel("qqbot", QQBotPushChannel(adapter))
+
+            if platform_configs:
+                result = im_registry.start_all(
+                    platform_configs,
+                    lambda normalized: _wrapped_callback(normalized),
+                    on_adapter=_on_optional_adapter,
+                )
+                logger.info("[im] optional platforms started=%s failed=%s",
+                            result["started"], result["failed"])
+        except Exception as exc:
+            # Optional IM failures must never prevent the WeChat bot from running.
+            im_registry = None
+            logger.warning("[im] optional platform init failed: %s", exc)
+
+        try:
             logger.info("Bot is running. Press Ctrl+C to stop.")
             backend.start(_wrapped_callback)
         except KeyboardInterrupt:
@@ -840,6 +878,12 @@ class Bot:
                         pass
                 except Exception as e:
                     logger.warning("[CRON] stop error: %s", e)
+            try:
+                _im_registry = locals().get("im_registry")
+                if _im_registry is not None:
+                    _im_registry.stop_all()
+            except Exception as e:
+                logger.warning("[im] optional platform shutdown error: %s", e)
             if self._health:
                 self._health.stop()
             try:
