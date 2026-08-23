@@ -791,15 +791,18 @@ class Bot:
         # throws an exception — otherwise keyword alerts silently fail when
         # the message store or AI backend has transient errors.
         def _wrapped_callback(msg):
+            # Legacy WeChat backends emit dicts; optional IM adapters emit
+            # NormalizedMessage. Normalize at this single application boundary.
+            legacy_msg = msg.to_legacy_dict() if hasattr(msg, "to_legacy_dict") else msg
             reply = None
             try:
-                reply = router.handle(msg)
+                reply = router.handle(legacy_msg)
             except Exception as e:
                 logger.warning("router.handle() failed for msg in %s: %s",
-                               msg.get("group_name", msg.get("chat_id", "?"))[:20], e)
+                               legacy_msg.get("group_name", legacy_msg.get("chat_id", "?"))[:20], e)
             if assistant_alert is not None:
                 try:
-                    assistant_alert.check(msg)
+                    assistant_alert.check(legacy_msg)
                 except Exception as e:
                     logger.warning("assistant_alert.check() failed: %s", e)
             return reply

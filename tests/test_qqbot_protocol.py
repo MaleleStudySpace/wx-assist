@@ -27,7 +27,7 @@ def test_qq_adapter_delivers_legacy_dict_and_replies():
         "content": "你好",
         "author": {"user_openid": "user-1", "username": "用户"},
     })
-    assert received[0]["chat_id"] == "qqbot:user-1"
-    assert received[0]["is_group"] is False
+    assert received[0].chat_id == "qqbot:user-1"
+    assert received[0].chat_type == "dm"
     assert client.last[0:2] == ("POST", "/v2/users/user-1/messages")
     assert client.last[2]["msg_id"] == "in-1"

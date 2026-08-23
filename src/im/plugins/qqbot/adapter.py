@@ -243,7 +243,7 @@ class QQBotAdapter(BasePlatformAdapter):
         if not self._callback:
             return
         try:
-            reply = self._callback(message.to_legacy_dict())
+            reply = self._callback(message)
             if reply and reply.strip():
                 self.send_text(message.chat_id, reply, reply_to=message.native_message_id)
         except Exception:

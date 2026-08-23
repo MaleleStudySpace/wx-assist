@@ -160,7 +160,7 @@ class AgentEngine:
         logger.info("[Agent] run() — user_message='%s', history=%d entries",
                     user_message[:80], len(history_snapshot))
 
-        system = self._build_system_prompt()
+        system = self._build_system_prompt(conversation_key=key)
 
         logger.info("[Agent] Entering _react_loop — tools=%s",
                     [t["function"]["name"] for t in self._tools.registry.get_all_schemas()])
@@ -521,14 +521,14 @@ class AgentEngine:
         except json.JSONDecodeError:
             return {}
 
-    def _build_system_prompt(self) -> str:
+    def _build_system_prompt(self, conversation_key: str = "default") -> str:
         """Build the system prompt with tool descriptions and memories."""
         desc = self._tools.registry.get_descriptions()
         prompt = AGENT_SYSTEM_PROMPT.replace("{tool_descriptions}", desc)
         prompt = prompt.replace("{max_steps}", str(self._max_steps))
 
         # Append long-term memories
-        memories = self._load_memories(MEMORY_LOAD_COUNT)
+        memories = self._load_memories(MEMORY_LOAD_COUNT, conversation_key=conversation_key)
         if memories:
             memory_lines = "\n".join(f"- {m}" for m in memories)
             prompt += f"\n\n## 对话记忆\n{memory_lines}"
@@ -557,23 +557,27 @@ class AgentEngine:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("""CREATE TABLE IF NOT EXISTS agent_memory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_key TEXT NOT NULL DEFAULT 'default',
                 summary TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )""")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_memory)")}
+            if "conversation_key" not in columns:
+                conn.execute("ALTER TABLE agent_memory ADD COLUMN conversation_key TEXT NOT NULL DEFAULT 'default'")
             conn.commit()
             conn.close()
             logger.info("[Agent] Memory DB initialized")
         except Exception as e:
             logger.warning("[Agent] Failed to init memory DB: %s", e)
 
-    def _load_memories(self, limit: int = 3) -> list[str]:
+    def _load_memories(self, limit: int = 3, conversation_key: str = "default") -> list[str]:
         """Load recent long-term memories (oldest first)."""
         try:
             conn = sqlite3.connect(str(AGENT_MEMORY_DB))
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT summary FROM agent_memory ORDER BY id DESC LIMIT ?",
-                (limit,),
+                "SELECT summary FROM agent_memory WHERE conversation_key = ? ORDER BY id DESC LIMIT ?",
+                (conversation_key or "default", limit),
             ).fetchall()
             conn.close()
             return [r["summary"] for r in reversed(rows)]  # oldest first
@@ -581,11 +585,14 @@ class AgentEngine:
             logger.warning("[Agent] Failed to load memories: %s", e)
             return []
 
-    def _save_memory(self, summary: str) -> None:
+    def _save_memory(self, summary: str, conversation_key: str = "default") -> None:
         """Save a long-term memory entry."""
         try:
             conn = sqlite3.connect(str(AGENT_MEMORY_DB))
-            conn.execute("INSERT INTO agent_memory (summary) VALUES (?)", (summary,))
+            conn.execute(
+                "INSERT INTO agent_memory (conversation_key, summary) VALUES (?, ?)",
+                (conversation_key or "default", summary),
+            )
             conn.commit()
             conn.close()
             logger.info("[Agent] Saved memory: %s", summary[:60])
@@ -618,7 +625,7 @@ class AgentEngine:
             )
             summary = summary.strip()
             if summary and summary != "无":
-                self._save_memory(summary)
+                self._save_memory(summary, conversation_key=conversation_key)
             with self._state_lock:
                 self._histories[conversation_key] = []
             logger.info("[Agent] Memory consolidated, history cleared for %s", conversation_key)

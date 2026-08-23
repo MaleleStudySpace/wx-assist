@@ -97,7 +97,7 @@ class FeishuAdapter(BasePlatformAdapter):
 
     def _process_event(self, parsed: NormalizedMessage) -> None:
         try:
-            reply = self._callback(parsed.to_legacy_dict()) if self._callback else None
+            reply = self._callback(parsed) if self._callback else None
             if reply and parsed.chat_type == "dm":
                 self.send_text(parsed.chat_id, reply, reply_to=parsed.native_message_id)
         except Exception:
