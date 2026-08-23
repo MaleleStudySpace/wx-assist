@@ -49,6 +49,7 @@ def verify_and_parse_event(payload: dict, verification_token: str = ""):
         chat_type=chat_type,
         sender_id=f"feishu:{sender_open_id}",
         sender_name=sender_open_id,
+        group_name=chat_id,
         content=text,
         message_type=MessageType.TEXT,
         timestamp=_parse_timestamp(message.get("create_time")),

@@ -46,24 +46,31 @@ class FeishuOpenAPIClient:
             return self._token
 
     def request(self, method: str, path: str, *, params=None, body=None) -> dict:
-        token = self.ensure_token()
-        response = self._session.request(
-            method,
-            f"{API_BASE}{path}",
-            params=params,
-            json=body,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json; charset=utf-8",
-            },
-            timeout=DEFAULT_TIMEOUT,
-        )
-        if response.status_code >= 400:
-            raise FeishuAPIError(f"HTTP {response.status_code}: {response.text[:300]}")
-        data = response.json()
-        if data.get("code", 0) != 0:
-            raise FeishuAPIError(f"Feishu API error: {data.get('msg', data)}")
-        return data
+        for attempt in range(2):
+            token = self.ensure_token()
+            response = self._session.request(
+                method,
+                f"{API_BASE}{path}",
+                params=params,
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json; charset=utf-8",
+                },
+                timeout=DEFAULT_TIMEOUT,
+            )
+            if response.status_code == 401 and attempt == 0:
+                with self._lock:
+                    self._token = None
+                    self._expires_at = 0.0
+                continue
+            if response.status_code >= 400:
+                raise FeishuAPIError(f"HTTP {response.status_code}: {response.text[:300]}")
+            data = response.json()
+            if data.get("code", 0) != 0:
+                raise FeishuAPIError(f"Feishu API error: {data.get('msg', data)}")
+            return data
+        raise FeishuAPIError("Feishu request failed after token refresh")
 
     def send_text(self, receive_id: str, text: str,
                   receive_id_type: str = "chat_id") -> dict:

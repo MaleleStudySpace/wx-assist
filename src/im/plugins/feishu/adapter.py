@@ -8,6 +8,7 @@ transport and verification.
 
 import logging
 import threading
+import time
 from typing import Callable, Optional
 
 from ...base import BasePlatformAdapter, MessageCallback
@@ -39,6 +40,7 @@ class FeishuAdapter(BasePlatformAdapter):
         self._callback: Optional[MessageCallback] = None
         self._running = False
         self._lock = threading.RLock()
+        self._seen_events: dict[str, float] = {}
 
     def start(self, callback: MessageCallback,
               groups: list[str] | None = None) -> bool:
@@ -68,12 +70,35 @@ class FeishuAdapter(BasePlatformAdapter):
         return []
 
     def handle_webhook(self, payload: dict):
-        """Return challenge dict or deliver one normalized event."""
+        """Return challenge immediately and process events asynchronously."""
         parsed = verify_and_parse_event(payload, self.verification_token)
         if isinstance(parsed, dict):
             return parsed
-        if isinstance(parsed, NormalizedMessage) and self._callback:
-            reply = self._callback(parsed.to_legacy_dict())
+        if not isinstance(parsed, NormalizedMessage) or not self._callback:
+            return {"code": 0}
+        event_id = str((payload.get("header") or {}).get("event_id", "")) or parsed.native_message_id
+        now = time.time()
+        with self._lock:
+            self._seen_events = {
+                key: stamp for key, stamp in self._seen_events.items()
+                if now - stamp < 300
+            }
+            if event_id and event_id in self._seen_events:
+                return {"code": 0}
+            if event_id:
+                self._seen_events[event_id] = now
+        threading.Thread(
+            target=self._process_event,
+            args=(parsed,),
+            name="feishu-event",
+            daemon=True,
+        ).start()
+        return {"code": 0}
+
+    def _process_event(self, parsed: NormalizedMessage) -> None:
+        try:
+            reply = self._callback(parsed.to_legacy_dict()) if self._callback else None
             if reply and parsed.chat_type == "dm":
                 self.send_text(parsed.chat_id, reply, reply_to=parsed.native_message_id)
-        return {"code": 0}
+        except Exception:
+            logger.exception("[feishu] event processing failed")

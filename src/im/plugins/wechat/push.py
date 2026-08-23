@@ -18,10 +18,12 @@ class WechatPushChannel(PushChannel):
         self._implementation = implementation
 
     def _get_implementation(self):
-        if self._implementation is None:
-            from src.wechat.ilink_push import get_ilink_push
-            self._implementation = get_ilink_push()
-        return self._implementation
+        if self._implementation is not None:
+            return self._implementation
+        # 不缓存底层单例：web API 的 bind/unbind 会重置它。实时取新实例，
+        # 否则扫码重绑后 wrapper 仍引用旧账号，推送误报"未绑定"。
+        from src.wechat.ilink_push import get_ilink_push
+        return get_ilink_push()
 
     def is_available(self) -> bool:
         return bool(self._get_implementation().is_available())

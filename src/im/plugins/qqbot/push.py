@@ -23,8 +23,9 @@ class QQBotPushChannel(PushChannel):
                      target: Optional[str] = None) -> dict:
         if not self._adapter or not target:
             return {"success": False, "error": "QQ target is required"}
-        native_target = target.split(":", 1)[1] if ":" in target else target
-        ok = self._adapter.send_text(native_target, text)
+        # 保留 qqbot: 命名空间 — adapter 用它查 chat type 后再拆出 native id。
+        # 若提前剥掉前缀，群聊会丢失 group 类型映射，误发到 /v2/users 接口。
+        ok = self._adapter.send_text(target, text)
         return {"success": ok, "error": "send failed" if not ok else ""}
 
     def get_status(self) -> dict:

@@ -117,7 +117,7 @@ class AlertEngine:
             return None
 
         chat_id = msg.get("chat_id", "")
-        group_name = msg.get("group_name", "")
+        group_name = msg.get("group_name", "") or chat_id
         content = msg.get("content", "")
         # Strip raw wxid/gh_ identifiers before keyword matching and display
         content = _strip_ids(content)

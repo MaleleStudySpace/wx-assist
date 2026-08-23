@@ -119,7 +119,9 @@ class QQBotAdapter(BasePlatformAdapter):
                 self._ws = None
             if self._stop_event.is_set():
                 break
-            time.sleep(RECONNECT_BACKOFF[min(backoff_index, len(RECONNECT_BACKOFF) - 1)])
+            delay = RECONNECT_BACKOFF[min(backoff_index, len(RECONNECT_BACKOFF) - 1)]
+            if self._stop_event.wait(delay):
+                break
             backoff_index += 1
 
     def _ws_reader(self, ws) -> None:
@@ -163,6 +165,10 @@ class QQBotAdapter(BasePlatformAdapter):
                 self._handle_group(data)
             elif op == 7:
                 return
+            elif op == 9:  # INVALID_SESSION：旧 session 失效，清状态后重新 Identify
+                self._session_id = None
+                self._last_seq = None
+                self._send_identify(ws)
 
     def _send_identify(self, ws) -> None:
         token = self._client.ensure_token()
@@ -207,6 +213,7 @@ class QQBotAdapter(BasePlatformAdapter):
             chat_id=chat_id, chat_type="dm",
             sender_id=self.namespace("qqbot", openid),
             sender_name=str(author.get("username", "") or openid),
+            group_name=chat_id,
             content=str(data.get("content", "")).strip(),
             message_type=MessageType.TEXT,
             timestamp=self._parse_timestamp(data.get("timestamp")), raw=data,
@@ -227,6 +234,7 @@ class QQBotAdapter(BasePlatformAdapter):
             chat_id=chat_id, chat_type="group",
             sender_id=self.namespace("qqbot", member_id),
             sender_name=str(author.get("username", "") or member_id),
+            group_name=chat_id,
             content=text, message_type=MessageType.TEXT,
             timestamp=self._parse_timestamp(data.get("timestamp")), raw=data,
         ))

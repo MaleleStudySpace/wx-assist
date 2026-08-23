@@ -807,7 +807,7 @@ class Bot:
         try:
             from src.im.config_schema import load_platforms_config
             from src.im.plugins import load_builtin_plugins, register_plugin_push_channel
-            from src.im.registry import PlatformRegistry
+            from src.im.registry import PlatformRegistry, set_global_registry
             from src.im.plugins.qqbot.push import QQBotPushChannel
             from src.im.plugins.feishu.push import FeishuPushChannel
 
@@ -815,6 +815,7 @@ class Bot:
             # existing WeChat startup path untouched.
             load_builtin_plugins()
             im_registry = PlatformRegistry()
+            set_global_registry(im_registry)
             platform_configs = load_platforms_config()
             def _on_optional_adapter(config, adapter):
                 if config.name == "qqbot":

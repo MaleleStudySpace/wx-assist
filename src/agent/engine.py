@@ -8,6 +8,7 @@ Usage:
 import json
 import logging
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -90,18 +91,19 @@ class AgentEngine:
         self._tools = tool_executor
         self._max_steps = max_steps
         self._progress_callback = progress_callback
-        # Pending confirmation state (confirm_action state machine)
-        self._pending_confirm: Optional[dict] = None
-        # Bypass flag: allow one step to execute requires_confirm tools
-        self._bypass_confirm = False
-        # Short-term conversation memory: [(user_msg, agent_reply), ...]
-        self._history: list[tuple[str, str]] = []
+        # Per-conversation state: IM platforms must not share user context.
+        self._state_lock = threading.RLock()
+        self._conversation_locks: dict[str, threading.RLock] = {}
+        self._histories: dict[str, list[tuple[str, str]]] = {"default": []}
+        self._pending_confirms: dict[str, dict] = {}
+        self._bypass_confirms: set[str] = set()
         self._init_memory_db()
 
     # ── Public API ─────────────────────────────────────────────────
 
     def run(self, user_message: str, *, source_platform: str = "wechat",
-            source_target: str | None = None) -> str:
+            source_target: str | None = None,
+            conversation_key: str = "default") -> str:
         """Run the ReAct loop and return the final reply.
 
         If there is a pending confirmation from a previous run(),
@@ -114,8 +116,23 @@ class AgentEngine:
             Final reply text to send back to the user.
         """
 
+        key = conversation_key or "default"
+        with self._state_lock:
+            conversation_lock = self._conversation_locks.setdefault(key, threading.RLock())
+        with conversation_lock:
+            return self._run_conversation(
+                user_message, source_platform=source_platform,
+                source_target=source_target, conversation_key=key,
+            )
+
+    def _run_conversation(self, user_message: str, *, source_platform: str,
+                          source_target: str | None, conversation_key: str) -> str:
+        key = conversation_key or "default"
+        with self._state_lock:
+            pending = self._pending_confirms.get(key)
+
         # ── Phase 1: Handle pending confirmation ─────────────────────
-        if self._pending_confirm is not None:
+        if pending is not None:
             logger.info("[Agent] Pending confirm exists, routing to _handle_confirm_response")
             messages = [{"role": "user", "content": user_message}]
             return self._handle_confirm_response(
@@ -123,13 +140,17 @@ class AgentEngine:
                 messages,
                 source_platform=source_platform,
                 source_target=source_target,
+                conversation_key=conversation_key,
             )
 
         # ── Phase 2: Build messages with memory context ──────────────
         messages: list[dict] = []
 
+        with self._state_lock:
+            history = self._histories.setdefault(key, [])
+            history_snapshot = list(history[-MEMORY_HISTORY_LIMIT:])
         # Inject short-term history (last N exchanges)
-        for user_msg, agent_reply in self._history[-MEMORY_HISTORY_LIMIT:]:
+        for user_msg, agent_reply in history_snapshot:
             messages.append({"role": "user", "content": user_msg})
             messages.append({"role": "assistant", "content": agent_reply})
 
@@ -137,7 +158,7 @@ class AgentEngine:
 
         # ── Phase 3: ReAct loop ──────────────────────────────────────
         logger.info("[Agent] run() — user_message='%s', history=%d entries",
-                    user_message[:80], len(self._history))
+                    user_message[:80], len(history_snapshot))
 
         system = self._build_system_prompt()
 
@@ -149,15 +170,18 @@ class AgentEngine:
             messages,
             source_platform=source_platform,
             source_target=source_target,
+            conversation_key=key,
         )
 
-        # ── Save to short-term history ───────────────────────────────
-        self._history.append((user_message, reply))
-        logger.info("[Agent] History now %d entries", len(self._history))
+        # Save to per-conversation short-term history.
+        with self._state_lock:
+            history = self._histories.setdefault(key, [])
+            history.append((user_message, reply))
+            history_size = len(history)
+        logger.info("[Agent] History now %d entries", history_size)
 
-        # Trigger memory consolidation when threshold reached
-        if len(self._history) >= MEMORY_HISTORY_LIMIT:
-            self._consolidate_memory()
+        if history_size >= MEMORY_HISTORY_LIMIT:
+            self._consolidate_memory(key)
 
         return reply
 
@@ -179,7 +203,8 @@ class AgentEngine:
     def _react_loop(self, system: str,
                     messages: list[dict], *,
                     source_platform: str = "wechat",
-                    source_target: str | None = None) -> str:
+                    source_target: str | None = None,
+                    conversation_key: str = "default") -> str:
         """The main ReAct reasoning + acting loop."""
         for step in range(1, self._max_steps + 1):
             logger.info("[Agent] Step %d/%d — messages=%d",
@@ -229,9 +254,9 @@ class AgentEngine:
             # 1) Check for confirm_action (intercept before execution)
             # 2) Check requires_confirm against bypass flag
 
-            bypass_this_round = self._bypass_confirm
-            # Clear bypass so subsequent steps need fresh confirm
-            self._bypass_confirm = False
+            with self._state_lock:
+                bypass_this_round = conversation_key in self._bypass_confirms
+                self._bypass_confirms.discard(conversation_key)
 
             confirm_tc = None
             action_tcs: list[dict] = []
@@ -246,8 +271,10 @@ class AgentEngine:
                 logger.info("[Agent] Intercepting confirm_action — %d pending action(s): %s",
                             len(action_tcs),
                             [t["function"]["name"] for t in action_tcs])
-                return self._intercept_confirm(system, messages, confirm_tc,
-                                               action_tcs, content or "", reasoning or "")
+                return self._intercept_confirm(
+                    system, messages, confirm_tc, action_tcs,
+                    content or "", reasoning or "", conversation_key=conversation_key,
+                )
 
             # ── Execute tools ───────────────────────────────────────
             for tc in action_tcs:
@@ -316,7 +343,8 @@ class AgentEngine:
                            confirm_tc: dict,
                            action_tcs: list[dict],
                            llm_content: str = "",
-                           reasoning: str = "") -> str:
+                           reasoning: str = "",
+                           conversation_key: str = "default") -> str:
         """Intercept a confirm_action call from the LLM.
 
         Saves both the confirm state AND any pending action_tcs.
@@ -352,7 +380,8 @@ class AgentEngine:
             "tool_calls": all_tcs,
         })
 
-        self._pending_confirm = {
+        with self._state_lock:
+            self._pending_confirms[conversation_key] = {
             "question": question,
             "messages": messages,
             "system": system,
@@ -369,7 +398,8 @@ class AgentEngine:
                                  fresh_messages: list[dict],
                                  *,
                                  source_platform: str = "wechat",
-                                 source_target: str | None = None) -> str:
+                                 source_target: str | None = None,
+                                 conversation_key: str = "default") -> str:
         """Handle user's response to a pending confirmation question.
 
         If the user confirms, executes pending action_tcs directly
@@ -380,8 +410,10 @@ class AgentEngine:
         Returns:
             Either the continued ReAct loop result, or a re-ask.
         """
-        pending = self._pending_confirm
-        assert pending is not None, "_handle_confirm_response called with no pending state"
+        with self._state_lock:
+            pending = self._pending_confirms.get(conversation_key)
+        if pending is None:
+            return "当前没有待确认的操作。"
 
         clean = user_message.strip().lower()
         logger.info("[Agent] _handle_confirm_response — user_response='%s'", clean[:40])
@@ -418,13 +450,14 @@ class AgentEngine:
 
             # Append user's confirm message so LLM sees it
             pending["messages"].extend(fresh_messages)
-            self._pending_confirm = None
-            # Set bypass for the next ReAct step (post-confirm tool calls)
-            self._bypass_confirm = True
+            with self._state_lock:
+                self._pending_confirms.pop(conversation_key, None)
+                self._bypass_confirms.add(conversation_key)
             return self._react_loop(
                 pending["system"], pending["messages"],
                 source_platform=source_platform,
                 source_target=source_target,
+                conversation_key=conversation_key,
             )
 
         # ── User cancelled: inject cancellation for all actions ──────
@@ -444,11 +477,13 @@ class AgentEngine:
                 })
             # Append user's cancel message so LLM sees it
             pending["messages"].extend(fresh_messages)
-            self._pending_confirm = None
+            with self._state_lock:
+                self._pending_confirms.pop(conversation_key, None)
             return self._react_loop(
                 pending["system"], pending["messages"],
                 source_platform=source_platform,
                 source_target=source_target,
+                conversation_key=conversation_key,
             )
 
         # ── Unclear — re-ask ─────────────────────────────────────
@@ -506,10 +541,11 @@ class AgentEngine:
         """Get the current tool descriptions text (for welcome message)."""
         return self._tools.registry.get_descriptions()
 
-    def clear_pending_confirm(self) -> None:
-        """Clear any pending confirmation state (on shutdown)."""
-        self._pending_confirm = None
-        self._bypass_confirm = False
+    def clear_pending_confirm(self, conversation_key: str = "default") -> None:
+        """Clear pending confirmation for one conversation."""
+        with self._state_lock:
+            self._pending_confirms.pop(conversation_key or "default", None)
+            self._bypass_confirms.discard(conversation_key or "default")
 
     # ── Memory system ────────────────────────────────────────────────
 
@@ -556,14 +592,15 @@ class AgentEngine:
         except Exception as e:
             logger.warning("[Agent] Failed to save memory: %s", e)
 
-    def _consolidate_memory(self) -> None:
-        """Summarize short-term history into a long-term memory entry."""
-        if not self._history:
+    def _consolidate_memory(self, conversation_key: str = "default") -> None:
+        """Summarize one conversation's short-term history."""
+        with self._state_lock:
+            history = list(self._histories.get(conversation_key, []))
+        if not history:
             return
 
-        # Build history text for summarization
         history_lines = []
-        for user_msg, agent_reply in self._history:
+        for user_msg, agent_reply in history:
             history_lines.append(f"用户: {user_msg[:100]}")
             history_lines.append(f"助手: {agent_reply[:100]}")
         history_text = "\n".join(history_lines)
@@ -582,8 +619,8 @@ class AgentEngine:
             summary = summary.strip()
             if summary and summary != "无":
                 self._save_memory(summary)
-            # Clear short-term history regardless
-            self._history = []
-            logger.info("[Agent] Memory consolidated, history cleared")
+            with self._state_lock:
+                self._histories[conversation_key] = []
+            logger.info("[Agent] Memory consolidated, history cleared for %s", conversation_key)
         except Exception as e:
             logger.warning("[Agent] Memory consolidation failed: %s", e)

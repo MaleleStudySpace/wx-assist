@@ -122,7 +122,8 @@ class MessageRouter:
         # ── IM DM → Agent path ──
         chat_id = str(msg.get("chat_id", ""))
         is_qq_dm = chat_id.startswith("qqbot:") and self._message_is_dm(msg)
-        if chat_id.startswith("ilink_") or is_qq_dm:
+        is_feishu_dm = chat_id.startswith("feishu:") and self._message_is_dm(msg)
+        if chat_id.startswith("ilink_") or is_qq_dm or is_feishu_dm:
             return self._handle_dm(msg)
 
         # ── WCDB group message → memory consolidation ──
@@ -150,11 +151,18 @@ class MessageRouter:
         welcome_text = self._check_welcome(msg["chat_id"])
 
         try:
-            source_platform = "qqbot" if chat_id.startswith("qqbot:") else "wechat"
+            chat_id = str(msg.get("chat_id", ""))
+            if chat_id.startswith("qqbot:"):
+                source_platform = "qqbot"
+            elif chat_id.startswith("feishu:"):
+                source_platform = "feishu"
+            else:
+                source_platform = "wechat"
             reply = self._agent_engine.run(
                 user_message=clean,
                 source_platform=source_platform,
-                source_target=chat_id if source_platform == "qqbot" else None,
+                source_target=chat_id if source_platform != "wechat" else None,
+                conversation_key=chat_id or "wechat:unknown",
             )
         except Exception as e:
             logger.exception("Agent run failed")

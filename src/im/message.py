@@ -49,6 +49,7 @@ class NormalizedMessage:
     sender_id: str
     sender_name: str
     content: str
+    group_name: str = ""
     message_type: MessageType = MessageType.TEXT
     timestamp: int = 0
     media_urls: list[str] = field(default_factory=list)
@@ -69,7 +70,7 @@ class NormalizedMessage:
         return {
             "message_id": self.native_message_id,
             "chat_id": self.chat_id,
-            "group_name": "",
+            "group_name": self.group_name or self.chat_id,
             "sender_id": self.sender_id,
             "sender_name": self.sender_name,
             "content": self.content,

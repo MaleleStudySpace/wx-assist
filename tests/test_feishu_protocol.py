@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 
 from src.im.config_schema import PlatformConfig
 from src.im.plugins.feishu.adapter import FeishuAdapter
@@ -97,3 +99,34 @@ def test_feishu_adapter_webhook_reply_uses_channel():
         },
     })
     assert result == {"code": 0}
+
+
+def test_feishu_webhook_deduplicates_and_returns_before_callback_finishes():
+    adapter = FeishuAdapter(PlatformConfig("feishu", extra={
+        "app_id": "app", "app_secret": "secret", "verification_token": "verify",
+    }), api_client=FeishuOpenAPIClient("app", "secret", session=Session()))
+    entered = threading.Event()
+    release = threading.Event()
+    count = []
+
+    def callback(message):
+        count.append(message)
+        entered.set()
+        release.wait(1)
+        return None
+
+    adapter.start(callback)
+    payload = {
+        "header": {"event_type": "im.message.receive_v1", "token": "verify", "event_id": "event-1"},
+        "event": {"sender": {"sender_id": {"open_id": "ou_user"}},
+                  "message": {"message_id": "om-1", "chat_id": "oc-chat", "chat_type": "p2p",
+                              "content": json.dumps({"text": "hello"})}},
+    }
+    started = time.monotonic()
+    assert adapter.handle_webhook(payload) == {"code": 0}
+    assert time.monotonic() - started < 0.5
+    assert adapter.handle_webhook(payload) == {"code": 0}
+    assert entered.wait(1)
+    release.set()
+    time.sleep(0.05)
+    assert len(count) == 1
