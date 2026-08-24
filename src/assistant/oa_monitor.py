@@ -482,8 +482,9 @@ class OAMonitorEngine:
                     logger.debug("OAMonitor: 创建推送任务失败: %s", _e)
                     _task_id = None
 
-            if mg.push_target == "ilink":
-                _ok, _err = self._push_to_wechat(nid, mg.name or source, notif_title, notif_content)
+            from src.im.targets import normalize_targets
+            if normalize_targets(mg.push_target):
+                _ok, _err = self._push_to_wechat(nid, mg.name or source, notif_title, notif_content, mg.push_target)
                 if _task_id:
                     try:
                         if _ok:
@@ -542,54 +543,43 @@ class OAMonitorEngine:
             logger.warning("[CACHE] _cache_article 失败: %s", e)
         return False
 
-    def _push_to_wechat(self, nid: int, group_name: str, title: str, content: str) -> tuple[bool, str]:
-        """Push notification to WeChat via iLink Bot.
-
-        Returns:
-            (push_ok, push_err): 推送是否成功 + 错误信息（供调用方完结任务中心任务）。
-        """
+    def _push_to_wechat(self, nid: int, group_name: str, title: str, content: str, push_target: str = "ilink") -> tuple[bool, str]:
+        """Push an OA article alert through the selected IM platform(s)."""
         try:
-            from src.im.plugins import get_plugin_push_channel
             import json as _json
-            channel = get_plugin_push_channel("ilink")
-            if channel.is_available():
-                # Extract display text from JSON content (not raw JSON)
-                push_data = _json.loads(content) if isinstance(content, str) else content
-                push_text = push_data.get("display", content)
-                push_msg = channel.format_message(title, push_text)
-                from src.im.delivery import DeliveryRequest, get_delivery_service
-                result = get_delivery_service().send_text(DeliveryRequest(
-                    platform="wechat", text=push_msg, source_type="oa_article_alert",
-                    source_id=str(nid), conversation_key=group_name,
-                ))
-                push_ok = result.get("success", False)
-                push_err = result.get("error", "") if not push_ok else ""
-                self._outbox.update_push_result(
-                    nid, "ilink",
-                    "success" if push_ok else "failed",
-                    push_err,
-                )
-                if push_ok:
-                    logger.info("OAMonitor: pushed to WeChat for '%s'", group_name)
-                else:
-                    logger.warning("OAMonitor: WeChat push failed for '%s': %s", group_name, push_err)
-                try:
-                    from src.web.api_handlers import broadcast_event
-                    broadcast_event("oa_monitor_push_result", {
-                        "group_name": group_name,
-                        "success": push_ok,
-                        "error": push_err,
-                    })
-                except Exception:
-                    pass
-                return push_ok, push_err
+            from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+            push_data = _json.loads(content) if isinstance(content, str) else content
+            push_text = push_data.get("display", content)
+            push_msg = DeliveryService.format_text(push_target, title, push_text)
+            result = get_delivery_service().send_text(DeliveryRequest(
+                platform=push_target,
+                text=push_msg,
+                source_type="oa_article_alert",
+                source_id=str(nid),
+                conversation_key=group_name,
+            ))
+            push_ok = result.get("success", False)
+            push_err = result.get("error", "") if not push_ok else ""
+            self._outbox.update_push_result(
+                nid, push_target, "success" if push_ok else "failed", push_err)
+            if push_ok:
+                logger.info("OAMonitor: pushed through IM for '%s'", group_name)
             else:
-                logger.warning("OAMonitor: WeChat push skipped for '%s': iLink not bound", group_name)
-                return False, "iLink not bound"
-        except Exception as e:
-            logger.warning("OAMonitor: WeChat push error for '%s': %s", group_name, e)
+                logger.warning("OAMonitor: IM push failed for '%s': %s", group_name, push_err)
             try:
-                self._outbox.update_push_result(nid, "ilink", "failed", str(e))
+                from src.web.api_handlers import broadcast_event
+                broadcast_event("oa_monitor_push_result", {
+                    "group_name": group_name,
+                    "success": push_ok,
+                    "error": push_err,
+                })
+            except Exception:
+                pass
+            return push_ok, push_err
+        except Exception as e:
+            logger.warning("OAMonitor: IM push error for '%s': %s", group_name, e)
+            try:
+                self._outbox.update_push_result(nid, push_target, "failed", str(e))
             except Exception:
                 pass
             return False, str(e)

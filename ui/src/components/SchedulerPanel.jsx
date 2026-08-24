@@ -186,6 +186,10 @@ function TaskForm({ skills, initial, onSave, onCancel, onRefresh }) {
   const [skill, setSkill] = useState(initial?.skill || (skills[0]?.name || ''))
   const [cronExpr, setCronExpr] = useState(initial?.cron || '0 8 * * *')
   const [pushEnabled, setPushEnabled] = useState(initial?.push?.enabled !== false)
+  const [pushTargets, setPushTargets] = useState(() => {
+    const value = initial?.push_target || initial?.push?.target || 'ilink'
+    try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : [value] } catch { return value ? [value] : [] }
+  })
   const [enabled, setEnabled] = useState(initial?.enabled !== false)
   const [argsJson, setArgsJson] = useState(
     initial?.args ? JSON.stringify(initial.args, null, 2) : '{}'
@@ -292,7 +296,7 @@ function TaskForm({ skills, initial, onSave, onCancel, onRefresh }) {
       cron: cronExpr.trim(),
       args: parsedArgs,
       push_enabled: pushEnabled,
-      push_target: 'ilink',
+      push_target: pushTargets.length ? JSON.stringify(pushTargets) : '',
       enabled,
     })
   }
@@ -476,6 +480,14 @@ function TaskForm({ skills, initial, onSave, onCancel, onRefresh }) {
             <div className="flex flex-col gap-0.5">
               <span className="text-sm text-text-main font-medium">推送方式</span>
               <span className="text-[11px] text-text-muted/60">执行结果通过已配置的 IM 平台推送</span>
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {[['ilink', '微信'], ['qqbot', 'QQ'], ['feishu', '飞书']].map(([id, label]) => (
+                  <button key={id} type="button" onClick={() => setPushTargets(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])}
+                    className={`rounded-md border px-2 py-1 text-[11px] ${pushTargets.includes(id) ? 'border-brand-green bg-brand-green/10 text-brand-green-hover' : 'border-border-main text-text-muted'}`}>
+                    {pushTargets.includes(id) ? '✓ ' : ''}{label}
+                  </button>
+                ))}
+              </div>
             </div>
             <Toggle enabled={pushEnabled} onChange={setPushEnabled} />
           </div>

@@ -264,7 +264,7 @@ class ToolExecutor:
                     },
                     "push_target": {
                         "type": "string",
-                        "description": "推送方式：\"ilink\"=推送到微信，\"\"=不推送，默认 \"ilink\"",
+                        "description": "推送方式：\"ilink\"=微信、\"qqbot\"=QQ、\"feishu\"=飞书、\"\"=不推送，默认 \"ilink\"",
                         "default": "ilink",
                     },
                 },
@@ -301,7 +301,7 @@ class ToolExecutor:
                     },
                     "push_target": {
                         "type": "string",
-                        "description": "推送方式：\"ilink\"=推送到微信，\"\"=不推送，默认 \"ilink\"",
+                        "description": "推送方式：\"ilink\"=微信、\"qqbot\"=QQ、\"feishu\"=飞书、\"\"=不推送，默认 \"ilink\"",
                         "default": "ilink",
                     },
                     "template": {
@@ -336,7 +336,7 @@ class ToolExecutor:
                     },
                     "push_target": {
                         "type": "string",
-                        "description": "推送方式：\"ilink\"=推送到微信，\"\"=不推送，默认 \"ilink\"",
+                        "description": "推送方式：\"ilink\"=微信、\"qqbot\"=QQ、\"feishu\"=飞书、\"\"=不推送，默认 \"ilink\"",
                         "default": "ilink",
                     },
                 },
@@ -506,8 +506,8 @@ class ToolExecutor:
                              "description": "传给 skill 的参数（字典），可选。"
                                             "键名必须匹配 skill 定义中的参数名，"
                                             "先用 list_skills 查看各 skill 的参数定义"},
-                    "push_target": {"type": "string", "enum": ["ilink", ""],
-                                    "description": "推送方式，ilink=推送到微信"},
+                    "push_target": {"type": "string", "enum": ["ilink", "qqbot", "feishu", ""],
+                                    "description": "推送方式，ilink=微信、qqbot=QQ、feishu=飞书，空值=不推送"},
                 },
                 "required": ["name", "skill", "cron"],
             },

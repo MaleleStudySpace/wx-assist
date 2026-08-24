@@ -4935,7 +4935,7 @@ def _push_oa_digest(result, group, config):
         logger.debug("OA outbox write skipped: %s", e)
 
     try:
-        if group.push_target == "ilink":
+        if group.push_target:
             from src.im.plugins import get_plugin_push_channel
             channel = get_plugin_push_channel("ilink")
             if channel.is_available():
@@ -5818,7 +5818,7 @@ def _do_task_retry_push(task: dict) -> dict:
     msg = channel.format_message(title, push_text)
     from src.im.delivery import DeliveryRequest, get_delivery_service
     return get_delivery_service().send_text(DeliveryRequest(
-        platform="wechat", text=msg, source_type=str(task.get("task_type", "retry")),
+        platform=task.get("push_target") or "wechat", text=msg, source_type=str(task.get("task_type", "retry")),
         source_id=str(task.get("id", "")), conversation_key=str(task.get("chat_id", "")),
     ))
 

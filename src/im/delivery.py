@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from .plugins import get_plugin_push_channel
+from .targets import default_target, normalize_targets
 
 logger = logging.getLogger(__name__)
 DB_PATH = Path("data/im_delivery.db")
@@ -77,14 +78,26 @@ class DeliveryService:
         return "ilink" if platform in ("wechat", "ilink") else platform
 
     def send_text(self, request: DeliveryRequest) -> dict:
-        platform = request.platform or "wechat"
+        platforms = normalize_targets(request.platform)
+        if not platforms:
+            return {"success": True, "skipped": True, "error": "no delivery platform"}
+        results = []
+        for platform in platforms:
+            target = request.target or default_target(platform)
+            result = self._send_one(request, platform, target)
+            results.append(result)
+        success = all(item.get("success", False) for item in results)
+        return {"success": success, "results": results,
+                "error": "" if success else "; ".join(item.get("error", "") for item in results if item.get("error"))}
+
+    def _send_one(self, request: DeliveryRequest, platform: str, target: str) -> dict:
         channel_name = self._channel_name(platform)
         channel = get_plugin_push_channel(channel_name)
         attempt_id = uuid.uuid4().hex
         started = time.time()
         if channel is None:
             result = {"success": False, "error": f"IM channel unavailable: {platform}", "retryable": False}
-            self._record(request, attempt_id, channel_name, started, result)
+            self._record(request, attempt_id, channel_name, target, started, result)
             return result
         try:
             if not channel.is_available():
@@ -92,7 +105,7 @@ class DeliveryService:
             else:
                 result = channel.send_message(
                     request.text,
-                    target=request.target or None,
+                    target=target or None,
                 )
                 if not isinstance(result, dict):
                     result = {"success": bool(result), "error": "" if result else "delivery failed"}
@@ -102,10 +115,24 @@ class DeliveryService:
         result = dict(result)
         result["delivery_id"] = attempt_id
         result["platform"] = platform
-        self._record(request, attempt_id, channel_name, started, result)
+        self._record(request, attempt_id, channel_name, target, started, result)
         return result
 
-    def _record(self, request, attempt_id, channel_name, started, result):
+    @staticmethod
+    def format_text(platform: str, title: str, content: str) -> str:
+        """Format title/body through one channel when possible.
+
+        For multi-target delivery, use a neutral representation so one target's
+        provider-specific formatter cannot corrupt another target's message.
+        """
+        targets = normalize_targets(platform)
+        if len(targets) == 1:
+            channel = get_plugin_push_channel(DeliveryService._channel_name(targets[0]))
+            if channel is not None:
+                return channel.format_message(title, content)
+        return f"{title}\n\n{content}" if title and content else (title or content)
+
+    def _record(self, request, attempt_id, channel_name, target, started, result):
         try:
             with self._db_lock, self._connect() as conn:
                 conn.execute("""
@@ -116,7 +143,7 @@ class DeliveryService:
                      retryable, created_at, finished_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
                 """, (
-                    attempt_id, request.platform, channel_name, request.target,
+                    attempt_id, request.platform, channel_name, target,
                     request.source_type, request.source_id, request.inbound_message_id,
                     request.conversation_key, "success" if result.get("success") else "failed",
                     str(result.get("message_id", "")), str(result.get("code", "")),

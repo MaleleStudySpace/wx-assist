@@ -9,7 +9,27 @@ const pageTransition = {
   exit: { opacity: 0, x: -12 },
 }
 
-const PRESET_TIMES = ['09:00', '12:00', '14:00', '18:00', '21:00', '23:00']
+function parsePushTargets(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value
+  try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : [value] } catch { return [value] }
+}
+
+function PushTargetSelect({ value, onChange, enabledPlatforms = ['ilink'] }) {
+  const selected = parsePushTargets(value)
+  function toggle(platform) {
+    const next = selected.includes(platform) ? selected.filter(item => item !== platform) : [...selected, platform]
+    onChange(next.length ? JSON.stringify(next) : '')
+  }
+  return <div className="flex flex-wrap gap-2">
+    {[['ilink', '微信'], ['qqbot', 'QQ'], ['feishu', '飞书']].map(([id, label]) => enabledPlatforms.includes(id) && (
+      <button key={id} type="button" onClick={() => toggle(id)} className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${selected.includes(id) ? 'border-brand-green bg-brand-green/10 text-brand-green-hover' : 'border-border-main text-text-muted hover:bg-bg-raised'}`}>
+        {selected.includes(id) ? '✓ ' : ''}{label}
+      </button>
+    ))}
+  </div>
+}
+
 
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六']
 
@@ -1327,10 +1347,7 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
                   <p className="text-sm text-text-main/80 font-medium">推送方式</p>
                   <p className="text-xs text-text-muted mt-0.5">开启后自动推送到已配置的 IM 平台（请在「系统配置 → 消息推送」中完成配置）</p>
                 </div>
-                <Toggle
-                  enabled={values.push_target === 'ilink'}
-                  onChange={v => onPushTargetChange?.(v ? 'ilink' : '')}
-                />
+                <PushTargetSelect value={values.push_target} onChange={onPushTargetChange} enabledPlatforms={['ilink', 'qqbot', 'feishu']} />
               </div>
               {/* Save / Cancel buttons */}
               {draft && (
@@ -1726,10 +1743,7 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                   <p className="text-sm text-text-main/80 font-medium">推送方式</p>
                   <p className="text-xs text-text-muted mt-0.5">开启后摘要结果自动推送到已配置的 IM 平台（请在「系统配置 → 消息推送」中完成配置）</p>
                 </div>
-                <Toggle
-                  enabled={values.push_target === 'ilink'}
-                  onChange={v => onPushTargetChange?.(v ? 'ilink' : '')}
-                />
+                <PushTargetSelect value={values.push_target} onChange={onPushTargetChange} enabledPlatforms={['ilink', 'qqbot', 'feishu']} />
               </div>
               {/* Group profile */}
               <div>

@@ -613,52 +613,42 @@ class DigestScheduler:
         # Task progress: pushing
         self._tc_update(task_id, progress='推送中')
 
-        # 7. Push to WeChat via iLink (if configured)
-        if dg.push_target == "ilink":
+        # 7. Push through the configured IM platform(s)
+        if dg.push_target:
             try:
-                from src.im.plugins import get_plugin_push_channel
                 import json as _json
-                channel = get_plugin_push_channel("ilink")
-                if channel.is_available():
-                    push_data = _json.loads(content) if isinstance(content, str) else content
-                    push_text = push_data.get("display", content)
-                    msg = channel.format_message(title, push_text)
-                    from src.im.delivery import DeliveryRequest, get_delivery_service
-                    result = get_delivery_service().send_text(DeliveryRequest(
-                        platform="wechat", text=msg, source_type="group_digest",
-                        source_id=str(nid), conversation_key=dg.chat_id if hasattr(dg, "chat_id") else dg.group_name,
-                    ))
-                    # Update push audit in outbox
-                    push_ok = result.get("success", False)
-                    push_err = result.get("error", "") if not push_ok else ""
-                    self._outbox.update_push_result(
-                        nid, "ilink",
-                        "success" if push_ok else "failed",
-                        push_err,
-                    )
-                    # Task: update push result
-                    self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
-                    if push_ok:
-                        logger.info("Digest pushed to WeChat for '%s'", dg.group_name)
-                    else:
-                        logger.warning("WeChat push failed for '%s': %s", dg.group_name, push_err)
-                    # Broadcast push result to WebSocket clients
-                    try:
-                        from src.web.api_handlers import broadcast_event
-                        broadcast_event("digest_push_result", {
-                            "group_name": dg.group_name,
-                            "success": push_ok,
-                            "error": push_err,
-                            "session_expired": "session_expired" in push_err,
-                        })
-                    except Exception:
-                        pass  # broadcast failure should not break digest
-                else:
-                    logger.warning("WeChat push skipped for '%s': iLink not bound", dg.group_name)
-            except Exception as e:
-                logger.warning("WeChat push error for '%s': %s", dg.group_name, e)
+                from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+                push_data = _json.loads(content) if isinstance(content, str) else content
+                push_text = push_data.get("display", content)
+                push_msg = DeliveryService.format_text(dg.push_target, title, push_text)
+                result = get_delivery_service().send_text(DeliveryRequest(
+                    platform=dg.push_target,
+                    text=push_msg,
+                    source_type="group_digest",
+                    source_id=str(nid),
+                    conversation_key=dg.chat_id if hasattr(dg, "chat_id") else dg.group_name,
+                ))
+                push_ok = result.get("success", False)
+                push_err = result.get("error", "") if not push_ok else ""
+                self._outbox.update_push_result(
+                    nid, dg.push_target, "success" if push_ok else "failed", push_err,
+                )
+                self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
+                logger.info("Digest IM push %s for '%s'", "succeeded" if push_ok else "failed", dg.group_name)
                 try:
-                    self._outbox.update_push_result(nid, "ilink", "failed", str(e))
+                    from src.web.api_handlers import broadcast_event
+                    broadcast_event("digest_push_result", {
+                        "group_name": dg.group_name,
+                        "success": push_ok,
+                        "error": push_err,
+                        "session_expired": "session_expired" in push_err,
+                    })
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning("Digest IM push error for '%s': %s", dg.group_name, e)
+                try:
+                    self._outbox.update_push_result(nid, dg.push_target, "failed", str(e))
                 except Exception:
                     pass
 
@@ -802,51 +792,40 @@ class DigestScheduler:
             priority="normal",
         )
 
-        # Push to WeChat via iLink (if configured)
-        if oa.push_target == "ilink":
+        # Push through configured IM platform(s)
+        if oa.push_target:
             try:
-                from src.im.plugins import get_plugin_push_channel
                 import json as _json
-                channel = get_plugin_push_channel("ilink")
-                if channel.is_available():
-                    push_data = _json.loads(content) if isinstance(content, str) else content
-                    push_text = push_data.get("display", content)
-                    msg = channel.format_message(title, push_text)
-                    from src.im.delivery import DeliveryRequest, get_delivery_service
-                    push_result = get_delivery_service().send_text(DeliveryRequest(
-                        platform="wechat", text=msg, source_type="oa_digest",
-                        source_id=str(nid), conversation_key=oa.name,
-                    ))
-                    push_ok = push_result.get("success", False)
-                    push_err = push_result.get("error", "") if not push_ok else ""
-                    self._outbox.update_push_result(
-                        nid, "ilink",
-                        "success" if push_ok else "failed",
-                        push_err,
-                    )
-                    # Task: update push result
-                    self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
-                    if push_ok:
-                        logger.info("[OA-DIGEST] Pushed to WeChat for '%s'", oa.name)
-                    else:
-                        logger.warning("[OA-DIGEST] WeChat push failed for '%s': %s", oa.name, push_err)
-                    # Broadcast push result
-                    try:
-                        from src.web.api_handlers import broadcast_event
-                        broadcast_event("oa_digest_push_result", {
-                            "group_name": oa.name,
-                            "success": push_ok,
-                            "error": push_err,
-                            "session_expired": "session_expired" in push_err,
-                        })
-                    except Exception:
-                        pass
-                else:
-                    logger.warning("[OA-DIGEST] WeChat push skipped for '%s': iLink not bound", oa.name)
-            except Exception as e:
-                logger.warning("[OA-DIGEST] WeChat push error for '%s': %s", oa.name, e)
+                from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+                push_data = _json.loads(content) if isinstance(content, str) else content
+                push_text = push_data.get("display", content)
+                msg = DeliveryService.format_text(oa.push_target, title, push_text)
+                push_result = get_delivery_service().send_text(DeliveryRequest(
+                    platform=oa.push_target,
+                    text=msg,
+                    source_type="oa_digest",
+                    source_id=str(nid),
+                    conversation_key=oa.name,
+                ))
+                push_ok = push_result.get("success", False)
+                push_err = push_result.get("error", "") if not push_ok else ""
+                self._outbox.update_push_result(
+                    nid, oa.push_target, "success" if push_ok else "failed", push_err,
+                )
+                self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
+                logger.info("[OA-DIGEST] IM push %s for '%s'", "succeeded" if push_ok else "failed", oa.name)
                 try:
-                    self._outbox.update_push_result(nid, "ilink", "failed", str(e))
+                    from src.web.api_handlers import broadcast_event
+                    broadcast_event("oa_digest_push_result", {
+                        "group_name": oa.name, "success": push_ok, "error": push_err,
+                        "session_expired": "session_expired" in push_err,
+                    })
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning("[OA-DIGEST] IM push error for '%s': %s", oa.name, e)
+                try:
+                    self._outbox.update_push_result(nid, oa.push_target, "failed", str(e))
                 except Exception:
                     pass
 
@@ -942,18 +921,15 @@ class DigestScheduler:
                 priority="high",
             )
             # 推送到 ilink
-            if oa.push_target == "ilink":
+            if oa.push_target:
                 try:
-                    from src.im.plugins import get_plugin_push_channel
-                    channel = get_plugin_push_channel("ilink")
-                    if channel.is_available():
-                        msg = channel.format_message(title, display)
-                        from src.im.delivery import DeliveryRequest, get_delivery_service
-                        get_delivery_service().send_text(DeliveryRequest(
-                            platform="wechat", text=msg, source_type="oa_digest_failure",
-                            source_id=str(task_id), conversation_key=oa.name,
-                        ))
-                        logger.info("[OA-DIGEST] 失败通知已推送: '%s'", oa.name)
+                    from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+                    msg = DeliveryService.format_text(oa.push_target, title, display)
+                    get_delivery_service().send_text(DeliveryRequest(
+                        platform=oa.push_target, text=msg, source_type="oa_digest_failure",
+                        source_id=str(task_id), conversation_key=oa.name,
+                    ))
+                    logger.info("[OA-DIGEST] 失败通知已推送: '%s'", oa.name)
                 except Exception as e:
                     logger.warning("[OA-DIGEST] 失败通知推送失败: %s", e)
         except Exception as e:

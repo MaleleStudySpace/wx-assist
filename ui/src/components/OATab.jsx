@@ -3,7 +3,14 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Newspaper, MagnifyingGlass, Clock, Plus, Trash, Pencil, FileText, Play, Folder, X, Export, Globe, ArrowsClockwise, Sparkle, Info, CaretDown, CaretUp, NotePencil, CodeBlock, FilmStrip, ChartBar, NewspaperClipping, CaretDown as ChevronDown, CaretUp as ChevronUp, Bell, ToggleLeft } from '@phosphor-icons/react'
 import { Toggle, Input, API_BASE, getWsUrl } from './SharedComponents'
 
-// ── Preset cron schedules for easy selection ──
+function PushTargetSelect({ value, onChange }) {
+  let selected = []
+  try { const parsed = JSON.parse(value || ''); selected = Array.isArray(parsed) ? parsed : [value] } catch { selected = value ? [value] : [] }
+  const toggle = id => { const next = selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]; onChange(next.length ? JSON.stringify(next) : '') }
+  return <div className="flex flex-wrap gap-2">{[['ilink','微信'],['qqbot','QQ'],['feishu','飞书']].map(([id,label]) => <button key={id} type="button" onClick={() => toggle(id)} className={`rounded-lg border px-3 py-1.5 text-xs ${selected.includes(id) ? 'border-brand-green bg-brand-green/10 text-brand-green-hover' : 'border-border-main text-text-muted'}`}>{selected.includes(id) ? '✓ ' : ''}{label}</button>)}</div>
+}
+
+
 // Fixed rule: one trigger per line, minute/hour single int, day/month *, dow range/list/star
 const CRON_PRESETS = [
   { label: '每天 9:00', cron: '0 9 * * *' },
@@ -308,7 +315,11 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
   })
   const [lookback, setLookback] = useState(group?.lookback_hours || 24)
   const [lookbackMode, setLookbackMode] = useState(group?.lookback_mode || 'auto')
-  const [pushTarget, setPushTarget] = useState(!group || group?.push_target === 'ilink')
+  const [pushTargets, setPushTargets] = useState(() => {
+    const value = group?.push_target
+    if (!value) return group ? [] : ['ilink']
+    try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : [value] } catch { return [value] }
+  })
   const [selectedAccounts, setSelectedAccounts] = useState(group?.accounts || [])
   const [accountSearch, setAccountSearch] = useState('')
   const [showAccountPicker, setShowAccountPicker] = useState(false)
@@ -635,15 +646,15 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
         <div>
           <label className="block text-sm text-text-muted mb-2">推送设置</label>
           <div className={`flex items-center justify-between gap-3 p-3 rounded-lg border transition-colors
-            ${pushTarget ? 'border-brand-green/30 bg-brand-green-light/10' : 'border-border-main bg-bg-raised'}`}>
+            ${pushTargets.length ? 'border-brand-green/30 bg-brand-green-light/10' : 'border-border-main bg-bg-raised'}`}>
             <div className="flex items-center gap-2.5">
-              <Export size={18} className={pushTarget ? 'text-brand-green' : 'text-text-muted'} />
+              <Export size={18} className={pushTargets.length ? 'text-brand-green' : 'text-text-muted'} />
               <div>
                 <p className="text-sm font-medium text-text-main">推送方式</p>
                 <p className="text-sm text-text-muted">摘要自动推送至已配置的 IM 平台</p>
+                <PushTargetSelect value={JSON.stringify(pushTargets)} onChange={value => { try { setPushTargets(JSON.parse(value)) } catch {} }} />
               </div>
             </div>
-            <Toggle enabled={pushTarget} onChange={setPushTarget} />
           </div>
         </div>
       </div>
@@ -658,7 +669,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
             custom_prompt: template === 'custom' ? customPrompt : '',
             lookback_hours: lookback,
             lookback_mode: lookbackMode,
-            push_target: pushTarget ? 'ilink' : '',
+            push_target: pushTargets.length ? JSON.stringify(pushTargets) : '',
             accounts: selectedAccounts,
           })}
           disabled={!name.trim() || selectedAccounts.length === 0 || !!validateCronExpr(cronExpr) || (template === 'custom' && !customPrompt.trim())}
@@ -768,7 +779,11 @@ function MonitorGroupCard({ group, accounts, onEdit, onDelete, onToggle, onViewA
 function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
   const [name, setName] = useState(group?.name || '')
   const [selectedAccounts, setSelectedAccounts] = useState(group?.accounts || [])
-  const [pushTarget, setPushTarget] = useState(!group || group?.push_target === 'ilink')
+  const [pushTargets, setPushTargets] = useState(() => {
+    const value = group?.push_target
+    if (!value) return group ? [] : ['ilink']
+    try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : [value] } catch { return [value] }
+  })
   const [customPrompt, setCustomPrompt] = useState(group?.custom_prompt || '')
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [accountSearch, setAccountSearch] = useState('')
@@ -933,15 +948,15 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
 
       {/* Push toggle */}
       <div className={`flex items-center justify-between gap-3 p-3 rounded-lg border transition-colors
-        ${pushTarget ? 'border-brand-green/30 bg-brand-green-light/10' : 'border-border-main bg-bg-raised'}`}>
+        ${pushTargets.length ? 'border-brand-green/30 bg-brand-green-light/10' : 'border-border-main bg-bg-raised'}`}>
         <div className="flex items-center gap-2.5">
-          <Export size={18} className={pushTarget ? 'text-brand-green' : 'text-text-muted'} />
+          <Export size={18} className={pushTargets.length ? 'text-brand-green' : 'text-text-muted'} />
           <div>
             <p className="text-sm font-medium text-text-main">推送方式</p>
             <p className="text-sm text-text-muted">新文章即时推送至已配置的 IM 平台</p>
+            <PushTargetSelect value={JSON.stringify(pushTargets)} onChange={value => { try { setPushTargets(JSON.parse(value)) } catch {} }} />
           </div>
         </div>
-        <Toggle enabled={pushTarget} onChange={setPushTarget} />
       </div>
 
       {/* 免打扰时段 — 默认收起，有配置时展开 */}
@@ -1045,7 +1060,7 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
           onClick={() => onSave({
             name,
             accounts: selectedAccounts,
-            push_target: pushTarget ? 'ilink' : '',
+            push_target: pushTargets.length ? JSON.stringify(pushTargets) : '',
             custom_prompt: customPrompt || undefined,
             dnd_start: dndEnabled ? dndStart : '',
             dnd_end: dndEnabled ? dndEnd : '',

@@ -269,23 +269,19 @@ class CronScheduler:
             )
             push_cfg = job.get("push", {})
             push_status = "skipped"
-            if push_cfg.get("target") == "ilink":
-                from src.im.plugins import get_plugin_push_channel
-                channel = get_plugin_push_channel("ilink")
-                if channel and channel.is_available():
-                    msg = channel.format_message(f"⏰ {job_name}", text)
-                    from src.im.delivery import DeliveryRequest, get_delivery_service
-                    result = get_delivery_service().send_text(DeliveryRequest(
-                        platform="wechat", text=msg, source_type="cron",
-                        source_id=str(job_id), conversation_key=job.get("chat_id", ""),
-                    ))
-                    ok = result.get("success", False)
-                    err = result.get("error", "") if not ok else ""
-                    self._outbox.update_push_result(
-                        nid, "ilink", "success" if ok else "failed", err)
-                    push_status = "success" if ok else "failed"
-                    logger.info("[CRON] 推送 %s: %s",
-                                "成功" if ok else "失败", job_name)
+            if push_cfg.get("target"):
+                msg = f"⏰ {job_name}\n\n{text}"
+                from src.im.delivery import DeliveryRequest, get_delivery_service
+                result = get_delivery_service().send_text(DeliveryRequest(
+                    platform=push_cfg.get("target") or "wechat", text=msg, source_type="cron",
+                    source_id=str(job_id), conversation_key=job.get("chat_id", ""),
+                ))
+                ok = result.get("success", False)
+                err = result.get("error", "") if not ok else ""
+                self._outbox.update_push_result(
+                    nid, push_cfg.get("target") or "ilink", "success" if ok else "failed", err)
+                push_status = "success" if ok else "failed"
+                logger.info("[CRON] 推送 %s: %s", "成功" if ok else "失败", job_name)
             # 同步更新 TaskCenter 推送状态
             if task_center_id and self._task_center:
                 try:
