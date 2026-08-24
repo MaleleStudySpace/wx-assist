@@ -99,6 +99,12 @@ class FeishuAdapter(BasePlatformAdapter):
         try:
             reply = self._callback(parsed) if self._callback else None
             if reply and parsed.chat_type == "dm":
-                self.send_text(parsed.chat_id, reply, reply_to=parsed.native_message_id)
+                from ...delivery import DeliveryRequest, get_delivery_service
+                get_delivery_service().send_text(DeliveryRequest(
+                    platform="feishu", text=reply, target=parsed.chat_id,
+                    source_type="agent_reply", source_id=parsed.native_message_id,
+                    inbound_message_id=parsed.native_message_id,
+                    conversation_key=parsed.chat_id, reply_to=parsed.native_message_id,
+                ))
         except Exception:
             logger.exception("[feishu] event processing failed")

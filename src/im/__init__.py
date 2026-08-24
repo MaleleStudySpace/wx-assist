@@ -11,4 +11,5 @@ __all__ = [
     "push_channel",
     "config_schema",
     "progress_router",
+    "delivery",
 ]

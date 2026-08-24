@@ -274,7 +274,11 @@ class CronScheduler:
                 channel = get_plugin_push_channel("ilink")
                 if channel and channel.is_available():
                     msg = channel.format_message(f"⏰ {job_name}", text)
-                    result = channel.send_message(msg)
+                    from src.im.delivery import DeliveryRequest, get_delivery_service
+                    result = get_delivery_service().send_text(DeliveryRequest(
+                        platform="wechat", text=msg, source_type="cron",
+                        source_id=str(job_id), conversation_key=job.get("chat_id", ""),
+                    ))
                     ok = result.get("success", False)
                     err = result.get("error", "") if not ok else ""
                     self._outbox.update_push_result(

@@ -1334,12 +1334,12 @@ const PUSH_TYPE_ICONS = {
   oa_article_alert: '🔔',
 }
 
-function PushHistory() {
+function PushHistory({ platform = 'im' }) {
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(true)
-  const [filters, setFilters] = useState({ type: '', push_status: '' })
+  const [filters, setFilters] = useState({ type: '', push_status: '', platform: '' })
 
-  useEffect(() => { loadHistory() }, [filters.type, filters.push_status])
+  useEffect(() => { loadHistory() }, [filters.type, filters.push_status, filters.platform])
 
   // Listen for push result events to auto-refresh
   useEffect(() => {
@@ -1364,6 +1364,7 @@ function PushHistory() {
     setLoading(true)
     try {
       const params = new URLSearchParams({
+        ...(filters.platform ? { platform: filters.platform, source: 'im' } : {}),
         ...(filters.type ? { type: filters.type } : {}),
         ...(filters.push_status ? { push_status: filters.push_status } : {}),
         limit: '50',
@@ -1388,7 +1389,14 @@ function PushHistory() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-2 mb-4 flex-wrap">
+        {platform === 'im' && <select value={filters.platform || ''} onChange={e => setFilters(prev => ({ ...prev, platform: e.target.value }))}
+          className="bg-bg-raised border border-border-main rounded-lg px-3 py-2 text-sm text-text-main focus:outline-none focus:border-brand-green">
+          <option value="">全部平台</option>
+          <option value="wechat">微信</option>
+          <option value="qqbot">QQ</option>
+          <option value="feishu">飞书</option>
+        </select>}
         <select value={filters.type} onChange={e => setFilters(prev => ({ ...prev, type: e.target.value }))}
           className="bg-bg-raised border border-border-main rounded-lg px-3 py-2 text-sm text-text-main focus:outline-none focus:border-brand-green">
           <option value="">全部类型</option>
@@ -1435,6 +1443,7 @@ function PushRecordCard({ record }) {
   const typeLabel = PUSH_TYPE_LABELS[record.type] || record.type
   const typeBadge = PUSH_TYPE_BADGE[record.type] || 'bg-bg-raised text-text-muted border-border-main'
   const typeIcon = PUSH_TYPE_ICONS[record.type] || '📌'
+  const platformLabel = { wechat: '微信', qqbot: 'QQ', feishu: '飞书', ilink: '微信' }[record.platform || record.push_channel] || (record.platform || record.push_channel || '')
   const groupName = record.group_name || record.chat_id || ''
   const rawContent = record.content || ''
 
@@ -1500,6 +1509,9 @@ function PushRecordCard({ record }) {
       <div className="flex items-center gap-2 flex-wrap mb-2">
         <span className={`text-[11px] px-2 py-0.5 rounded-md font-semibold ${typeBadge}`}>
           {typeIcon} {typeLabel}
+        </span>
+        <span className="text-[11px] px-2 py-0.5 rounded-md font-semibold bg-bg-raised text-text-muted border border-border-main/50">
+          {platformLabel || 'IM'}
         </span>
         <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${
           isSuccess ? 'text-brand-green' : isFailed ? 'text-status-error' : 'text-status-warn'
@@ -2102,8 +2114,7 @@ function PushSection() {
         </div>
       </div>
 
-      {/* ── 推送记录 ── */}
-      <PushHistory />
+      {/* ── 推送记录已移至多平台调度主页 ── */}
     </div>
   )
 }
@@ -2132,6 +2143,7 @@ function PushPlatformOverview({ platforms, onSelect }) {
           )
         })}
       </div>
+      <PushHistory />
     </div>
   )
 }

@@ -557,7 +557,11 @@ class OAMonitorEngine:
                 push_data = _json.loads(content) if isinstance(content, str) else content
                 push_text = push_data.get("display", content)
                 push_msg = channel.format_message(title, push_text)
-                result = channel.send_message(push_msg)
+                from src.im.delivery import DeliveryRequest, get_delivery_service
+                result = get_delivery_service().send_text(DeliveryRequest(
+                    platform="wechat", text=push_msg, source_type="oa_article_alert",
+                    source_id=str(nid), conversation_key=group_name,
+                ))
                 push_ok = result.get("success", False)
                 push_err = result.get("error", "") if not push_ok else ""
                 self._outbox.update_push_result(

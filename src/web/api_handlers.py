@@ -5509,7 +5509,12 @@ def handle_push_history(params, config: AssistantConfig):
         offset = int((params.get("offset", ["0"]) or ["0"])[0])
         date_from = (params.get("date_from", [""]) or [""])[0]
         date_to = (params.get("date_to", [""]) or [""])[0]
-        records = outbox.list_push_history(
+        platform = (params.get("platform", [""]) or [""])[0]
+        delivery_records = []
+        if platform or params.get("source", [""])[0] == "im":
+            from src.im.delivery import get_delivery_service
+            delivery_records = get_delivery_service().list_attempts(platform=platform, limit=limit)
+        records = delivery_records or outbox.list_push_history(
             notif_type=notif_type,
             push_status=push_status,
             limit=limit,
@@ -5811,7 +5816,11 @@ def _do_task_retry_push(task: dict) -> dict:
         except Exception:
             push_text = content
     msg = channel.format_message(title, push_text)
-    return channel.send_message(msg)
+    from src.im.delivery import DeliveryRequest, get_delivery_service
+    return get_delivery_service().send_text(DeliveryRequest(
+        platform="wechat", text=msg, source_type=str(task.get("task_type", "retry")),
+        source_id=str(task.get("id", "")), conversation_key=str(task.get("chat_id", "")),
+    ))
 
 
 def _task_retry_after(tc, task: dict, ok: bool, err: str) -> None:

@@ -245,7 +245,13 @@ class QQBotAdapter(BasePlatformAdapter):
         try:
             reply = self._callback(message)
             if reply and reply.strip():
-                self.send_text(message.chat_id, reply, reply_to=message.native_message_id)
+                from ...delivery import DeliveryRequest, get_delivery_service
+                get_delivery_service().send_text(DeliveryRequest(
+                    platform="qqbot", text=reply, target=message.chat_id,
+                    source_type="agent_reply", source_id=message.native_message_id,
+                    inbound_message_id=message.native_message_id,
+                    conversation_key=message.chat_id, reply_to=message.native_message_id,
+                ))
         except Exception:
             logger.exception("[qqbot] message callback failed")
 

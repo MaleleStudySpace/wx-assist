@@ -623,7 +623,11 @@ class DigestScheduler:
                     push_data = _json.loads(content) if isinstance(content, str) else content
                     push_text = push_data.get("display", content)
                     msg = channel.format_message(title, push_text)
-                    result = channel.send_message(msg)
+                    from src.im.delivery import DeliveryRequest, get_delivery_service
+                    result = get_delivery_service().send_text(DeliveryRequest(
+                        platform="wechat", text=msg, source_type="group_digest",
+                        source_id=str(nid), conversation_key=dg.chat_id if hasattr(dg, "chat_id") else dg.group_name,
+                    ))
                     # Update push audit in outbox
                     push_ok = result.get("success", False)
                     push_err = result.get("error", "") if not push_ok else ""
@@ -808,7 +812,11 @@ class DigestScheduler:
                     push_data = _json.loads(content) if isinstance(content, str) else content
                     push_text = push_data.get("display", content)
                     msg = channel.format_message(title, push_text)
-                    push_result = channel.send_message(msg)
+                    from src.im.delivery import DeliveryRequest, get_delivery_service
+                    push_result = get_delivery_service().send_text(DeliveryRequest(
+                        platform="wechat", text=msg, source_type="oa_digest",
+                        source_id=str(nid), conversation_key=oa.name,
+                    ))
                     push_ok = push_result.get("success", False)
                     push_err = push_result.get("error", "") if not push_ok else ""
                     self._outbox.update_push_result(
@@ -940,7 +948,11 @@ class DigestScheduler:
                     channel = get_plugin_push_channel("ilink")
                     if channel.is_available():
                         msg = channel.format_message(title, display)
-                        channel.send_message(msg)
+                        from src.im.delivery import DeliveryRequest, get_delivery_service
+                        get_delivery_service().send_text(DeliveryRequest(
+                            platform="wechat", text=msg, source_type="oa_digest_failure",
+                            source_id=str(task_id), conversation_key=oa.name,
+                        ))
                         logger.info("[OA-DIGEST] 失败通知已推送: '%s'", oa.name)
                 except Exception as e:
                     logger.warning("[OA-DIGEST] 失败通知推送失败: %s", e)

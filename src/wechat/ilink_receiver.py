@@ -412,7 +412,13 @@ class ILinkReceiver:
                 from src.im.plugins.wechat.push import get_wechat_push_channel
                 push = get_wechat_push_channel()
                 if push.is_available():
-                    push.send_message(reply)
+                    from src.im.delivery import DeliveryRequest, get_delivery_service
+                    get_delivery_service().send_text(DeliveryRequest(
+                        platform="wechat", text=reply, source_type="agent_reply",
+                        source_id=str(std_msg.get("message_id", "")),
+                        inbound_message_id=str(std_msg.get("message_id", "")),
+                        conversation_key=str(std_msg.get("chat_id", "")),
+                    ))
                 else:
                     logger.warning("[iLink] Cannot reply: WeChat push channel not bound")
             else:
