@@ -851,6 +851,11 @@ _onboarding_data = {
 _onboarding_lock = threading.Lock()
 _ilink_test_push_lock = threading.Lock()
 
+# IM platform QR onboarding tasks. Values contain provider-specific task objects;
+# secrets are only used server-side and are never returned by status endpoints.
+_im_onboarding_tasks = {}
+_im_onboarding_lock = threading.RLock()
+
 # Async step1 state
 _step1_state = {
     "running": False,
@@ -1286,6 +1291,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
             put_path.startswith("/api/scheduler/tasks/") and len(put_path.split("/")) == 5
         ) or (
             put_path.startswith("/api/platforms/") and len(put_path.split("/")) == 4
+        ) or (
+            put_path.startswith("/api/platforms/") and "/onboard/" in put_path
         ):
             self.do_GET()
         else:
@@ -1348,6 +1355,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          "/api/skills/sample",
                          "/api/platforms",
                          "/webhook/feishu") or (
+                             self.path.startswith("/api/platforms/") and "/onboard/" in self.path
+                         ) or (
                              self.path.startswith("/api/platforms/") and len(self.path.split("/")) == 5
                              and self.path.endswith("/test")
                          ) or (
@@ -2057,8 +2066,86 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 })
             return
 
-        # ── API: platform configuration and connection test ─────────
-        if self.path.startswith("/api/platforms/"):
+        # ── API: IM QR onboarding ───────────────────────────────────
+        if self.path.startswith("/api/platforms/") and "/onboard/" in self.path:
+            try:
+                parts = self.path.rstrip("/").split("/")
+                platform_name = parts[3] if len(parts) >= 4 else ""
+                # start: /api/platforms/{platform}/onboard/start
+                # poll/cancel: /api/platforms/{platform}/onboard/{task_id}/{action}
+                if len(parts) == 6 and parts[4] == "onboard":
+                    task_id = ""
+                    action = parts[5]
+                elif len(parts) == 7 and parts[4] == "onboard":
+                    task_id = parts[5]
+                    action = parts[6]
+                else:
+                    self.send_json({"ok": False, "error": "invalid onboarding path"}, 400)
+                    return
+                if platform_name not in {"qqbot", "feishu"}:
+                    self.send_json({"ok": False, "error": "unsupported platform"}, 404)
+                    return
+                body = {}
+                if self.command == "POST":
+                    length = min(int(self.headers.get("Content-Length", "0")), self.MAX_BODY_SIZE)
+                    body = json.loads(self.rfile.read(length)) if length else {}
+                from src.im.config_schema import PlatformConfig, load_platforms_config, save_platforms_config
+                from src.im.registry import get_global_registry
+                if action == "start":
+                    if platform_name == "qqbot":
+                        from src.im.plugins.qqbot.onboarding import get_qq_onboarding
+                        result = get_qq_onboarding().start()
+                    else:
+                        from src.im.plugins.feishu.onboarding import get_feishu_onboarding
+                        result = get_feishu_onboarding().start(body.get("domain", "feishu"))
+                    task_id = result["task_id"]
+                    with _im_onboarding_lock:
+                        _im_onboarding_tasks[task_id] = {"platform": platform_name, "status": "pending"}
+                    self.send_json({"ok": True, **result})
+                    return
+                if action == "status" and self.command == "GET":
+                    if platform_name == "qqbot":
+                        from src.im.plugins.qqbot.onboarding import get_qq_onboarding
+                        result = get_qq_onboarding().poll(task_id)
+                    else:
+                        from src.im.plugins.feishu.onboarding import get_feishu_onboarding
+                        result = get_feishu_onboarding().poll(task_id)
+                    if result.get("status") == "completed":
+                        configs = load_platforms_config()
+                        extra = dict(result)
+                        extra.pop("status", None)
+                        extra["client_secret"] = extra.pop("client_secret", "")
+                        extra["app_secret"] = extra.pop("app_secret", "")
+                        transport = "qq_openapi" if platform_name == "qqbot" else "feishu_webhook"
+                        config = PlatformConfig(platform_name, enabled=True, transport=transport, extra=extra)
+                        configs = [c for c in configs if c.name != platform_name] + [config]
+                        save_platforms_config(configs)
+                        with _im_onboarding_lock:
+                            _im_onboarding_tasks[task_id] = {"platform": platform_name, "status": "completed"}
+                        registry = get_global_registry()
+                        applied = False
+                        apply_result = None
+                        if registry:
+                            apply_result = registry.start_one(config)
+                            applied = True
+                    self.send_json({"ok": True, "applied": applied, "apply_status": apply_result, **result})
+                    return
+                if action == "cancel" and self.command == "POST":
+                    if platform_name == "qqbot":
+                        from src.im.plugins.qqbot.onboarding import get_qq_onboarding
+                        ok = get_qq_onboarding().cancel(task_id)
+                    else:
+                        from src.im.plugins.feishu.onboarding import get_feishu_onboarding
+                        ok = get_feishu_onboarding().cancel(task_id)
+                    self.send_json({"ok": ok, "status": "cancelled" if ok else "not_found"})
+                    return
+                self.send_json({"ok": False, "error": "method not allowed"}, 405)
+            except Exception as exc:
+                logger.warning("[im onboarding] request failed: %s", exc)
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            return
+
+        if self.path.startswith("/api/platforms/") and self.command in ("PUT", "POST"):
             try:
                 import json as _json
                 from dataclasses import asdict
