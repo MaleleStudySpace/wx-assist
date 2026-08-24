@@ -4936,40 +4936,25 @@ def _push_oa_digest(result, group, config):
 
     try:
         if group.push_target:
-            from src.im.plugins import get_plugin_push_channel
-            channel = get_plugin_push_channel("ilink")
-            if channel.is_available():
-                title = f"📰 {group.name} · 公众号摘要"
-                ac = result.get("articles_count", 0)
-                content = f"📄 {ac} 篇文章\n\n{result['digest_text']}"
-                msg = channel.format_message(title, content)
-                push_result = channel.send_message(msg)
-                push_ok = push_result.get("success", False)
-                push_err = push_result.get("error", "") if not push_ok else ""
-                if oa_nid:
-                    try:
-                        outbox = Outbox()
-                        outbox.update_push_result(
-                            oa_nid, "ilink",
-                            "success" if push_ok else "failed",
-                            push_err,
-                        )
-                    except Exception:
-                        pass
-                broadcast_event("oa_digest_push_result", {
-                    "group_name": group.name,
-                    "success": push_ok,
-                    "error": push_err,
-                })
-            else:
-                if oa_nid:
-                    try:
-                        outbox = Outbox()
-                        outbox.update_push_result(
-                            oa_nid, "ilink", "failed", "iLink推送通道未绑定或已断开",
-                        )
-                    except Exception:
-                        pass
+            import json as _json
+            from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+            title = f"📰 {group.name} · 公众号摘要"
+            ac = result.get("articles_count", 0)
+            content = f"📄 {ac} 篇文章\n\n{result['digest_text']}"
+            msg = DeliveryService.format_text(group.push_target, title, content)
+            push_result = get_delivery_service().send_text(DeliveryRequest(
+                platform=group.push_target, text=msg, source_type="oa_digest",
+                source_id=str(oa_nid or ""), conversation_key=group.name,
+            ))
+            push_ok = push_result.get("success", False)
+            push_err = push_result.get("error", "") if not push_ok else ""
+            if oa_nid:
+                try:
+                    outbox = Outbox()
+                    outbox.update_push_result(oa_nid, group.push_target,
+                                              "success" if push_ok else "failed", push_err)
+                except Exception:
+                    pass
         else:
             if oa_nid:
                 try:
@@ -5802,11 +5787,6 @@ def _do_task_retry_push(task: dict) -> dict:
         return {"success": False, "error": "任务无可用推送内容（result 为空且无 outbox 关联）"}
     title, content = payload
 
-    from src.im.plugins import get_plugin_push_channel
-    channel = get_plugin_push_channel("ilink")
-    if not channel.is_available():
-        return {"success": False, "error": "iLink 未绑定，无法推送"}
-
     # outbox content 是 JSON（含 display 展示文本）；纯文本直接推送
     push_text = content
     if isinstance(content, str) and content.lstrip().startswith("{"):
@@ -5815,10 +5795,11 @@ def _do_task_retry_push(task: dict) -> dict:
             push_text = _d.get("display", content)
         except Exception:
             push_text = content
-    msg = channel.format_message(title, push_text)
-    from src.im.delivery import DeliveryRequest, get_delivery_service
+    target_platform = task.get("push_target") or "ilink"
+    from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+    msg = DeliveryService.format_text(target_platform, title, push_text)
     return get_delivery_service().send_text(DeliveryRequest(
-        platform=task.get("push_target") or "wechat", text=msg, source_type=str(task.get("task_type", "retry")),
+        platform=target_platform, text=msg, source_type=str(task.get("task_type", "retry")),
         source_id=str(task.get("id", "")), conversation_key=str(task.get("chat_id", "")),
     ))
 
