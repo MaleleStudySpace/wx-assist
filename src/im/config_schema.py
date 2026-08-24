@@ -13,7 +13,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 PLATFORMS_CONFIG_PATH = Path("data/platforms.json")
-SUPPORTED_TRANSPORTS = {"", "wcdb", "mac_ui", "mac_hybrid", "ilink", "qq_openapi"}
+SUPPORTED_TRANSPORTS = {"", "wcdb", "mac_ui", "mac_hybrid", "ilink", "qq_openapi", "feishu_webhook"}
 
 
 @dataclass

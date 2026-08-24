@@ -1,23 +1,11 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle, Copy, FloppyDisk, ArrowLeft, Eye, EyeSlash, WarningCircle } from '@phosphor-icons/react'
+import { API_BASE } from './SharedComponents'
 
-const STORAGE_KEY = 'wx-assist-im-platform-demo'
-
-const EMPTY_CONFIG = {
-  qqbot: { enabled: false, app_id: '', client_secret: '' },
-  feishu: { enabled: false, app_id: '', app_secret: '', verification_token: '' },
-}
-
-function loadDemoConfig() {
-  try {
-    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
-    return {
-      qqbot: { ...EMPTY_CONFIG.qqbot, ...(value.qqbot || {}) },
-      feishu: { ...EMPTY_CONFIG.feishu, ...(value.feishu || {}) },
-    }
-  } catch {
-    return { ...EMPTY_CONFIG }
-  }
+function defaultConfig(platform) {
+  return platform === 'qqbot'
+    ? { enabled: false, app_id: '', client_secret: '' }
+    : { enabled: false, app_id: '', app_secret: '', verification_token: '' }
 }
 
 function SecretInput({ label, value, onChange, placeholder }) {
@@ -57,6 +45,10 @@ function DemoField({ label, value, onChange, placeholder }) {
 
 function PlatformConfigForm({ platform, config, onChange, onSaved, onBack }) {
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState('')
   const isQQ = platform === 'qqbot'
   const label = isQQ ? 'QQ' : '飞书'
   const webhookUrl = `${window.location.origin}/webhook/feishu`
@@ -66,13 +58,46 @@ function PlatformConfigForm({ platform, config, onChange, onSaved, onBack }) {
     setSaved(false)
   }
 
-  function save() {
-    const next = loadDemoConfig()
-    next[platform] = config
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-    setSaved(true)
-    onSaved?.()
-    window.setTimeout(() => setSaved(false), 2200)
+  async function save() {
+    setSaving(true)
+    setError('')
+    setTestResult('')
+    try {
+      const response = await fetch(`${API_BASE}/api/platforms/${platform}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: config.enabled, ...config }),
+      })
+      const data = await response.json()
+      if (!response.ok || !data.ok) throw new Error(data.error || '保存失败')
+      setSaved(true)
+      onSaved?.()
+      window.setTimeout(() => setSaved(false), 2200)
+    } catch (err) {
+      setError(err.message || '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function testConnection() {
+    setTesting(true)
+    setError('')
+    setTestResult('')
+    try {
+      const response = await fetch(`${API_BASE}/api/platforms/${platform}/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      })
+      const data = await response.json()
+      if (!response.ok || !data.ok) throw new Error(data.error || '连接测试失败')
+      setTestResult('连接测试成功')
+    } catch (err) {
+      setError(err.message || '连接测试失败')
+    } finally {
+      setTesting(false)
+    }
   }
 
   async function copyWebhook() {
@@ -97,11 +122,8 @@ function PlatformConfigForm({ platform, config, onChange, onSaved, onBack }) {
         </div>
       </div>
 
-      <div className="rounded-xl border border-status-warn/30 bg-status-warn/5 px-4 py-3 text-xs text-text-muted">
-        <div className="flex items-start gap-2">
-          <WarningCircle size={16} weight="fill" className="mt-0.5 shrink-0 text-status-warn" />
-          <span>当前为前端演示配置，凭证仅保存在浏览器 localStorage，不会发送到后端。正式接入后将改为安全保存并由后端启动平台连接。</span>
-        </div>
+      <div className="rounded-xl border border-status-info/20 bg-status-info/5 px-4 py-3 text-xs text-text-muted">
+        当前使用后端平台配置接口。Secret 不会回显；留空时保持后端已有值不变。
       </div>
 
       <label className="flex items-center justify-between rounded-xl border border-border-main bg-bg-raised px-4 py-3">
@@ -136,22 +158,25 @@ function PlatformConfigForm({ platform, config, onChange, onSaved, onBack }) {
 
       <div className="flex items-center justify-between border-t border-border-main pt-5">
         <div className="flex items-center gap-2 text-xs text-text-muted">
-          {saved && <><CheckCircle size={16} weight="fill" className="text-brand-green" /> 演示配置已保存</>}
+          {saved && <><CheckCircle size={16} weight="fill" className="text-brand-green" /> 配置已保存</>}
+          {testResult && <><CheckCircle size={16} weight="fill" className="text-brand-green" /> {testResult}</>}
+          {error && <span className="text-status-error">{error}</span>}
         </div>
-        <button type="button" onClick={save} className="inline-flex items-center gap-2 rounded-lg bg-brand-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-green-hover">
-          <FloppyDisk size={16} /> 保存演示配置
-        </button>
+        <div className="flex gap-2">
+          <button type="button" onClick={testConnection} disabled={testing || saving} className="rounded-lg border border-border-main px-4 py-2.5 text-sm font-semibold text-text-main hover:bg-bg-raised disabled:opacity-50">
+            {testing ? '测试中...' : '测试连接'}
+          </button>
+          <button type="button" onClick={save} disabled={saving || testing} className="inline-flex items-center gap-2 rounded-lg bg-brand-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-green-hover disabled:opacity-50">
+            <FloppyDisk size={16} /> {saving ? '保存中...' : '保存并应用'}
+          </button>
+        </div>
       </div>
     </div>
   )
 }
 
-export default function PlatformConfigDemo({ platform, onBack, onSaved }) {
-  const [config, setConfig] = useState(() => loadDemoConfig()[platform] || {})
-  useEffect(() => setConfig(loadDemoConfig()[platform] || {}), [platform])
+export default function PlatformConfigDemo({ platform, initialConfig, onBack, onSaved }) {
+  const [config, setConfig] = useState(() => ({ ...defaultConfig(platform), ...(initialConfig || {}) }))
+  useEffect(() => setConfig({ ...defaultConfig(platform), ...(initialConfig || {}) }), [platform, initialConfig])
   return <PlatformConfigForm platform={platform} config={config} onChange={setConfig} onSaved={onSaved} onBack={onBack} />
-}
-
-export function getDemoPlatformConfig() {
-  return loadDemoConfig()
 }

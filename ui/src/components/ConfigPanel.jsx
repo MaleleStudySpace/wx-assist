@@ -2139,6 +2139,7 @@ function PushPlatformOverview({ platforms, onSelect }) {
 function PushPlatformView() {
   const [tab, setTab] = useState('overview')
   const [platforms, setPlatforms] = useState([])
+  const reloadPlatforms = () => fetch(`${API_BASE}/api/platforms`).then(res => res.json()).then(data => setPlatforms(data.platforms || [])).catch(() => {})
 
   useEffect(() => {
     let cancelled = false
@@ -2169,7 +2170,12 @@ function PushPlatformView() {
       {tab === 'overview' && <PushPlatformOverview platforms={platforms} onSelect={setTab} />}
       {tab === 'wechat' && <PushSection />}
       {tab !== 'overview' && tab !== 'wechat' && (
-        <PlatformConfigDemo platform={tab} onBack={() => setTab('overview')} onSaved={() => {}} />
+        <PlatformConfigDemo
+          platform={tab}
+          initialConfig={platforms.find(item => item.name === tab)?.config || {}}
+          onBack={() => setTab('overview')}
+          onSaved={reloadPlatforms}
+        />
       )}
     </div>
   )

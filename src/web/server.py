@@ -1285,7 +1285,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
         ) or (
             put_path.startswith("/api/scheduler/tasks/") and len(put_path.split("/")) == 5
         ) or (
-            self.path.startswith("/api/mcp/servers/") and len(self.path.split("/")) >= 5
+            put_path.startswith("/api/platforms/") and len(put_path.split("/")) == 4
         ):
             self.do_GET()
         else:
@@ -1348,6 +1348,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          "/api/skills/sample",
                          "/api/platforms",
                          "/webhook/feishu") or (
+                             self.path.startswith("/api/platforms/") and len(self.path.split("/")) == 5
+                             and self.path.endswith("/test")
+                         ) or (
                              self.path.startswith("/api/assistant/notifications/")
                              and (self.path.endswith("/ack") or self.path.endswith("/ignore"))
                          ) or (
@@ -2054,8 +2057,98 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 })
             return
 
-        # ── API: platform delivery overview ────────────────────────
-        if self.path == "/api/platforms":
+        # ── API: platform configuration and connection test ─────────
+        if self.path.startswith("/api/platforms/"):
+            try:
+                import json as _json
+                from dataclasses import asdict
+                from src.im.config_schema import (
+                    PlatformConfig, load_platforms_config, save_platforms_config,
+                )
+                from src.im.registry import get_global_registry
+
+                parts = self.path.rstrip("/").split("/")
+                platform_name = parts[3] if len(parts) >= 4 else ""
+                action = parts[4] if len(parts) >= 5 else ""
+                if platform_name not in {"qqbot", "feishu"}:
+                    self.send_json({"ok": False, "error": "unsupported platform"}, 404)
+                    return
+
+                body = {}
+                if self.command in ("PUT", "POST"):
+                    length = min(int(self.headers.get("Content-Length", "0")), self.MAX_BODY_SIZE)
+                    body = _json.loads(self.rfile.read(length)) if length else {}
+                    if not isinstance(body, dict):
+                        self.send_json({"ok": False, "error": "body must be an object"}, 400)
+                        return
+
+                configs = load_platforms_config()
+                existing = next((item for item in configs if item.name == platform_name), None)
+
+                if self.command == "POST" and action == "test":
+                    extra = dict(existing.extra) if existing else {}
+                    for key in ("app_id", "client_secret", "app_secret", "verification_token", "encrypt_key"):
+                        if body.get(key):
+                            extra[key] = str(body[key]).strip()
+                    transport = "qq_openapi" if platform_name == "qqbot" else "feishu_webhook"
+                    test_config = PlatformConfig(platform_name, enabled=True, transport=transport, extra=extra)
+                    if not extra.get("app_id") or not (extra.get("client_secret") if platform_name == "qqbot" else extra.get("app_secret")):
+                        self.send_json({"ok": False, "error": "required credentials are missing"}, 400)
+                        return
+                    if platform_name == "qqbot":
+                        from src.im.plugins.qqbot.openapi_client import QQOpenAPIClient
+                        client = QQOpenAPIClient(extra["app_id"], extra["client_secret"])
+                        client.get_gateway_url()
+                        client.close()
+                    else:
+                        from src.im.plugins.feishu.openapi_client import FeishuOpenAPIClient
+                        client = FeishuOpenAPIClient(extra["app_id"], extra["app_secret"])
+                        client.ensure_token()
+                        client.close()
+                    self.send_json({"ok": True, "platform": platform_name, "status": "reachable"})
+                    return
+
+                if self.command not in ("PUT", "POST") or action:
+                    self.send_json({"ok": False, "error": "method not allowed"}, 405)
+                    return
+
+                extra = dict(existing.extra) if existing else {}
+                for key in ("app_id", "client_secret", "app_secret", "verification_token", "encrypt_key", "default_target"):
+                    if key in body and body[key] not in (None, ""):
+                        extra[key] = str(body[key]).strip()
+                transport = str(body.get("transport") or (existing.transport if existing else ("qq_openapi" if platform_name == "qqbot" else "feishu_webhook")))
+                config = PlatformConfig(
+                    name=platform_name,
+                    enabled=bool(body.get("enabled", existing.enabled if existing else False)),
+                    transport=transport,
+                    extra=extra,
+                )
+                # from_dict is the single schema validator for API input.
+                config = PlatformConfig.from_dict(asdict(config))
+                configs = [item for item in configs if item.name != platform_name]
+                configs.append(config)
+                save_platforms_config(configs)
+
+                registry = get_global_registry()
+                applied = False
+                result = {"ok": True, "status": "saved"}
+                if registry is not None:
+                    result = registry.start_one(config)
+                    applied = True
+                self.send_json({
+                    "ok": True,
+                    "saved": True,
+                    "applied": applied,
+                    "platform": platform_name,
+                    "status": result,
+                    "configured": bool(extra.get("app_id") and (extra.get("client_secret") or extra.get("app_secret"))),
+                })
+            except Exception as exc:
+                logger.warning("[platforms] configuration request failed: %s", exc)
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            return
+
+
             try:
                 from src.im.registry import get_global_registry
                 from src.im.config_schema import load_platforms_config
@@ -2072,6 +2165,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             "ok": bool(_status.wechat_online),
                             "detail": "已连接" if _status.wechat_online else "未连接",
                         },
+                        "config": {"configured": True},
                     },
                     {
                         "name": "qqbot",
@@ -2079,6 +2173,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         "enabled": bool(configs.get("qqbot", None) and configs["qqbot"].enabled),
                         "configurable": True,
                         "status": health.get("qqbot", {"ok": False, "detail": "未配置"}),
+                        "config": {"configured": bool(configs.get("qqbot") and configs["qqbot"].extra.get("app_id")),
+                                   "secret_configured": bool(configs.get("qqbot") and configs["qqbot"].extra.get("client_secret")),
+                                   "default_target": (configs.get("qqbot").extra.get("default_target", "") if configs.get("qqbot") else "")},
                     },
                     {
                         "name": "feishu",
@@ -2086,6 +2183,10 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         "enabled": bool(configs.get("feishu", None) and configs["feishu"].enabled),
                         "configurable": True,
                         "status": health.get("feishu", {"ok": False, "detail": "未配置"}),
+                        "config": {"configured": bool(configs.get("feishu") and configs["feishu"].extra.get("app_id")),
+                                   "secret_configured": bool(configs.get("feishu") and configs["feishu"].extra.get("app_secret")),
+                                   "verification_configured": bool(configs.get("feishu") and configs["feishu"].extra.get("verification_token")),
+                                   "default_target": (configs.get("feishu").extra.get("default_target", "") if configs.get("feishu") else "")},
                     },
                 ]
                 self.send_json({"ok": True, "platforms": platforms})
