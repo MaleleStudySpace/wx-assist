@@ -4,6 +4,7 @@ import { CheckCircle, Warning, FloppyDisk, Info, DownloadSimple, UploadSimple, C
 import { QRCodeSVG } from 'qrcode.react'
 import { spring, Field, Toggle, Select, Input, API_BASE, getWsUrl } from './SharedComponents'
 import ChatDrawer from './ChatDrawer'
+import PlatformConfigDemo from './PlatformConfigDemo'
 
 const pageTransition = {
   initial: { opacity: 0, x: 12 },
@@ -2168,11 +2169,7 @@ function PushPlatformView() {
       {tab === 'overview' && <PushPlatformOverview platforms={platforms} onSelect={setTab} />}
       {tab === 'wechat' && <PushSection />}
       {tab !== 'overview' && tab !== 'wechat' && (
-        <div className="rounded-xl border border-border-main p-6 space-y-2">
-          <h4 className="font-semibold text-text-main">{tab === 'qqbot' ? 'QQ' : '飞书'} 配置</h4>
-          <p className="text-sm text-text-muted">请先在平台配置文件中完成凭证配置，连接状态会在此页显示。</p>
-          <p className="text-xs text-text-muted">当前状态：{platforms.find(p => p.name === tab)?.status?.detail || '未配置'}</p>
-        </div>
+        <PlatformConfigDemo platform={tab} onBack={() => setTab('overview')} onSaved={() => {}} />
       )}
     </div>
   )
