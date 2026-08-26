@@ -2262,20 +2262,22 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         if existing is None:
                             self.send_json({"ok": False, "error": "平台尚未配置"}, 404)
                             return
-                        extra = dict(existing.extra or {})
-                        for key in ("user_openid", "open_id", "default_target"):
-                            extra.pop(key, None)
+                        # Unbinding is a full removal for QR-only platforms.
+                        # Credentials and the recipient identity are issued by
+                        # the provider together and must not remain active.
                         unbound = PlatformConfig(
-                            name=platform_name, enabled=False,
-                            transport=existing.transport, webhook_port=existing.webhook_port,
-                            extra=extra,
+                            name=platform_name,
+                            enabled=False,
+                            transport=existing.transport,
+                            webhook_port=existing.webhook_port,
+                            extra={},
                         )
                         save_platforms_config([item if item.name != platform_name else unbound for item in configs])
                         registry = get_global_registry()
                         if registry is not None:
                             registry.stop_one(platform_name)
-                        logger.info("[im] %s binding removed", platform_name)
-                        self.send_json({"ok": True, "platform": platform_name, "status": "unbound"})
+                        logger.info("[im] %s binding removed and configuration cleared", platform_name)
+                        self.send_json({"ok": True, "platform": platform_name, "status": "unbound", "cleared": True})
                         return
 
                     extra = dict(existing.extra or {}) if existing else {}
