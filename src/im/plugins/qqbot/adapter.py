@@ -43,6 +43,7 @@ class QQBotAdapter(BasePlatformAdapter):
         self._last_seq: Optional[int] = None
         self._session_id: Optional[str] = None
         self._connected = False
+        self._last_provider_response = {}
         self._chat_type_map: dict[str, str] = {}
         self._seen_messages: dict[str, float] = {}
         self._state_lock = threading.RLock()
@@ -52,6 +53,7 @@ class QQBotAdapter(BasePlatformAdapter):
         if not self._client.app_id or not self._client.client_secret:
             logger.error("[qqbot] app_id/client_secret 未配置")
             return False
+        logger.info("[qqbot] starting adapter: app_id=%s", self._client.app_id)
         self._callback = callback
         self._stop_event.clear()
         self._ws_thread = threading.Thread(
@@ -89,7 +91,10 @@ class QQBotAdapter(BasePlatformAdapter):
         if reply_to:
             body["msg_id"] = reply_to
         try:
-            self._client.request("POST", path, body)
+            logger.info("[qqbot] send_text -> %s path=%s len=%d", target, path, len(content))
+            resp = self._client.request("POST", path, body)
+            self._last_provider_response = resp
+            logger.info("[qqbot] send_text OK: %s", str(resp)[:200])
             return True
         except Exception as exc:
             logger.warning("[qqbot] send_text failed: %s", exc)
@@ -107,10 +112,14 @@ class QQBotAdapter(BasePlatformAdapter):
         backoff_index = 0
         while not self._stop_event.is_set():
             try:
+                logger.info("[qqbot] connecting to gateway...")
                 url = self._client.get_gateway_url()
+                logger.info("[qqbot] gateway url obtained, connecting ws...")
                 ws = websocket.create_connection(url, timeout=20)
                 self._ws = ws
+                logger.info("[qqbot] ws connected, starting reader")
                 self._ws_reader(ws)
+                logger.info("[qqbot] ws reader exited")
                 backoff_index = 0
             except Exception as exc:
                 logger.warning("[qqbot] gateway disconnected: %s", exc)
@@ -120,6 +129,7 @@ class QQBotAdapter(BasePlatformAdapter):
             if self._stop_event.is_set():
                 break
             delay = RECONNECT_BACKOFF[min(backoff_index, len(RECONNECT_BACKOFF) - 1)]
+            logger.info("[qqbot] reconnecting in %ss...", delay)
             if self._stop_event.wait(delay):
                 break
             backoff_index += 1
@@ -150,6 +160,7 @@ class QQBotAdapter(BasePlatformAdapter):
             data = payload.get("d") or {}
             if op == 10:
                 self._heartbeat_interval = float(data.get("heartbeat_interval", 30000)) / 1000 * 0.8
+                logger.info("[qqbot] received HELLO, heartbeat_interval=%.1fs", self._heartbeat_interval)
                 if self._session_id and self._last_seq is not None:
                     self._send_resume(ws)
                 else:
@@ -159,6 +170,7 @@ class QQBotAdapter(BasePlatformAdapter):
             elif op == 0 and event == "READY":
                 self._connected = True
                 self._session_id = str(data.get("session_id", ""))
+                logger.info("[qqbot] READY! session_id=%s", self._session_id)
             elif op == 0 and event == "C2C_MESSAGE_CREATE":
                 self._handle_c2c(data)
             elif op == 0 and event == "GROUP_AT_MESSAGE_CREATE":
@@ -240,12 +252,16 @@ class QQBotAdapter(BasePlatformAdapter):
         ))
 
     def _deliver(self, message: NormalizedMessage) -> None:
+        logger.info("[qqbot] _deliver called: callback=%s chat_id=%s content=%s",
+                     "set" if self._callback else "NONE",
+                     message.chat_id, message.content[:50])
         if not self._callback:
             return
         try:
             reply = self._callback(message)
             if reply and reply.strip():
                 from ...delivery import DeliveryRequest, get_delivery_service
+                logger.info("[qqbot] _deliver: reply len=%d, sending to %s", len(reply), message.chat_id)
                 get_delivery_service().send_text(DeliveryRequest(
                     platform="qqbot", text=reply, target=message.chat_id,
                     source_type="agent_reply", source_id=message.native_message_id,

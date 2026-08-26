@@ -5,8 +5,10 @@ from typing import Optional
 from ...base import BasePlatformAdapter, MessageCallback
 from ...config_schema import PlatformConfig
 from ...message import SessionSource
+from ...plugins import register
 
 
+@register("wechat")
 class WechatAdapter(BasePlatformAdapter):
     """Adapter boundary kept separate until the migration segment is accepted."""
 

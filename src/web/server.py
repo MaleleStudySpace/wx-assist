@@ -1358,7 +1358,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                              self.path.startswith("/api/platforms/") and "/onboard/" in self.path
                          ) or (
                              self.path.startswith("/api/platforms/") and len(self.path.split("/")) == 5
-                             and self.path.endswith("/test")
+                             and self.path.rsplit("/", 1)[-1] in {"test", "test-message", "unbind"}
                          ) or (
                              self.path.startswith("/api/assistant/notifications/")
                              and (self.path.endswith("/ack") or self.path.endswith("/ignore"))
@@ -1407,6 +1407,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     self.send_json({"code": 400, "msg": "invalid body"}, 400)
                     return
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                logger.info(
+                    "[feishu] webhook HTTP received: type=%s event_type=%s event_id=%s",
+                    payload.get("type", ""),
+                    (payload.get("header") or {}).get("event_type", ""),
+                    (payload.get("header") or {}).get("event_id", ""),
+                )
                 from src.im.registry import get_global_registry
                 registry = get_global_registry()
                 adapter = registry.get_adapter("feishu") if registry else None
@@ -2104,6 +2110,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     self.send_json({"ok": True, **result})
                     return
                 if action == "status" and self.command == "GET":
+                    applied = False
+                    apply_result = None
                     if platform_name == "qqbot":
                         from src.im.plugins.qqbot.onboarding import get_qq_onboarding
                         result = get_qq_onboarding().poll(task_id)
@@ -2116,6 +2124,10 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         extra.pop("status", None)
                         extra["client_secret"] = extra.pop("client_secret", "")
                         extra["app_secret"] = extra.pop("app_secret", "")
+                        if platform_name == "qqbot" and extra.get("user_openid"):
+                            extra["default_target"] = f"qqbot:{extra['user_openid']}"
+                        elif platform_name == "feishu" and extra.get("open_id"):
+                            extra["default_target"] = f"feishu:open_id:{extra['open_id']}"
                         transport = "qq_openapi" if platform_name == "qqbot" else "feishu_webhook"
                         config = PlatformConfig(platform_name, enabled=True, transport=transport, extra=extra)
                         configs = [c for c in configs if c.name != platform_name] + [config]
@@ -2123,11 +2135,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         with _im_onboarding_lock:
                             _im_onboarding_tasks[task_id] = {"platform": platform_name, "status": "completed"}
                         registry = get_global_registry()
-                        applied = False
-                        apply_result = None
                         if registry:
                             apply_result = registry.start_one(config)
-                            applied = True
+                            applied = bool(apply_result and apply_result.get("ok"))
                     self.send_json({"ok": True, "applied": applied, "apply_status": apply_result, **result})
                     return
                 if action == "cancel" and self.command == "POST":
@@ -2143,6 +2153,81 @@ class _UIHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.warning("[im onboarding] request failed: %s", exc)
                 self.send_json({"ok": False, "error": str(exc)}, 400)
+            return
+
+        # ── API: GET /api/platforms ────────────────────────────────────
+        if self.path == "/api/platforms" and self.command == "GET":
+            try:
+                from src.im.registry import get_global_registry
+                from src.im.config_schema import load_platforms_config
+                configs_list = load_platforms_config()
+                configs = {item.name: item for item in configs_list}
+                registry = get_global_registry()
+                health = registry.get_health() if registry else {}
+                def _public_platform_config(config):
+                    if config is None:
+                        return {"configured": False}
+                    extra = dict(config.extra or {})
+                    # The configuration page is a localhost-only control surface;
+                    # it intentionally shows the stored credentials on request.
+                    # Never include task-only fields or transient onboarding state.
+                    extra.pop("status", None)
+                    extra.pop("task_id", None)
+                    extra.pop("expires_at", None)
+                    if config.name == "qqbot":
+                        target = str(extra.get("default_target", ""))
+                        user_openid = str(extra.get("user_openid", ""))
+                        if user_openid and not target:
+                            target = f"qqbot:{user_openid}"
+                        extra["default_target"] = target
+                        extra["bound"] = bool(user_openid)
+                    elif config.name == "feishu":
+                        target = str(extra.get("default_target", ""))
+                        open_id = str(extra.get("open_id", ""))
+                        if open_id and not target:
+                            target = f"feishu:open_id:{open_id}"
+                        extra["default_target"] = target
+                        extra["bound"] = bool(open_id or target)
+                    extra["configured"] = bool(extra.get("app_id"))
+                    return extra
+
+                qq_config = configs.get("qqbot")
+                feishu_config = configs.get("feishu")
+                qq_public = _public_platform_config(qq_config)
+                feishu_public = _public_platform_config(feishu_config)
+                platforms = [
+                    {
+                        "name": "wechat",
+                        "label": "微信",
+                        "enabled": True,
+                        "configurable": True,
+                        "status": {
+                            "ok": bool(_status.wechat_online),
+                            "detail": "已连接" if _status.wechat_online else "未连接",
+                        },
+                        "config": {"configured": True},
+                    },
+                    {
+                        "name": "qqbot",
+                        "label": "QQ",
+                        "enabled": bool(qq_config),
+                        "configurable": True,
+                        "status": health.get("qqbot", {"ok": False, "detail": "未配置"}),
+                        "config": qq_public,
+                    },
+                    {
+                        "name": "feishu",
+                        "label": "飞书",
+                        "enabled": bool(feishu_config),
+                        "configurable": True,
+                        "status": health.get("feishu", {"ok": False, "detail": "未配置"}),
+                        "config": feishu_public,
+                    },
+                ]
+                self.send_json({"ok": True, "platforms": platforms})
+            except Exception as exc:
+                logger.warning("[platforms] status failed: %s", exc)
+                self.send_json({"ok": False, "error": str(exc)}, 500)
             return
 
         if self.path.startswith("/api/platforms/") and self.command in ("PUT", "POST"):
@@ -2171,6 +2256,60 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
                 configs = load_platforms_config()
                 existing = next((item for item in configs if item.name == platform_name), None)
+
+                if self.command == "POST" and action in {"test-message", "unbind"}:
+                    if action == "unbind":
+                        if existing is None:
+                            self.send_json({"ok": False, "error": "平台尚未配置"}, 404)
+                            return
+                        extra = dict(existing.extra or {})
+                        for key in ("user_openid", "open_id", "default_target"):
+                            extra.pop(key, None)
+                        unbound = PlatformConfig(
+                            name=platform_name, enabled=False,
+                            transport=existing.transport, webhook_port=existing.webhook_port,
+                            extra=extra,
+                        )
+                        save_platforms_config([item if item.name != platform_name else unbound for item in configs])
+                        registry = get_global_registry()
+                        if registry is not None:
+                            registry.stop_one(platform_name)
+                        logger.info("[im] %s binding removed", platform_name)
+                        self.send_json({"ok": True, "platform": platform_name, "status": "unbound"})
+                        return
+
+                    extra = dict(existing.extra or {}) if existing else {}
+                    if platform_name == "qqbot":
+                        native_target = str(extra.get("user_openid", ""))
+                        target = f"qqbot:{native_target}" if native_target else ""
+                    else:
+                        native_target = str(extra.get("open_id", ""))
+                        target = f"feishu:open_id:{native_target}" if native_target else ""
+                    if not target:
+                        self.send_json({"ok": False, "error": "绑定用户信息不存在，请先完成扫码绑定"}, 400)
+                        return
+                    from src.im.delivery import DeliveryRequest, get_delivery_service
+                    delivery = get_delivery_service().send_text(DeliveryRequest(
+                        platform=platform_name,
+                        target=target,
+                        text=f"微信助手 {platform_name} 测试消息：连接已建立。",
+                        source_type="binding_test",
+                        source_id=native_target,
+                        conversation_key=target,
+                    ))
+                    result_items = delivery.get("results") or []
+                    result = result_items[0] if result_items else delivery
+                    if not delivery.get("success"):
+                        self.send_json({"ok": False, "platform": platform_name, **result}, 502)
+                        return
+                    self.send_json({
+                        "ok": True, "platform": platform_name,
+                        "message_id": result.get("message_id", ""),
+                        "request_id": result.get("request_id", ""),
+                        "delivery_id": result.get("delivery_id", ""),
+                        "target": target,
+                    })
+                    return
 
                 if self.command == "POST" and action == "test":
                     extra = dict(existing.extra) if existing else {}
@@ -2204,9 +2343,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     if key in body and body[key] not in (None, ""):
                         extra[key] = str(body[key]).strip()
                 transport = str(body.get("transport") or (existing.transport if existing else ("qq_openapi" if platform_name == "qqbot" else "feishu_webhook")))
+                # A saved platform with valid credentials is immediately active;
+                # there is no separate user-facing enable switch.
                 config = PlatformConfig(
                     name=platform_name,
-                    enabled=bool(body.get("enabled", existing.enabled if existing else False)),
+                    enabled=True,
                     transport=transport,
                     extra=extra,
                 )
@@ -2233,52 +2374,6 @@ class _UIHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 logger.warning("[platforms] configuration request failed: %s", exc)
                 self.send_json({"ok": False, "error": str(exc)}, 400)
-            return
-
-
-            try:
-                from src.im.registry import get_global_registry
-                from src.im.config_schema import load_platforms_config
-                configs = {item.name: item for item in load_platforms_config()}
-                registry = get_global_registry()
-                health = registry.get_health() if registry else {}
-                platforms = [
-                    {
-                        "name": "wechat",
-                        "label": "微信",
-                        "enabled": True,
-                        "configurable": True,
-                        "status": {
-                            "ok": bool(_status.wechat_online),
-                            "detail": "已连接" if _status.wechat_online else "未连接",
-                        },
-                        "config": {"configured": True},
-                    },
-                    {
-                        "name": "qqbot",
-                        "label": "QQ",
-                        "enabled": bool(configs.get("qqbot", None) and configs["qqbot"].enabled),
-                        "configurable": True,
-                        "status": health.get("qqbot", {"ok": False, "detail": "未配置"}),
-                        "config": {"configured": bool(configs.get("qqbot") and configs["qqbot"].extra.get("app_id")),
-                                   "secret_configured": bool(configs.get("qqbot") and configs["qqbot"].extra.get("client_secret")),
-                                   "default_target": (configs.get("qqbot").extra.get("default_target", "") if configs.get("qqbot") else "")},
-                    },
-                    {
-                        "name": "feishu",
-                        "label": "飞书",
-                        "enabled": bool(configs.get("feishu", None) and configs["feishu"].enabled),
-                        "configurable": True,
-                        "status": health.get("feishu", {"ok": False, "detail": "未配置"}),
-                        "config": {"configured": bool(configs.get("feishu") and configs["feishu"].extra.get("app_id")),
-                                   "secret_configured": bool(configs.get("feishu") and configs["feishu"].extra.get("app_secret")),
-                                   "verification_configured": bool(configs.get("feishu") and configs["feishu"].extra.get("verification_token")),
-                                   "default_target": (configs.get("feishu").extra.get("default_target", "") if configs.get("feishu") else "")},
-                    },
-                ]
-                self.send_json({"ok": True, "platforms": platforms})
-            except Exception as exc:
-                logger.warning("[platforms] status failed: %s", exc)
             return
 
         # ── API: Get status ───────────────────────────────────────────

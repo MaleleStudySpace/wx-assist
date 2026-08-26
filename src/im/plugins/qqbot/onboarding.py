@@ -73,21 +73,29 @@ class QQOnboarding:
         with self._lock:
             task = self._tasks.get(task_id)
         if task is None:
+            logger.error("[qq-onboard] poll: task not found: %s", task_id)
             raise KeyError("QQ onboarding task not found")
         if time.time() >= task.expires_at:
             task.status = "expired"
+            logger.warning("[qq-onboard] poll: task expired: %s", task_id)
             return {"status": task.status}
-        response = requests.post(
-            f"https://{PORTAL_HOST}{POLL_PATH}",
-            json={"task_id": task_id},
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        data = response.json()
+        try:
+            response = requests.post(
+                f"https://{PORTAL_HOST}{POLL_PATH}",
+                json={"task_id": task_id},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:
+            logger.error("[qq-onboard] poll request failed: %s", exc)
+            raise
         if data.get("retcode") != 0:
+            logger.error("[qq-onboard] poll retcode=%s msg=%s", data.get("retcode"), data.get("msg"))
             raise RuntimeError(data.get("msg", "QQ bind poll failed"))
         payload = data.get("data") or {}
         status = int(payload.get("status", 0))
+        logger.info("[qq-onboard] poll task_id=%s status=%s retcode=%s", task_id, status, data.get("retcode"))
         if status == 2:
             encrypted = str(payload.get("bot_encrypt_secret", ""))
             result = {
@@ -97,9 +105,11 @@ class QQOnboarding:
             }
             task.status = "completed"
             task.result = result
+            logger.info("[qq-onboard] completed: app_id=%s user_openid=%s", result["app_id"], result["user_openid"])
             return {"status": task.status, **result}
         if status == 3:
             task.status = "expired"
+            logger.warning("[qq-onboard] task expired by server: %s", task_id)
         return {"status": task.status}
 
     def cancel(self, task_id: str) -> bool:

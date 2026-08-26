@@ -743,7 +743,7 @@ class DigestScheduler:
             self._tc_fail(task_id, error=error_msg)
             self._broadcast_task_update(task_id, 'oa_digest', 'failed', '', oa.name, error=error_msg)
             # 推送失败通知到 ilink
-            self._notify_oa_digest_failure(oa, error_msg)
+            self._notify_oa_digest_failure(oa, error_msg, task_id=task_id)
             return
 
         digest_text = result.get("digest_text", "")
@@ -902,7 +902,7 @@ class DigestScheduler:
         except Exception:
             pass
 
-    def _notify_oa_digest_failure(self, oa, error_msg: str) -> None:
+    def _notify_oa_digest_failure(self, oa, error_msg: str, task_id=None) -> None:
         """推送 OA 摘要生成失败通知到 ilink + outbox。Never raises."""
         try:
             title = f"⚠️ 公众号摘要失败 · {oa.name}"

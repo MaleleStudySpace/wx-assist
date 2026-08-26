@@ -1337,6 +1337,7 @@ const PUSH_TYPE_ICONS = {
 function PushHistory({ platform = 'im' }) {
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(false)
   const [filters, setFilters] = useState({ type: '', push_status: '', platform: '' })
 
   useEffect(() => { loadHistory() }, [filters.type, filters.push_status, filters.platform])
@@ -1378,17 +1379,16 @@ function PushHistory({ platform = 'im' }) {
 
   return (
     <div className="py-4 border-t border-border-main/50">
-      <div className="flex items-center justify-between gap-3 mb-4">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-3">
+        <button type="button" onClick={() => setExpanded(v => !v)} className="flex items-center gap-2 text-left">
+          {expanded ? <CaretDown size={18} className="text-brand-green" /> : <CaretRight size={18} className="text-brand-green" />}
           <PaperPlaneTilt size={18} className="text-brand-green" />
           <p className="text-[15px] text-text-main font-medium">推送记录</p>
-        </div>
-        <button onClick={loadHistory} className="text-xs text-brand-green-hover hover:underline cursor-pointer font-medium">
-          刷新
+          {!loading && <span className="text-xs text-text-muted">({records.length})</span>}
         </button>
+        <button onClick={loadHistory} className="text-xs text-brand-green-hover hover:underline cursor-pointer font-medium">刷新</button>
       </div>
-
-      {/* Filters */}
+      {!expanded ? null : <>
       <div className="flex gap-2 mb-4 flex-wrap">
         {platform === 'im' && <select value={filters.platform || ''} onChange={e => setFilters(prev => ({ ...prev, platform: e.target.value }))}
           className="bg-bg-raised border border-border-main rounded-lg px-3 py-2 text-sm text-text-main focus:outline-none focus:border-brand-green">
@@ -1422,15 +1422,16 @@ function PushHistory({ platform = 'im' }) {
         <div className="py-10 text-center">
           <PaperPlaneTilt size={28} className="text-text-muted mx-auto mb-2" />
           <p className="text-xs text-text-muted">暂无推送记录</p>
-          <p className="text-xs text-text-muted mt-1">开启推送后，投递记录会出现在这里</p>
+          <p className="text-xs text-text-muted mt-1">选择推送方式后，投递记录会出现在这里</p>
         </div>
       ) : (
         <div className="space-y-2 max-h-[480px] overflow-y-auto">
-          {records.map(r => (
-            <PushRecordCard key={r.id} record={r} />
+          {records.map((r, index) => (
+            <PushRecordCard key={r.id || `${r.platform || 'im'}-${r.created_at || index}`} record={r} />
           ))}
         </div>
       )}
+      </>}
     </div>
   )
 }
@@ -1447,9 +1448,16 @@ function PushRecordCard({ record }) {
   const groupName = record.group_name || record.chat_id || ''
   const rawContent = record.content || ''
 
-  // Format time: remove T between date and time
-  const rawTime = record.push_at || record.created_at || ''
-  const displayTime = rawTime.replace('T', ' ')
+  // Format both ISO strings and numeric Unix timestamps without assuming a type.
+  const rawTime = record.push_at ?? record.created_at
+  let displayTime = '时间未知'
+  if (typeof rawTime === 'number' && Number.isFinite(rawTime)) {
+    const milliseconds = rawTime < 100000000000 ? rawTime * 1000 : rawTime
+    displayTime = new Date(milliseconds).toLocaleString()
+  } else if (typeof rawTime === 'string' && rawTime.trim()) {
+    const parsedTime = Date.parse(rawTime)
+    displayTime = Number.isNaN(parsedTime) ? rawTime : new Date(parsedTime).toLocaleString()
+  }
 
   // ── Parse JSON content (new format) or fall back to plain text ──
   let parsed = null

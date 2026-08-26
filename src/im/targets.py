@@ -31,6 +31,17 @@ def normalize_targets(value: Any) -> list[str]:
 
 def default_target(platform: str) -> str:
     for config in load_platforms_config():
-        if config.name == platform:
-            return str(config.extra.get("default_target", ""))
+        if config.name != platform:
+            continue
+        extra = config.extra or {}
+        configured = str(extra.get("default_target", "")).strip()
+        if configured:
+            return configured
+        # QR onboarding stores the provider user identity. Derive the target
+        # for older config files that predate the explicit default_target key.
+        if platform == "qqbot" and extra.get("user_openid"):
+            return f"qqbot:{extra['user_openid']}"
+        if platform == "feishu" and extra.get("open_id"):
+            return f"feishu:open_id:{extra['open_id']}"
+        return ""
     return ""

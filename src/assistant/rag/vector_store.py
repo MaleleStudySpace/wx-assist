@@ -215,6 +215,12 @@ class ChromaStore(VectorStore):
         return {"$and": items}
 
     def close(self):
+        """关闭 ChromaDB 客户端，确保 WAL 正确 commit。"""
+        try:
+            if self._client is not None:
+                self._client.close()
+        except Exception as e:
+            logger.warning("[RAG] ChromaDB client close 失败: %s", e)
         self._client = None
         self._collection = None
         logger.info("[RAG] ChromaDB 已关闭")

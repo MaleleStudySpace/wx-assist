@@ -26,7 +26,13 @@ class QQBotPushChannel(PushChannel):
         # 保留 qqbot: 命名空间 — adapter 用它查 chat type 后再拆出 native id。
         # 若提前剥掉前缀，群聊会丢失 group 类型映射，误发到 /v2/users 接口。
         ok = self._adapter.send_text(target, text)
-        return {"success": ok, "error": "send failed" if not ok else ""}
+        response = getattr(self._adapter, "_last_provider_response", {}) or {}
+        return {
+            "success": ok,
+            "error": "send failed" if not ok else "",
+            "message_id": str(response.get("id", response.get("message_id", ""))),
+            "provider_response": response,
+        }
 
     def get_status(self) -> dict:
         return self._adapter.health_status() if self._adapter else {

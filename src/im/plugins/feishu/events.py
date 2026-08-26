@@ -16,6 +16,7 @@ def verify_and_parse_event(payload: dict, verification_token: str = ""):
     Feishu URL verification is handled before message processing.  A mismatch
     is rejected; no event is delivered to the application callback.
     """
+    logger.info("[feishu] webhook event received: type=%s event_id=%s", payload.get("type"), (payload.get("header") or {}).get("event_id", ""))
     if payload.get("type") == "url_verification":
         if verification_token and payload.get("token") != verification_token:
             raise ValueError("Feishu verification token mismatch")
@@ -23,8 +24,10 @@ def verify_and_parse_event(payload: dict, verification_token: str = ""):
 
     header = payload.get("header") or {}
     if verification_token and header.get("token") != verification_token:
+        logger.warning("[feishu] webhook token mismatch event_type=%s", header.get("event_type", ""))
         raise ValueError("Feishu event token mismatch")
     if header.get("event_type") != "im.message.receive_v1":
+        logger.info("[feishu] webhook ignored unsupported event_type=%s", header.get("event_type", ""))
         return None
 
     event = payload.get("event") or {}

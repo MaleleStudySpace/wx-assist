@@ -5,14 +5,17 @@ access_token is obtained from bots.qq.com and REST requests use
 ``Authorization: QQBot <token>``.
 """
 
+import logging
 import threading
 import time
 from typing import Optional
 
 import requests
 
-TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken"
-API_BASE = "https://api.sgroup.qq.com"
+logger = logging.getLogger(__name__)
+
+TOKEN_URL = "https://api.bot.qq.com/app/getAppAccessToken"
+API_BASE = "https://api.bot.qq.com"
 DEFAULT_TIMEOUT = 30.0
 
 
@@ -37,29 +40,39 @@ class QQOpenAPIClient:
         with self._token_lock:
             if self._access_token and time.time() < self._token_expires_at - 60:
                 return self._access_token
-            response = self._session.post(
-                TOKEN_URL,
-                json={"appId": self.app_id, "clientSecret": self.client_secret},
-                timeout=DEFAULT_TIMEOUT,
-            )
-            if response.status_code >= 400:
-                raise QQOpenAPIError(
-                    f"token request failed [{response.status_code}]: {response.text[:300]}"
+            logger.info("[qqbot] requesting access_token from %s", TOKEN_URL)
+            try:
+                response = self._session.post(
+                    TOKEN_URL,
+                    json={"appId": self.app_id, "clientSecret": self.client_secret},
+                    timeout=DEFAULT_TIMEOUT,
                 )
-            data = response.json()
-            token = str(data.get("access_token", ""))
-            if not token:
-                raise QQOpenAPIError("token response did not contain access_token")
-            expires_in = int(data.get("expires_in", 7200) or 7200)
-            self._access_token = token
-            self._token_expires_at = time.time() + expires_in
-            return token
+                if response.status_code >= 400:
+                    logger.error("[qqbot] token request failed [%d]: %s", response.status_code, response.text[:300])
+                    raise QQOpenAPIError(
+                        f"token request failed [{response.status_code}]: {response.text[:300]}"
+                    )
+                data = response.json()
+                token = str(data.get("access_token", ""))
+                if not token:
+                    logger.error("[qqbot] token response missing access_token: %s", data)
+                    raise QQOpenAPIError("token response did not contain access_token")
+                expires_in = int(data.get("expires_in", 7200) or 7200)
+                self._access_token = token
+                self._token_expires_at = time.time() + expires_in
+                logger.info("[qqbot] access_token obtained, expires_in=%ds", expires_in)
+                return token
+            except Exception as exc:
+                logger.error("[qqbot] ensure_token failed: %s", exc)
+                raise
 
     def get_gateway_url(self) -> str:
+        logger.info("[qqbot] requesting gateway URL from %s/gateway", API_BASE)
         data = self.request("GET", "/gateway")
         url = str(data.get("url", ""))
         if not url:
             raise QQOpenAPIError("gateway response did not contain url")
+        logger.info("[qqbot] gateway url: %s", url[:80])
         return url
 
     def request(self, method: str, path: str, body: Optional[dict] = None) -> dict:

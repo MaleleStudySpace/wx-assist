@@ -891,6 +891,14 @@ class Bot:
                     _im_registry.stop_all()
             except Exception as e:
                 logger.warning("[im] optional platform shutdown error: %s", e)
+            # 关闭 RAG 引擎，确保 ChromaDB SQLite WAL 正确 commit，
+            # 避免进程被 kill 后数据库损坏导致下次启动 SIGSEGV。
+            _rag = locals().get("rag_engine")
+            if _rag is not None:
+                try:
+                    _rag.close()
+                except Exception as e:
+                    logger.warning("[RAG] close error: %s", e)
             if self._health:
                 self._health.stop()
             try:

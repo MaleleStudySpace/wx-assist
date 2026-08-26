@@ -71,11 +71,27 @@ class FeishuAdapter(BasePlatformAdapter):
 
     def handle_webhook(self, payload: dict):
         """Return challenge immediately and process events asynchronously."""
+        header = payload.get("header") or {}
+        logger.info(
+            "[feishu] webhook dispatch: event_type=%s event_id=%s callback=%s",
+            header.get("event_type", payload.get("type", "")),
+            header.get("event_id", ""),
+            "set" if self._callback else "NONE",
+        )
         parsed = verify_and_parse_event(payload, self.verification_token)
         if isinstance(parsed, dict):
+            logger.info("[feishu] webhook challenge acknowledged")
             return parsed
-        if not isinstance(parsed, NormalizedMessage) or not self._callback:
+        if not isinstance(parsed, NormalizedMessage):
+            logger.info("[feishu] webhook produced no message")
             return {"code": 0}
+        if not self._callback:
+            logger.warning("[feishu] message received but callback is not configured")
+            return {"code": 0}
+        logger.info(
+            "[feishu] message accepted: message_id=%s chat=%s chat_type=%s",
+            parsed.native_message_id, parsed.chat_id, parsed.chat_type,
+        )
         event_id = str((payload.get("header") or {}).get("event_id", "")) or parsed.native_message_id
         now = time.time()
         with self._lock:
@@ -84,6 +100,7 @@ class FeishuAdapter(BasePlatformAdapter):
                 if now - stamp < 300
             }
             if event_id and event_id in self._seen_events:
+                logger.info("[feishu] duplicate event ignored: event_id=%s", event_id)
                 return {"code": 0}
             if event_id:
                 self._seen_events[event_id] = now
@@ -97,14 +114,23 @@ class FeishuAdapter(BasePlatformAdapter):
 
     def _process_event(self, parsed: NormalizedMessage) -> None:
         try:
+            logger.info("[feishu] processing message_id=%s", parsed.native_message_id)
             reply = self._callback(parsed) if self._callback else None
+            logger.info(
+                "[feishu] callback completed: message_id=%s reply=%s len=%d",
+                parsed.native_message_id, "yes" if reply else "no", len(reply or ""),
+            )
             if reply and parsed.chat_type == "dm":
                 from ...delivery import DeliveryRequest, get_delivery_service
-                get_delivery_service().send_text(DeliveryRequest(
+                result = get_delivery_service().send_text(DeliveryRequest(
                     platform="feishu", text=reply, target=parsed.chat_id,
                     source_type="agent_reply", source_id=parsed.native_message_id,
                     inbound_message_id=parsed.native_message_id,
                     conversation_key=parsed.chat_id, reply_to=parsed.native_message_id,
                 ))
+                logger.info("[feishu] agent reply delivery: message_id=%s success=%s result=%s",
+                            parsed.native_message_id, result.get("success"), str(result)[:300])
+            elif reply:
+                logger.info("[feishu] reply suppressed for non-DM chat_type=%s", parsed.chat_type)
         except Exception:
-            logger.exception("[feishu] event processing failed")
+            logger.exception("[feishu] event processing failed: message_id=%s", parsed.native_message_id)

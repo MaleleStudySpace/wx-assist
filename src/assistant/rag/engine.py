@@ -71,9 +71,10 @@ class RAGEngine:
         self._store.warmup()  # ChromaStore 的 warmup
         self._reranker.warmup()
         self._load_state()
-        # 启动时清理过期 chunk，控制 ChromaDB 大小
-        self.compress()
-        # 后台线程：每小时清理一次过期 chunk
+        # 注意：warmup 中不调用 compress()，因为 ChromaDB Rust 层
+        # 在 daemon thread 中调用 collection.get(where=...) 可能触发
+        # access violation (SIGSEGV)，导致整个进程崩溃。
+        # 清理由后台 rag-compress 线程在首次循环时完成。
         self._start_compress_loop()
         logger.info("[RAG] RAGEngine 就绪: dim=%d", self._embedder.dim)
 
@@ -82,7 +83,10 @@ class RAGEngine:
         def _loop():
             while True:
                 time.sleep(3600)  # 每小时
-                self.compress()
+                try:
+                    self.compress()
+                except Exception as e:
+                    logger.warning("[RAG] compress loop error (continuing): %s", e)
         t = threading.Thread(target=_loop, daemon=True, name="rag-compress")
         t.start()
 
