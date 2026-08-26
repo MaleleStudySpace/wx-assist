@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, CheckCircle, Copy, FloppyDisk, QrCode, SignOut, TestTube, WarningCircle } from '@phosphor-icons/react'
+import { ArrowLeft, CheckCircle, Copy, Eye, EyeSlash, FloppyDisk, QrCode, SignOut, TestTube, WarningCircle } from '@phosphor-icons/react'
 import { QRCodeSVG } from 'qrcode.react'
 import { API_BASE } from './SharedComponents'
 
@@ -10,10 +10,16 @@ function defaultConfig(platform) {
 }
 
 function SecretInput({ label, value, onChange, placeholder }) {
+  const [visible, setVisible] = useState(false)
   return <label className="block space-y-1.5">
     <span className="text-xs font-medium text-text-main">{label}</span>
-    <input type="text" value={value ?? ''} onChange={e => onChange(e.target.value)} placeholder={placeholder}
-      className="w-full rounded-lg border border-border-main bg-bg-raised px-3 py-2.5 text-sm text-text-main outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/10" />
+    <div className="relative">
+      <input type={visible ? 'text' : 'password'} value={value ?? ''} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+        className="w-full rounded-lg border border-border-main bg-bg-raised px-3 py-2.5 pr-10 text-sm text-text-main outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/10" />
+      <button type="button" onClick={() => setVisible(v => !v)} aria-label={visible ? `隐藏${label}` : `显示${label}`} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-main">
+        {visible ? <EyeSlash size={17} /> : <Eye size={17} />}
+      </button>
+    </div>
   </label>
 }
 
@@ -53,7 +59,7 @@ export default function PlatformConfigDemo({ platform, initialConfig, onBack, on
     setBusy(true); setError(''); setMessage('')
     try {
       const res = await fetch(`${API_BASE}/api/platforms/${platform}/onboard/start`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain: 'feishu' }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: isQQ ? '{}' : JSON.stringify({ domain: 'feishu' }),
       })
       const data = await res.json()
       if (!res.ok || !data.ok || !data.qr_url) throw new Error(data.error || '平台没有返回有效二维码地址')

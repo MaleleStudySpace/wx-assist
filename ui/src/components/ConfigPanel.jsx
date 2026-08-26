@@ -2191,6 +2191,7 @@ function PushPlatformView() {
       {tab === 'wechat' && <PushSection />}
       {tab !== 'overview' && tab !== 'wechat' && (
         <PlatformConfigDemo
+          key={tab}
           platform={tab}
           initialConfig={platforms.find(item => item.name === tab)?.config || {}}
           onBack={() => setTab('overview')}
