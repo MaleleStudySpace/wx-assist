@@ -100,10 +100,17 @@ class QQBotAdapter(BasePlatformAdapter):
             logger.warning("[qqbot] send_text failed: %s", exc)
             return False
 
+    def is_configured(self) -> bool:
+        """Return whether QQ OpenAPI has the credentials needed to send."""
+        return bool(self._client.app_id and self._client.client_secret)
+
     def health_status(self) -> dict:
-        thread = self._ws_thread
-        return {"ok": self._connected,
-                "detail": "已连接" if self._connected else "未连接"}
+        # QQ's user-visible platform status follows the outbound OpenAPI
+        # capability, matching WeChat and Feishu binding semantics.  Gateway
+        # reconnect state remains internal to the inbound reader.
+        configured = self.is_configured()
+        return {"ok": configured,
+                "detail": "已连接" if configured else "未配置"}
 
     def list_chats(self) -> list[SessionSource]:
         return []

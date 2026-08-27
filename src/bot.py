@@ -826,14 +826,16 @@ class Bot:
                 elif config.name == "feishu":
                     register_plugin_push_channel("feishu", adapter.push_channel)
 
-            if platform_configs:
-                result = im_registry.start_all(
-                    platform_configs,
-                    lambda normalized: _wrapped_callback(normalized),
-                    on_adapter=_on_optional_adapter,
-                )
-                logger.info("[im] optional platforms started=%s failed=%s",
-                            result["started"], result["failed"])
+            # Initialize the callback and adapter hook even when no optional
+            # platform was configured at bot startup.  QR onboarding can then
+            # apply a newly bound platform to this running registry directly.
+            result = im_registry.start_all(
+                platform_configs,
+                lambda normalized: _wrapped_callback(normalized),
+                on_adapter=_on_optional_adapter,
+            )
+            logger.info("[im] optional platforms started=%s failed=%s",
+                        result["started"], result["failed"])
         except Exception as exc:
             # Optional IM failures must never prevent the WeChat bot from running.
             im_registry = None

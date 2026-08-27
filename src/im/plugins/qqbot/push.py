@@ -13,7 +13,16 @@ class QQBotPushChannel(PushChannel):
         self._adapter = adapter
 
     def is_available(self) -> bool:
-        return bool(self._adapter and self._adapter.health_status().get("ok"))
+        """Check whether QQ OpenAPI sending can be attempted.
+
+        Outbound delivery uses QQ OpenAPI and does not require the inbound
+        Gateway WebSocket to have reached READY.  Gateway health is still
+        exposed separately by the adapter for inbound-message diagnostics.
+        """
+        return bool(
+            self._adapter
+            and self._adapter.is_configured()
+        )
 
     def is_healthy(self) -> bool:
         return self.is_available()

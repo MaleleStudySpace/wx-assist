@@ -2364,7 +2364,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 result = {"ok": True, "status": "saved"}
                 if registry is not None:
                     result = registry.start_one(config)
-                    applied = True
+                    applied = bool(result and result.get("ok"))
                 self.send_json({
                     "ok": True,
                     "saved": True,

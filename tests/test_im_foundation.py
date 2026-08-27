@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from src.im.base import BasePlatformAdapter
 from src.im.config_schema import PlatformConfig, load_platforms_config
@@ -112,6 +113,38 @@ def test_registry_isolates_start_failure():
     assert result["started"] == ["good"]
     assert "bad" in result["failed"]
     assert registry.get_health()["good"]["ok"] is True
+
+
+def test_qq_push_available_does_not_require_gateway_ready():
+    from src.im.plugins.qqbot.push import QQBotPushChannel
+
+    client = SimpleNamespace(app_id="app", client_secret="secret")
+    adapter = SimpleNamespace(
+        _client=client,
+        is_configured=lambda: True,
+        health_status=lambda: {"ok": False},
+    )
+    channel = QQBotPushChannel(adapter)
+
+    assert channel.is_available() is True
+
+
+def test_registry_initializes_hooks_with_empty_config():
+    registry = PlatformRegistry()
+    callback = lambda message: None
+    hook_calls = []
+
+    result = registry.start_all([], callback, on_adapter=lambda config, adapter: hook_calls.append((config, adapter)))
+
+    assert result == {"started": [], "failed": {}}
+    config = PlatformConfig("fake")
+    adapter = FakeAdapter()
+    registry._factory = lambda current: adapter
+    started = registry.start_one(config)
+
+    assert started["ok"] is True
+    assert hook_calls == [(config, adapter)]
+    registry.stop_one("fake")
 
 
 def test_missing_platform_config_degrades_safely(tmp_path: Path):
