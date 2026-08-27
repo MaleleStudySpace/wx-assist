@@ -4866,7 +4866,7 @@ def handle_oa_digest_run(params, config: AssistantConfig):
                                                          "group_name": _group_name})
                 except Exception:
                     pass
-                _push_oa_digest(result, _group, config)
+                _push_oa_digest(result, _group, config, task_id=_tid)
 
             # Now mark task as completed (after push)
             try:
@@ -4908,7 +4908,7 @@ def handle_oa_digest_run(params, config: AssistantConfig):
     return {"ok": True, "status": "started", "group_id": group_id, "task_id": _tid}
 
 
-def _push_oa_digest(result, group, config):
+def _push_oa_digest(result, group, config, task_id=None):
     """Push OA digest to Outbox + iLink (runs in background thread)."""
     import json as _json
     from src.assistant.outbox import Outbox
@@ -4944,7 +4944,8 @@ def _push_oa_digest(result, group, config):
             msg = DeliveryService.format_text(group.push_target, title, content)
             push_result = get_delivery_service().send_text(DeliveryRequest(
                 platform=group.push_target, text=msg, source_type="oa_digest",
-                source_id=str(oa_nid or ""), conversation_key=group.name,
+                source_id=str(oa_nid or ""), outbox_id=oa_nid or 0,
+                task_id=task_id or 0, conversation_key=group.name,
             ))
             push_ok = push_result.get("success", False)
             push_err = push_result.get("error", "") if not push_ok else ""
@@ -4953,6 +4954,14 @@ def _push_oa_digest(result, group, config):
                     outbox = Outbox()
                     outbox.update_push_result(oa_nid, group.push_target,
                                               "success" if push_ok else "failed", push_err)
+                except Exception:
+                    pass
+            if task_id:
+                try:
+                    tc = get_task_center()
+                    if tc:
+                        tc.update_task(task_id, outbox_id=oa_nid)
+                        tc.update_push_result(task_id, "success" if push_ok else "failed", push_err)
                 except Exception:
                     pass
         else:
@@ -5737,6 +5746,16 @@ def _match_outbox_by_time(task: dict, outbox) -> Optional[dict]:
     return best
 
 
+def _task_retry_outbox(task: dict, outbox) -> Optional[dict]:
+    """Resolve the original outbox notification for retry metadata."""
+    if task.get("outbox_id"):
+        try:
+            return outbox.get_notification(int(task["outbox_id"]))
+        except Exception:
+            return None
+    return _match_outbox_by_time(task, outbox)
+
+
 def _task_retry_payload(task: dict, outbox) -> Optional[tuple[str, str]]:
     """Build (title, content) for a retry push.
 
@@ -5779,7 +5798,7 @@ def _task_is_retryable(task: dict) -> bool:
 
 
 def _do_task_retry_push(task: dict) -> dict:
-    """Execute one retry push via iLink. Returns {"success": bool, "error": str}."""
+    """Retry only the platforms whose original delivery attempt failed."""
     from src.assistant.outbox import Outbox
     outbox = Outbox()
     payload = _task_retry_payload(task, outbox)
@@ -5787,21 +5806,75 @@ def _do_task_retry_push(task: dict) -> dict:
         return {"success": False, "error": "任务无可用推送内容（result 为空且无 outbox 关联）"}
     title, content = payload
 
-    # outbox content 是 JSON（含 display 展示文本）；纯文本直接推送
     push_text = content
     if isinstance(content, str) and content.lstrip().startswith("{"):
         try:
-            _d = json.loads(content)
-            push_text = _d.get("display", content)
+            data = json.loads(content)
+            push_text = data.get("display", content)
         except Exception:
             push_text = content
-    target_platform = task.get("push_target") or "ilink"
+
     from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
-    msg = DeliveryService.format_text(target_platform, title, push_text)
-    return get_delivery_service().send_text(DeliveryRequest(
-        platform=target_platform, text=msg, source_type=str(task.get("task_type", "retry")),
-        source_id=str(task.get("id", "")), conversation_key=str(task.get("chat_id", "")),
-    ))
+    delivery = get_delivery_service()
+    attempts = []
+    retry_notif = _task_retry_outbox(task, outbox)
+    if task.get("outbox_id"):
+        outbox_id = int(task["outbox_id"])
+        attempts = delivery.list_attempts(outbox_id=outbox_id, limit=500)
+        if not attempts:
+            # Older attempts predate the explicit outbox_id column but used
+            # the Outbox ID as source_id; retain that linkage for migration.
+            attempts = delivery.list_attempts(
+                source_type=str(task.get("task_type", "")),
+                source_id=str(outbox_id),
+                limit=500,
+            )
+    if not attempts and task.get("id"):
+        attempts = delivery.list_attempts(task_id=int(task["id"]), limit=500)
+
+    platform_targets = {}
+    successful = set()
+    for attempt in attempts:
+        platform = str(attempt.get("platform") or "").strip()
+        channel = str(attempt.get("channel") or "").strip()
+        if platform not in {"ilink", "qqbot", "feishu"}:
+            platform = channel
+        target = str(attempt.get("target") or "")
+        key = (platform, target)
+        if platform not in {"ilink", "qqbot", "feishu"}:
+            continue
+        platform_targets[key] = (platform, target)
+        if attempt.get("status") == "success":
+            successful.add(key)
+
+    if not platform_targets and retry_notif:
+        channel = str(retry_notif.get("push_channel") or "").strip()
+        if channel in {"ilink", "qqbot", "feishu"}:
+            platform_targets[(channel, "")] = (channel, "")
+
+    if not platform_targets:
+        return {"success": False, "error": "无法确定原始失败平台，为避免重复发送，本次未重推"}
+
+    retry_targets = [value for key, value in platform_targets.items() if key not in successful]
+    if not retry_targets:
+        return {"success": True, "skipped": True, "error": "原始平台均已成功，无需重复发送", "results": []}
+
+    results = []
+    for platform, target in retry_targets:
+        msg = DeliveryService.format_text(platform, title, push_text)
+        results.append(delivery.send_text(DeliveryRequest(
+            platform=platform, text=msg, target=target,
+            source_type=str(task.get("task_type", "retry")),
+            source_id=str(task.get("outbox_id") or task.get("id", "")),
+            outbox_id=int(task.get("outbox_id") or 0), task_id=int(task.get("id") or 0),
+            conversation_key=str(task.get("group_id", "")),
+        )))
+    ok = all(item.get("success", False) for item in results)
+    return {
+        "success": ok,
+        "results": results,
+        "error": "；".join(item.get("error", "") for item in results if item.get("error")),
+    }
 
 
 def _task_retry_after(tc, task: dict, ok: bool, err: str) -> None:
@@ -5831,8 +5904,11 @@ def _task_retry_after(tc, task: dict, ok: bool, err: str) -> None:
     if task.get("outbox_id"):
         try:
             from src.assistant.outbox import Outbox
-            Outbox().update_push_result(
-                task["outbox_id"], "ilink",
+            outbox = Outbox()
+            notif = outbox.get_notification(task["outbox_id"]) or {}
+            push_channel = str(notif.get("push_channel") or "ilink")
+            outbox.update_push_result(
+                task["outbox_id"], push_channel,
                 "success" if ok else "failed",
                 "" if ok else (err or "")[:500],
             )

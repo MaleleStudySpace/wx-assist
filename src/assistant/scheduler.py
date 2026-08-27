@@ -609,6 +609,7 @@ class DigestScheduler:
             priority="normal",
         )
         logger.info("[DIGEST] Step 6/7: Outbox entry #%d created for '%s'", nid, dg.group_name)
+        self._tc_update(task_id, outbox_id=nid)
 
         # Task progress: pushing
         self._tc_update(task_id, progress='推送中')
@@ -626,6 +627,8 @@ class DigestScheduler:
                     text=push_msg,
                     source_type="group_digest",
                     source_id=str(nid),
+                    outbox_id=nid,
+                    task_id=task_id or 0,
                     conversation_key=dg.chat_id if hasattr(dg, "chat_id") else dg.group_name,
                 ))
                 push_ok = result.get("success", False)
@@ -791,6 +794,7 @@ class DigestScheduler:
             content=content,
             priority="normal",
         )
+        self._tc_update(task_id, outbox_id=nid)
 
         # Push through configured IM platform(s)
         if oa.push_target:
@@ -805,6 +809,8 @@ class DigestScheduler:
                     text=msg,
                     source_type="oa_digest",
                     source_id=str(nid),
+                    outbox_id=nid,
+                    task_id=task_id or 0,
                     conversation_key=oa.name,
                 ))
                 push_ok = push_result.get("success", False)

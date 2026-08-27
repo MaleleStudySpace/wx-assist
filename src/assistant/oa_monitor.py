@@ -556,6 +556,7 @@ class OAMonitorEngine:
                 text=push_msg,
                 source_type="oa_article_alert",
                 source_id=str(nid),
+                outbox_id=nid,
                 conversation_key=group_name,
             ))
             push_ok = result.get("success", False)

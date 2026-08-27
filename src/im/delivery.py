@@ -31,6 +31,11 @@ class DeliveryRequest:
     inbound_message_id: str = ""
     conversation_key: str = ""
     reply_to: str = ""
+    # Stable notification linkage used by task-center retries.  These fields
+    # stay optional so agent replies and legacy callers remain unchanged.
+    notification_id: str = ""
+    outbox_id: int = 0
+    task_id: int = 0
 
 
 class DeliveryService:
@@ -71,6 +76,17 @@ class DeliveryService:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_im_delivery_created ON im_delivery_attempts(created_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_im_delivery_platform ON im_delivery_attempts(platform, created_at DESC)")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(im_delivery_attempts)").fetchall()}
+            for name, definition in (
+                ("notification_id", "TEXT NOT NULL DEFAULT ''"),
+                ("outbox_id", "INTEGER NOT NULL DEFAULT 0"),
+                ("task_id", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE im_delivery_attempts ADD COLUMN {name} {definition}")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_im_delivery_source ON im_delivery_attempts(source_type, source_id, created_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_im_delivery_outbox ON im_delivery_attempts(outbox_id, created_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_im_delivery_task ON im_delivery_attempts(task_id, created_at DESC)")
             conn.commit()
 
     @staticmethod
@@ -133,6 +149,9 @@ class DeliveryService:
         return f"{title}\n\n{content}" if title and content else (title or content)
 
     def _record(self, request, attempt_id, channel_name, target, started, result):
+        # The registered WeChat channel is ilink; use the resolved channel name
+        # in audit rows so retry can select the exact failed channel.
+        record_platform = channel_name
         try:
             with self._db_lock, self._connect() as conn:
                 conn.execute("""
@@ -140,28 +159,47 @@ class DeliveryService:
                     (id, platform, channel, target, source_type, source_id,
                      inbound_message_id, conversation_key, status, attempt_no,
                      provider_message_id, provider_code, provider_error,
-                     retryable, created_at, finished_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                     retryable, created_at, finished_at, notification_id,
+                     outbox_id, task_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    attempt_id, request.platform, channel_name, target,
+                    attempt_id, record_platform, channel_name, target,
                     request.source_type, request.source_id, request.inbound_message_id,
                     request.conversation_key, "success" if result.get("success") else "failed",
-                    str(result.get("message_id", "")), str(result.get("code", "")),
+                    1, str(result.get("message_id", "")), str(result.get("code", "")),
                     str(result.get("error", ""))[:1000], int(bool(result.get("retryable"))),
-                    started, time.time(),
+                    started, time.time(), request.notification_id,
+                    int(request.outbox_id or 0), int(request.task_id or 0),
                 ))
                 conn.commit()
         except Exception as exc:
             # Delivery auditing must never break the actual notification path.
             logger.warning("[delivery] audit write failed: %s", exc)
 
-    def list_attempts(self, platform: str = "", limit: int = 50) -> list[dict]:
+    def list_attempts(self, platform: str = "", limit: int = 50,
+                      *, source_type: str = "", source_id: str = "",
+                      outbox_id: int = 0, task_id: int = 0) -> list[dict]:
         limit = max(1, min(int(limit), 500))
         sql = "SELECT * FROM im_delivery_attempts"
         args = []
+        clauses = []
         if platform:
-            sql += " WHERE platform = ?"
+            clauses.append("platform = ?")
             args.append(platform)
+        if source_type:
+            clauses.append("source_type = ?")
+            args.append(source_type)
+        if source_id:
+            clauses.append("source_id = ?")
+            args.append(str(source_id))
+        if outbox_id:
+            clauses.append("outbox_id = ?")
+            args.append(int(outbox_id))
+        if task_id:
+            clauses.append("task_id = ?")
+            args.append(int(task_id))
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY created_at DESC LIMIT ?"
         args.append(limit)
         with self._db_lock, self._connect() as conn:

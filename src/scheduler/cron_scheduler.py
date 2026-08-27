@@ -267,6 +267,8 @@ class CronScheduler:
                 content=text,
                 priority="normal",
             )
+            if task_center_id and self._task_center:
+                self._task_center.update_task(task_center_id, outbox_id=nid)
             push_cfg = job.get("push", {})
             push_status = "skipped"
             if push_cfg.get("target"):
@@ -274,7 +276,8 @@ class CronScheduler:
                 from src.im.delivery import DeliveryRequest, get_delivery_service
                 result = get_delivery_service().send_text(DeliveryRequest(
                     platform=push_cfg.get("target") or "wechat", text=msg, source_type="cron",
-                    source_id=str(job.get("id", "")), conversation_key=job.get("chat_id", ""),
+                    source_id=str(nid), outbox_id=nid, task_id=task_center_id or 0,
+                    conversation_key=job.get("chat_id", ""),
                 ))
                 ok = result.get("success", False)
                 err = result.get("error", "") if not ok else ""
