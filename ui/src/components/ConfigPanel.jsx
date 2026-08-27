@@ -1664,6 +1664,22 @@ function PushSection() {
         const res = await fetch(`${API_BASE}/api/ilink/qrcode-status?qrcode=${encodeURIComponent(qId)}`)
         const data = await res.json()
         if (data.status === 'confirmed') {
+          const bindRes = await fetch(`${API_BASE}/api/ilink/bind`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              bot_token: data.bot_token,
+              account_id: data.account_id,
+              base_url: data.base_url,
+              user_id: data.user_id,
+            }),
+          })
+          const bindData = await bindRes.json()
+          if (!bindRes.ok || !bindData.ok) {
+            setQrStatus('error')
+            setTestResult(bindData.error || '扫码成功，但微信接收器启动失败，请重试')
+            return
+          }
           setQrStatus('confirmed')
           await loadStatus()
           setTestResult('')

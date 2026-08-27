@@ -850,6 +850,7 @@ _onboarding_data = {
 }
 _onboarding_lock = threading.Lock()
 _ilink_test_push_lock = threading.Lock()
+_ilink_bind_lock = threading.RLock()
 
 # IM platform QR onboarding tasks. Values contain provider-specific task objects;
 # secrets are only used server-side and are never returned by status endpoints.
@@ -891,15 +892,22 @@ def register_ilink_callback(callback):
     _ilink_message_callback = callback
 
 
-def _start_ilink_receiver():
-    """Start the iLink message polling receiver (after bind)."""
+def _start_ilink_receiver() -> bool:
+    """Start the iLink receiver for the currently running Bot."""
+    if not _bot_control.is_running():
+        logger.info("[iLink] receiver start skipped: Bot is not running")
+        return False
+
     from src.wechat.ilink_receiver import start_receiver, stop_receiver
-    stop_receiver()  # Ensure old receiver is stopped first
+    if not stop_receiver():
+        logger.warning("[iLink] receiver start skipped: old receiver is still running")
+        return False
 
     from src.wechat.ilink_push import _load_account
     account = _load_account()
     if not account:
-        return
+        logger.info("[iLink] receiver start skipped: account is not bound")
+        return False
 
     def _on_message(msg):
         global _ilink_message_callback
@@ -907,11 +915,11 @@ def _start_ilink_receiver():
             return None
         try:
             return _ilink_message_callback(msg)
-        except Exception as e:
+        except Exception:
             logger.exception("[iLink] callback error")
             return None
 
-    start_receiver(account, _on_message)
+    return bool(start_receiver(account, _on_message))
 
 
 def _stop_ilink_receiver():
@@ -2984,24 +2992,36 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 if not bot_token or not account_id or not user_id:
                     self.send_json({"ok": False, "error": "Missing required fields"})
                     return
-                from src.wechat.ilink_push import get_ilink_push, reset_ilink_push
-                ilink = get_ilink_push()
-                ilink.bind(bot_token, account_id, base_url, user_id)
-                # 重置单例，下次调用 get_ilink_push() 会重新从磁盘加载新账号
-                reset_ilink_push()
-                # 重新绑定 → 旧会话的同步游标已失效，必须清空，
-                # 否则新 ILinkReceiver() 会从磁盘加载旧 cursor，导致
-                # getupdates 返回 session_expired(-14) 或空响应，
-                # 用户从微信发来的消息永远收不到（agent 看似失效）。
-                from src.wechat.ilink_receiver import SYNC_BUF_PATH
-                try:
-                    SYNC_BUF_PATH.unlink(missing_ok=True)
-                    logger.info("iLink sync buf cleared on rebind")
-                except Exception as e:
-                    logger.warning("Failed to clear iLink sync buf on bind: %s", e)
-                # 启动 iLink 接收器
-                _start_ilink_receiver()
-                self.send_json({"ok": True, "message": "iLink bound successfully"})
+                with _ilink_bind_lock:
+                    was_running = _bot_control.is_running()
+                    from src.wechat.ilink_receiver import stop_receiver
+                    if not stop_receiver():
+                        self.send_json({"ok": False, "error": "旧微信接收器仍在停止，请稍后重试"})
+                        return
+                    from src.wechat.ilink_push import get_ilink_push, reset_ilink_push
+                    ilink = get_ilink_push()
+                    ilink.bind(bot_token, account_id, base_url, user_id)
+                    reset_ilink_push()
+                    from src.wechat.ilink_receiver import SYNC_BUF_PATH
+                    try:
+                        SYNC_BUF_PATH.unlink(missing_ok=True)
+                        logger.info("iLink sync buf cleared on rebind")
+                    except Exception as e:
+                        logger.warning("Failed to clear iLink sync buf on bind: %s", e)
+                    receiver_started = False
+                    if was_running and _bot_control.is_running():
+                        receiver_started = _start_ilink_receiver()
+                        if not receiver_started:
+                            self.send_json({
+                                "ok": False,
+                                "error": "账号已保存，但微信接收器启动失败，请稍后重试",
+                            })
+                            return
+                self.send_json({
+                    "ok": True,
+                    "message": "iLink bound successfully",
+                    "receiver_started": receiver_started,
+                })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)})
             return

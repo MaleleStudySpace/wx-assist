@@ -319,16 +319,18 @@ class ILinkReceiver:
         logger.info("ILinkReceiver started")
         return True
 
-    def stop(self) -> None:
-        """Stop the polling thread."""
+    def stop(self) -> bool:
+        """Stop the polling thread and report whether it fully exited."""
         self._running = False
         if self._thread:
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=POLL_TIMEOUT_SEC + 1)
             if self._thread.is_alive():
-                logger.warning("ILinkReceiver thread did not stop in 5s")
+                logger.warning("ILinkReceiver thread did not stop in %ss", POLL_TIMEOUT_SEC + 1)
+                return False
             self._thread = None
         self._account = None
         logger.info("ILinkReceiver stopped")
+        return True
 
     @property
     def is_running(self) -> bool:
@@ -455,9 +457,12 @@ def start_receiver(account: dict,
     return _receiver_instance.start(account, callback)
 
 
-def stop_receiver() -> None:
+def stop_receiver() -> bool:
     """Stop the global receiver singleton."""
     global _receiver_instance
-    if _receiver_instance:
-        _receiver_instance.stop()
+    if not _receiver_instance:
+        return True
+    stopped = _receiver_instance.stop()
+    if stopped:
         _receiver_instance = None
+    return stopped
