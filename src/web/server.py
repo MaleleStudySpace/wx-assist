@@ -2172,6 +2172,10 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 configs = {item.name: item for item in configs_list}
                 registry = get_global_registry()
                 health = registry.get_health() if registry else {}
+                if not registry:
+                    for name, config in configs.items():
+                        if config.enabled and config.extra.get("app_id"):
+                            health[name] = {"ok": True, "detail": "已配置"}
                 try:
                     from src.im.delivery import get_delivery_service
                     delivery = get_delivery_service()
