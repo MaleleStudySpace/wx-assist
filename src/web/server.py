@@ -987,6 +987,7 @@ def _im_channel_snapshot():
     return channels
 
 
+def get_status_snapshot() -> dict:
     """Return a snapshot of the current bot status (thread-safe read)."""
     return _status.snapshot()
 
