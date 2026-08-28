@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 SYNC_BUF_PATH = Path("data/ilink_sync_buf.json")
 
-POLL_TIMEOUT_SEC = 5               # short poll keeps bind/unbind responsive
+POLL_TIMEOUT_SEC = 30              # long-poll timeout for getupdates
 POLL_INTERVAL_SEC = 3.0            # normal poll interval
 BACKOFF_THRESHOLD = 3              # consecutive failures before backoff
 BACKOFF_SHORT_SEC = 3.0            # normal retry interval
@@ -287,6 +287,7 @@ class ILinkReceiver:
         self._sync_buf: str = _load_sync_buf()
         self._account: Optional[dict] = None
         self._callback: Optional[Callable] = None
+        self._recent_msg_ids: set[str] = set()
         self._session = requests.Session()
 
     # ── Public API ──────────────────────────────────────────────────
