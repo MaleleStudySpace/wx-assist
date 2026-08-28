@@ -565,7 +565,7 @@ class _ServerStatus:
         "wechat_online", "ai_ok", "ai_verified", "model_name", "group_count",
         "last_api_call_sec_ago", "last_api_call_time",
         "timestamp", "error", "avatar_url", "wx_name",
-        "restricted_features_enabled", "rag_ok", "mcp_servers",
+        "restricted_features_enabled", "rag_ok", "mcp_servers", "im_channels",
     )
 
     def __init__(self):
@@ -589,6 +589,7 @@ class _ServerStatus:
         self.restricted_features_enabled = False
         self.rag_ok = False
         self.mcp_servers = "{}"
+        self.im_channels = {}
         self._clients: list = []
         self._clients_lock = threading.Lock()
 
@@ -607,7 +608,12 @@ class _ServerStatus:
 
     def snapshot(self):
         """Return a dict snapshot (lock-free, GIL-safe for atomic types)."""
-        return {k: getattr(self, k) for k in self._FIELDS}
+        snapshot = {k: getattr(self, k) for k in self._FIELDS}
+        try:
+            snapshot["im_channels"] = _im_channel_snapshot()
+        except Exception:
+            snapshot["im_channels"] = {}
+        return snapshot
 
     def add_client(self, sock):
         with self._clients_lock:
@@ -939,7 +945,48 @@ def register_agent_engine(engine):
     _agent_engine = engine
 
 
-def get_status_snapshot() -> dict:
+def _im_channel_snapshot():
+    """Return the single IM status snapshot shared by all UI surfaces."""
+    from src.im.config_schema import load_platforms_config
+    from src.im.plugins import get_plugin_push_channel
+    configs = {cfg.name: cfg for cfg in load_platforms_config()}
+    channels = {}
+    for name in ("ilink", "qqbot", "feishu"):
+        config = configs.get(name)
+        if name == "ilink":
+            from src.wechat.ilink_push import get_ilink_push
+            configured = bool(get_ilink_push().is_available())
+        else:
+            extra = (config.extra if config else {}) or {}
+            configured = bool(config and config.enabled and extra.get("app_id") and (
+                extra.get("client_secret") if name == "qqbot" else extra.get("app_secret")
+            ))
+        if not configured:
+            channels[name] = {"state": "unconfigured", "ok": False, "detail": "未配置", "error": ""}
+            continue
+        channel = get_plugin_push_channel(name)
+        if channel is None:
+            channels[name] = {"state": "pending", "ok": False, "detail": "正在连接", "error": ""}
+            continue
+        try:
+            available = bool(channel.is_available())
+        except Exception as exc:
+            available = False
+            error = str(exc)
+        else:
+            error = ""
+        if available:
+            channels[name] = {"state": "ok", "ok": True, "detail": "已连接", "error": ""}
+        else:
+            channels[name] = {"state": "error", "ok": False, "detail": "推送错误", "error": error or "通道当前不可用"}
+    states = [item["state"] for item in channels.values()]
+    channels["summary"] = {
+        "state": "ok" if "ok" in states else "error" if "error" in states else "pending" if "pending" in states else "unconfigured",
+        "ok": "ok" in states,
+    }
+    return channels
+
+
     """Return a snapshot of the current bot status (thread-safe read)."""
     return _status.snapshot()
 
@@ -2189,6 +2236,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         detail = str(item.get("detail") or "")
                         if registry and detail not in {"未启动", "未连接", "正在连接", "长连接运行中"}:
                             config_health[name] = {"state": "error", "ok": False, "detail": "推送错误", "error": detail}
+                im_channels = _im_channel_snapshot()
                 health = config_health
                 health['summary'] = {
                     'state': 'ok' if any(item.get('state') == 'ok' for item in config_health.values()) else ('pending' if any(item.get('state') == 'pending' for item in config_health.values()) else ('error' if any(item.get('state') == 'error' for item in config_health.values()) else 'unconfigured')),
@@ -2266,7 +2314,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         "config": feishu_public,
                     },
                 ]
-                self.send_json({"ok": True, "platforms": platforms})
+                self.send_json({"ok": True, "platforms": platforms, "im_channels": im_channels})
             except Exception as exc:
                 logger.warning("[platforms] status failed: %s", exc)
                 self.send_json({"ok": False, "error": str(exc)}, 500)
