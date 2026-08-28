@@ -143,7 +143,6 @@ export default function App() {
         }
         const d = await statusRes.json()
         const config = await configRes.json()
-        setBotStatus(d)
         setOnboardingDone(d.onboarding_done)
 
         // Auto-start bot if onboarding done AND WECHAT_DATA_DIR + WCDB_KEY both have values
@@ -169,7 +168,11 @@ export default function App() {
     let reconnectTimer = null
     let socket = null
 
-    function connectWS() {
+    async function connectWS() {
+      try {
+        const response = await fetch(`${API_BASE}/api/status`)
+        if (response.ok) setBotStatus(await response.json())
+      } catch {}
       socket = new WebSocket(getWsUrl())
       socket.onopen = () => {
         setWsConnected(true)
