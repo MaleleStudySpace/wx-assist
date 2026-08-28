@@ -17,9 +17,11 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from src.config import PROJECT_ROOT
+
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path("data/task_center.db")
+DB_PATH = PROJECT_ROOT / "data" / "task_center.db"
 
 BASE_SCHEMA = """
 PRAGMA journal_mode=WAL;

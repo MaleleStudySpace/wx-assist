@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from src.config import PROJECT_ROOT
+
 import requests
 
 from .ilink_push import (
@@ -28,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────
 
-SYNC_BUF_PATH = Path("data/ilink_sync_buf.json")
+SYNC_BUF_PATH = PROJECT_ROOT / "data" / "ilink_sync_buf.json"
 
 POLL_TIMEOUT_SEC = 30              # long-poll timeout for getupdates
 POLL_INTERVAL_SEC = 3.0            # normal poll interval

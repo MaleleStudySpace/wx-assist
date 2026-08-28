@@ -10,9 +10,11 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from src.config import PROJECT_ROOT
+
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path("data/assistant_outbox.db")
+DB_PATH = PROJECT_ROOT / "data" / "assistant_outbox.db"
 
 BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS assistant_outbox (

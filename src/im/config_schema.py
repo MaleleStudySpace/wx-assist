@@ -10,9 +10,11 @@ import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from src.config import PROJECT_ROOT
+
 logger = logging.getLogger(__name__)
 
-PLATFORMS_CONFIG_PATH = Path("data/platforms.json")
+PLATFORMS_CONFIG_PATH = PROJECT_ROOT / "data" / "platforms.json"
 SUPPORTED_TRANSPORTS = {"", "wcdb", "mac_ui", "mac_hybrid", "ilink", "qq_openapi", "feishu_webhook"}
 
 

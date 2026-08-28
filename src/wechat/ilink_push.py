@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from src.config import PROJECT_ROOT
+
 logger = logging.getLogger(__name__)
 
 _status_change_callback = None
@@ -39,7 +41,7 @@ def set_status_change_callback(callback) -> None:
 
 # ── Constants ────────────────────────────────────────────────────────
 
-ACCOUNT_PATH = Path("data/ilink_account.json")
+ACCOUNT_PATH = PROJECT_ROOT / "data" / "ilink_account.json"
 DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 
 API_TIMEOUT_SEC = 15

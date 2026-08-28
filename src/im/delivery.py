@@ -16,9 +16,10 @@ from typing import Optional
 
 from .plugins import get_plugin_push_channel
 from .targets import bound_push_targets, default_target, normalize_targets
+from src.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
-DB_PATH = Path("data/im_delivery.db")
+DB_PATH = PROJECT_ROOT / "data" / "im_delivery.db"
 
 
 @dataclass(frozen=True)
