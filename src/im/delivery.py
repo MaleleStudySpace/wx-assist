@@ -130,6 +130,24 @@ class DeliveryService:
         channel = get_plugin_push_channel(channel_name)
         attempt_id = uuid.uuid4().hex
         started = time.time()
+        # Fallback: if channel not yet registered but credentials exist,
+        # construct one from PlatformRegistry adapter on the fly.
+        if channel is None:
+            try:
+                from .registry import get_global_registry
+                adapter = get_global_registry().get_adapter(channel_name) if get_global_registry() else None
+                if adapter and getattr(adapter, "_client", None) and adapter._client.app_id:
+                    if channel_name == "qqbot":
+                        from .plugins.qqbot.push import QQBotPushChannel
+                        channel = QQBotPushChannel(adapter)
+                    elif channel_name == "feishu":
+                        from .plugins.feishu.push import FeishuPushChannel
+                        channel = FeishuPushChannel(adapter._client)
+                    elif channel_name == "ilink":
+                        from .plugins.wechat.push import WechatPushChannel
+                        channel = WechatPushChannel()
+            except Exception:
+                pass
         if channel is None:
             result = {"success": False, "error": f"IM channel unavailable: {platform_name}", "retryable": False}
             self._record(request, attempt_id, channel_name, target, started, result)

@@ -288,7 +288,7 @@ class ILinkReceiver:
         self._account: Optional[dict] = None
         self._callback: Optional[Callable] = None
         self._recent_msg_ids: set[str] = set()
-        self._session = requests.Session()
+        self._session: Optional[requests.Session] = None
 
     # ── Public API ──────────────────────────────────────────────────
 

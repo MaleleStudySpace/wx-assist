@@ -524,14 +524,13 @@ export default function Dashboard({ status, onTabChange }) {
 
         <div className="px-6 pb-4 grid grid-cols-2 md:grid-cols-5 gap-3">
           <StatusTile icon={Database} label="数据库" ok={status.db_ok} okText="正常" errText="异常" />
-          <StatusTile icon={WechatLogo} label="微信推送" ok={status.wechat_online} okText="已连接" errText="未连接" />
-          {Object.entries(status.im_channels || {})
-            .filter(([name]) => name !== 'wechat')
-            .map(([name, channel]) => (
-              <StatusTile key={name} icon={name === 'qqbot' ? PaperPlaneTilt : Newspaper}
-                label={`${name === 'qqbot' ? 'QQ' : name === 'feishu' ? '飞书' : name}推送`}
-                ok={channel?.ok} okText="已连接" errText={channel?.detail || '未连接'} />
-            ))}
+          <StatusTile icon={WechatLogo} label="消息推送" ok={status.wechat_online || Object.values(status.im_channels || {}).some(ch => ch?.ok)} okText="已连接" errText="未连接" detail={
+            <span className="flex items-center gap-2 text-[10px] font-mono">
+              <span className="flex items-center gap-0.5"><span className={`inline-block w-1.5 h-1.5 rounded-full ${status.wechat_online ? 'bg-brand-green' : 'bg-status-error/50'}`} />微信</span>
+              <span className="flex items-center gap-0.5"><span className={`inline-block w-1.5 h-1.5 rounded-full ${(status.im_channels?.qqbot?.ok) ? 'bg-brand-green' : 'bg-status-error/50'}`} />QQ</span>
+              <span className="flex items-center gap-0.5"><span className={`inline-block w-1.5 h-1.5 rounded-full ${(status.im_channels?.feishu?.ok) ? 'bg-brand-green' : 'bg-status-error/50'}`} />飞书</span>
+            </span>
+          } />
           <StatusTile icon={Brain} label="AI 后端" ok={status.ai_ok} okText="可达" errText="未响应"
             detail={status.ai_ok ? (status.model_name || '') : '未检测或未成功调用'} />
           <StatusTile icon={Cube} label="语义搜索" ok={status.rag_ok} okText="已就绪" errText="未安装"
