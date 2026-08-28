@@ -2237,11 +2237,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         if registry and detail not in {"未启动", "未连接", "正在连接", "长连接运行中"}:
                             config_health[name] = {"state": "error", "ok": False, "detail": "推送错误", "error": detail}
                 im_channels = _im_channel_snapshot()
-                health = config_health
-                health['summary'] = {
-                    'state': 'ok' if any(item.get('state') == 'ok' for item in config_health.values()) else ('pending' if any(item.get('state') == 'pending' for item in config_health.values()) else ('error' if any(item.get('state') == 'error' for item in config_health.values()) else 'unconfigured')),
-                    'ok': any(item.get('state') == 'ok' for item in config_health.values()),
-                }
+                health = {name: item for name, item in im_channels.items() if name != "summary"}
+                health["summary"] = dict(im_channels.get("summary") or {})
                 try:
                     from src.im.delivery import get_delivery_service
                     delivery = get_delivery_service()
@@ -2288,28 +2285,25 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         "label": "微信",
                         "enabled": True,
                         "configurable": True,
-                        "status": {
-                            "ok": bool(_status.wechat_online),
-                            "detail": "已连接" if _status.wechat_online else "未连接",
-                        },
+                        "status": im_channels.get("ilink", {"state": "unconfigured", "ok": False, "detail": "未配置", "error": ""}),
                         "delivery": {"channel": "ilink", "last_failure": delivery_status.get("ilink")},
                         "config": {"configured": True},
                     },
                     {
                         "name": "qqbot",
                         "label": "QQ",
-                        "enabled": bool(qq_config),
+                        "enabled": bool(configs.get("qqbot") and configs["qqbot"].enabled),
                         "configurable": True,
-                        "status": health.get("qqbot", {"ok": False, "detail": "未配置"}),
+                        "status": health.get("qqbot", {"state": "unconfigured", "ok": False, "detail": "未配置", "error": ""}),
                         "delivery": {"channel": "qqbot", "last_failure": delivery_status.get("qqbot")},
                         "config": qq_public,
                     },
                     {
                         "name": "feishu",
                         "label": "飞书",
-                        "enabled": bool(feishu_config),
+                        "enabled": bool(configs.get("feishu") and configs["feishu"].enabled),
                         "configurable": True,
-                        "status": health.get("feishu", {"ok": False, "detail": "未配置"}),
+                        "status": health.get("feishu", {"state": "unconfigured", "ok": False, "detail": "未配置", "error": ""}),
                         "delivery": {"channel": "feishu", "last_failure": delivery_status.get("feishu")},
                         "config": feishu_public,
                     },

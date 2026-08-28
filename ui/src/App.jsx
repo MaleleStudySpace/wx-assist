@@ -143,6 +143,7 @@ export default function App() {
         }
         const d = await statusRes.json()
         const config = await configRes.json()
+        setBotStatus(d)
         setOnboardingDone(d.onboarding_done)
 
         // Auto-start bot if onboarding done AND WECHAT_DATA_DIR + WCDB_KEY both have values
@@ -221,6 +222,7 @@ export default function App() {
     wx_name: '',
     restricted_features_enabled: false,
     rag_ok: false,
+    im_channels: {},
   }
 
   // Unauthorized access (phone without LAN session) — check BEFORE loading
