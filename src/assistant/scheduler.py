@@ -626,11 +626,12 @@ class DigestScheduler:
             else:
                 push_data = _json.loads(content) if isinstance(content, str) else content
                 push_text = push_data.get("display", content)
-                # Use first bound for formatting, actual fan-out is handled by DeliveryService.
-                fmt_target = bound[0] if bound else (dg.push_target or "ilink")
+                # Use the first bound channel only for formatting; the delivery
+                # service fans the notification out to every bound channel.
+                fmt_target = bound[0]
                 push_msg = DeliveryService.format_text(fmt_target, title, push_text)
                 result = get_delivery_service().send_text(DeliveryRequest(
-                    platform=dg.push_target or fmt_target,
+                    platform=fmt_target,
                     text=push_msg,
                     source_type="group_digest",
                     source_id=str(nid),
@@ -816,10 +817,12 @@ class DigestScheduler:
             else:
                 push_data = _json.loads(content) if isinstance(content, str) else content
                 push_text = push_data.get("display", content)
-                fmt_target = bound[0] if bound else (oa.push_target or "ilink")
+                # Use the first bound channel only for formatting; the delivery
+                # service fans the notification out to every bound channel.
+                fmt_target = bound[0]
                 msg = DeliveryService.format_text(fmt_target, title, push_text)
                 push_result = get_delivery_service().send_text(DeliveryRequest(
-                    platform=oa.push_target or fmt_target,
+                    platform=fmt_target,
                     text=msg,
                     source_type="oa_digest",
                     source_id=str(nid),
@@ -941,18 +944,20 @@ class DigestScheduler:
                 }, ensure_ascii=False),
                 priority="high",
             )
-            # 推送到 ilink
-            if oa.push_target:
-                try:
-                    from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
-                    msg = DeliveryService.format_text(oa.push_target, title, display)
-                    get_delivery_service().send_text(DeliveryRequest(
-                        platform=oa.push_target, text=msg, source_type="oa_digest_failure",
-                        source_id=str(task_id), conversation_key=oa.name,
-                        auto_route=True,
-                    ))
-                    logger.info("[OA-DIGEST] 失败通知已推送: '%s'", oa.name)
-                except Exception as e:
-                    logger.warning("[OA-DIGEST] 失败通知推送失败: %s", e)
+            # Push the failure notice through every currently bound channel.
+            from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+            from src.im.targets import bound_push_targets
+            bound = bound_push_targets()
+            if bound:
+                fmt_target = bound[0]
+                msg = DeliveryService.format_text(fmt_target, title, display)
+                result = get_delivery_service().send_text(DeliveryRequest(
+                    platform=fmt_target, text=msg, source_type="oa_digest_failure",
+                    source_id=str(task_id), conversation_key=oa.name,
+                    auto_route=True,
+                ))
+                logger.info("[OA-DIGEST] 失败通知已推送: '%s' success=%s", oa.name, result.get("success", False))
+            else:
+                logger.info("[OA-DIGEST] 失败通知跳过: 未绑定任何推送渠道")
         except Exception as e:
             logger.warning("[OA-DIGEST] _notify_oa_digest_failure 异常: %s", e)

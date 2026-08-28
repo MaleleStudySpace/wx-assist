@@ -6,7 +6,9 @@ from typing import Any
 from .config_schema import load_platforms_config
 
 
-_ALIAS = {"ilink": "wechat", "wechat": "wechat", "qqbot": "qqbot", "feishu": "feishu"}
+# Returned values are actual delivery channel names.  ``wechat`` remains
+# accepted only as a legacy business-layer alias for the iLink channel.
+_ALIAS = {"ilink": "ilink", "wechat": "ilink", "qqbot": "qqbot", "feishu": "feishu"}
 
 
 def normalize_targets(value: Any) -> list[str]:

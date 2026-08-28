@@ -229,8 +229,6 @@ def fetch_updates(account: dict, sync_buf: str, session=None) -> dict:
     my_user_id = _try_extract_my_user_id(data)
 
     new_sync_buf = data.get("get_updates_buf", sync_buf)
-    if new_sync_buf and new_sync_buf != sync_buf:
-        _save_sync_buf(new_sync_buf)
 
     return {
         "messages": messages,
@@ -362,10 +360,6 @@ class ILinkReceiver:
                 if not self._running:
                     break
 
-                new_buf = result.get("new_sync_buf")
-                if new_buf:
-                    self._sync_buf = new_buf
-
                 if result.get("session_expired"):
                     logger.warning("iLink session expired, pausing %d seconds",
                                    SESSION_EXPIRED_PAUSE_SEC)
@@ -373,12 +367,21 @@ class ILinkReceiver:
                     consecutive_failures = 0
                     continue
 
-                consecutive_failures = 0
-
                 messages = result.get("messages", [])
                 for msg in messages:
                     self._handle_message(msg)
 
+                # A getupdates cursor acknowledges the complete response.  Do
+                # not advance it until every message callback has completed;
+                # otherwise one callback failure would permanently skip the
+                # remaining message batch on the next poll.
+                if not self._running:
+                    break
+                new_buf = result.get("new_sync_buf")
+                if new_buf and new_buf != self._sync_buf:
+                    self._sync_buf = new_buf
+                    _save_sync_buf(new_buf)
+                consecutive_failures = 0
             except Exception as e:
                 consecutive_failures += 1
                 logger.warning("iLink poll error (%d): %s",
@@ -408,13 +411,6 @@ class ILinkReceiver:
             if msg_id in self._recent_msg_ids:
                 logger.debug("[iLink] Duplicate msg_id=%s, skipping", msg_id)
                 return
-            self._recent_msg_ids.add(msg_id)
-
-            # Evict old ids if set is too large
-            if len(self._recent_msg_ids) > MAX_RECENT_MSG_IDS:
-                evict = list(self._recent_msg_ids)[:MAX_RECENT_MSG_IDS // 2]
-                for eid in evict:
-                    self._recent_msg_ids.discard(eid)
 
         std_msg = standardize_for_router(raw_msg)
 
@@ -422,30 +418,42 @@ class ILinkReceiver:
                     std_msg.get("sender_name", "?"),
                     std_msg.get("content", "")[:60])
 
-        if self._callback:
-            try:
-                reply = self._callback(std_msg)
-                logger.info("[iLink] Callback returned: %s",
-                            reply[:80] if reply else "(no reply)")
-            except Exception as e:
-                logger.error("[iLink] Callback error: %s", e)
-                return
+        if not self._callback:
+            raise RuntimeError("iLink callback is not configured")
 
-            if reply and reply.strip():
-                from src.im.plugins.wechat.push import get_wechat_push_channel
-                push = get_wechat_push_channel()
-                if push.is_available():
-                    from src.im.delivery import DeliveryRequest, get_delivery_service
-                    get_delivery_service().send_text(DeliveryRequest(
-                        platform="wechat", text=reply, source_type="agent_reply",
-                        source_id=str(std_msg.get("message_id", "")),
-                        inbound_message_id=str(std_msg.get("message_id", "")),
-                        conversation_key=str(std_msg.get("chat_id", "")),
-                    ))
-                else:
-                    logger.warning("[iLink] Cannot reply: WeChat push channel not bound")
+        try:
+            reply = self._callback(std_msg)
+            logger.info("[iLink] Callback returned: %s",
+                        reply[:80] if reply else "(no reply)")
+        except Exception as e:
+            logger.error("[iLink] Callback error: %s", e)
+            raise
+
+        if reply and reply.strip():
+            from src.im.plugins.wechat.push import get_wechat_push_channel
+            push = get_wechat_push_channel()
+            if push.is_available():
+                from src.im.delivery import DeliveryRequest, get_delivery_service
+                get_delivery_service().send_text(DeliveryRequest(
+                    platform="wechat", text=reply, source_type="agent_reply",
+                    source_id=str(std_msg.get("message_id", "")),
+                    inbound_message_id=str(std_msg.get("message_id", "")),
+                    conversation_key=str(std_msg.get("chat_id", "")),
+                ))
             else:
-                logger.debug("[iLink] No reply to send")
+                logger.warning("[iLink] Cannot reply: WeChat push channel not bound")
+        else:
+            logger.debug("[iLink] No reply to send")
+
+        # Only mark a message as processed after the callback path completed.
+        # If the callback raised, the caller keeps the old sync cursor and the
+        # same message can be retried on the next getupdates poll.
+        if msg_id:
+            self._recent_msg_ids.add(msg_id)
+            if len(self._recent_msg_ids) > MAX_RECENT_MSG_IDS:
+                evict = list(self._recent_msg_ids)[:MAX_RECENT_MSG_IDS // 2]
+                for eid in evict:
+                    self._recent_msg_ids.discard(eid)
 
     def _sleep(self, seconds: float) -> None:
         """Abortable sleep — wakes early if stop() is called."""

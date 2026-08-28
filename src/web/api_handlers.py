@@ -4935,44 +4935,51 @@ def _push_oa_digest(result, group, config, task_id=None):
         logger.debug("OA outbox write skipped: %s", e)
 
     try:
-        if group.push_target:
-            import json as _json
-            from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
-            title = f"📰 {group.name} · 公众号摘要"
-            ac = result.get("articles_count", 0)
-            content = f"📄 {ac} 篇文章\n\n{result['digest_text']}"
-            msg = DeliveryService.format_text(group.push_target, title, content)
-            push_result = get_delivery_service().send_text(DeliveryRequest(
-                platform=group.push_target, text=msg, source_type="oa_digest",
-                source_id=str(oa_nid or ""), outbox_id=oa_nid or 0,
-                task_id=task_id or 0, auto_route=True, conversation_key=group.name,
-            ))
-            push_ok = push_result.get("success", False)
-            push_err = push_result.get("error", "") if not push_ok else ""
+        from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+        from src.im.targets import bound_push_targets
+        bound = bound_push_targets()
+        if not bound:
             if oa_nid:
-                try:
-                    outbox = Outbox()
-                    outbox.update_push_result(oa_nid, group.push_target,
-                                              "success" if push_ok else "failed", push_err)
-                except Exception:
-                    pass
+                outbox = Outbox()
+                outbox.update_push_result(
+                    oa_nid, "ilink", "skipped", "未绑定任何推送渠道",
+                )
             if task_id:
                 try:
                     tc = get_task_center()
                     if tc:
-                        tc.update_task(task_id, outbox_id=oa_nid)
-                        tc.update_push_result(task_id, "success" if push_ok else "failed", push_err)
+                        tc.update_task(task_id, push_status="skipped", push_error="未绑定任何推送渠道")
                 except Exception:
                     pass
-        else:
-            if oa_nid:
-                try:
-                    outbox = Outbox()
-                    outbox.update_push_result(
-                        oa_nid, "local", "skipped", "未配置微信推送通道",
-                    )
-                except Exception:
-                    pass
+            return
+
+        title = f"📰 {group.name} · 公众号摘要"
+        ac = result.get("articles_count", 0)
+        content = f"📄 {ac} 篇文章\n\n{result['digest_text']}"
+        fmt_target = bound[0]
+        msg = DeliveryService.format_text(fmt_target, title, content)
+        push_result = get_delivery_service().send_text(DeliveryRequest(
+            platform=fmt_target, text=msg, source_type="oa_digest",
+            source_id=str(oa_nid or ""), outbox_id=oa_nid or 0,
+            task_id=task_id or 0, auto_route=True, conversation_key=group.name,
+        ))
+        push_ok = push_result.get("success", False)
+        push_err = push_result.get("error", "") if not push_ok else ""
+        if oa_nid:
+            try:
+                outbox = Outbox()
+                outbox.update_push_result(oa_nid, fmt_target,
+                                          "success" if push_ok else "failed", push_err)
+            except Exception:
+                pass
+        if task_id:
+            try:
+                tc = get_task_center()
+                if tc:
+                    tc.update_task(task_id, outbox_id=oa_nid)
+                    tc.update_push_result(task_id, "success" if push_ok else "failed", push_err)
+            except Exception:
+                pass
     except Exception as e:
         logger.warning("[OA-DIGEST] Push failed: %s", e)
 
@@ -5887,31 +5894,56 @@ def _do_task_retry_push(task: dict) -> dict:
         attempts = delivery.list_attempts(task_id=int(task["id"]), limit=500)
 
     platform_targets = {}
-    successful = set()
-    for attempt in attempts:
+    # list_attempts() returns newest rows first.  Keep only the newest
+    # attempt for each actual delivery platform; an older success must not
+    # hide a newer failure that still needs retry.
+    latest_by_platform = {}
+    for index, attempt in enumerate(attempts):
         platform = str(attempt.get("platform") or "").strip()
         channel = str(attempt.get("channel") or "").strip()
         if platform not in {"ilink", "qqbot", "feishu"}:
             platform = channel
-        target = str(attempt.get("target") or "")
-        key = (platform, target)
+        if platform == "wechat":
+            # Compatibility for legacy audit rows; new rows are always ilink.
+            platform = "ilink"
         if platform not in {"ilink", "qqbot", "feishu"}:
             continue
-        platform_targets[key] = (platform, target)
-        if attempt.get("status") == "success":
-            successful.add(key)
+        target = str(attempt.get("target") or "")
+        try:
+            created_at = float(attempt.get("created_at") or 0)
+        except (TypeError, ValueError):
+            created_at = 0.0
+        try:
+            attempt_no = int(attempt.get("attempt_no") or 0)
+        except (TypeError, ValueError):
+            attempt_no = 0
+        # The database query is newest-first; index breaks timestamp ties in
+        # that same order, while attempt_no handles retries at one timestamp.
+        sort_key = (created_at, attempt_no, -index)
+        current = latest_by_platform.get(platform)
+        if current is None or sort_key > current[0]:
+            latest_by_platform[platform] = (sort_key, target, attempt.get("status"))
+
+    for platform, (_sort_key, target, status) in latest_by_platform.items():
+        platform_targets[platform] = (platform, target, status)
 
     if not platform_targets and retry_notif:
         channel = str(retry_notif.get("push_channel") or "").strip()
+        if channel == "wechat":
+            channel = "ilink"
         if channel in {"ilink", "qqbot", "feishu"}:
-            platform_targets[(channel, "")] = (channel, "")
+            platform_targets[channel] = (channel, "", "failed")
 
     if not platform_targets:
         return {"success": False, "error": "无法确定原始失败平台，为避免重复发送，本次未重推"}
 
-    retry_targets = [value for key, value in platform_targets.items() if key not in successful]
+    retry_targets = [
+        (platform, target)
+        for platform, target, status in platform_targets.values()
+        if status != "success"
+    ]
     if not retry_targets:
-        return {"success": True, "skipped": True, "error": "原始平台均已成功，无需重复发送", "results": []}
+        return {"success": True, "skipped": True, "error": "原始平台最新结果均已成功，无需重复发送", "results": []}
 
     results = []
     for platform, target in retry_targets:

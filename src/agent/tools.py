@@ -507,7 +507,8 @@ class ToolExecutor:
                                             "键名必须匹配 skill 定义中的参数名，"
                                             "先用 list_skills 查看各 skill 的参数定义"},
                     "push_target": {"type": "string", "enum": ["ilink", "qqbot", "feishu", ""],
-                                    "description": "推送方式，ilink=微信、qqbot=QQ、feishu=飞书，空值=不推送"},
+                                    "description": "历史兼容字段；实际推送到消息推送页中已绑定的平台，留空也会自动推送",
+                                    "default": ""},
                 },
                 "required": ["name", "skill", "cron"],
             },
@@ -1250,7 +1251,7 @@ class ToolExecutor:
 
     def _handle_create_cron(self, name: str, skill: str, cron: str,
                             args: dict = None,
-                            push_target: str = "ilink") -> str:
+                            push_target: str = "") -> str:
         """创建定时任务（引用 skill 执行）。"""
         logger.info("[CronTool] create_cron — name=%s skill=%s cron=%s args=%s",
                     name, skill, cron, args)
@@ -1283,7 +1284,7 @@ class ToolExecutor:
             "name": name,
             "skill": skill,
             "cron": cron,
-            "push": {"enabled": bool(push_target),
+            "push": {"enabled": True,
                      "target": push_target or "ilink"},
         }
         if args:
@@ -1296,7 +1297,7 @@ class ToolExecutor:
                 f"ID: {jid}\n"
                 f"Skill: {skill}\n"
                 f"Cron: {cron}\n"
-                f"推送: {'推送到微信' if push_target else '不推送'}")
+                "推送: 自动发送到消息推送页中已绑定的平台")
 
     def _handle_delete_cron(self, id: str) -> str:
         if not self._cron_scheduler:

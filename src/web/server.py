@@ -923,7 +923,9 @@ def _start_ilink_receiver() -> bool:
             return _ilink_message_callback(msg)
         except Exception:
             logger.exception("[iLink] callback error")
-            return None
+            # Let the receiver retain the current sync cursor and retry the
+            # message instead of acknowledging it as successfully handled.
+            raise
 
     return bool(start_receiver(account, _on_message))
 
@@ -1349,6 +1351,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
             put_path.startswith("/api/platforms/") and len(put_path.split("/")) == 4
         ) or (
             put_path.startswith("/api/platforms/") and "/onboard/" in put_path
+        ) or (
+            put_path.startswith("/api/mcp/servers/") and len(put_path.split("/")) == 5
         ):
             self.do_GET()
         else:

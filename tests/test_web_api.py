@@ -384,7 +384,7 @@ class ServerStatusTests(unittest.TestCase):
             "last_api_call_sec_ago", "last_api_call_time",
             "timestamp", "error", "avatar_url", "wx_name",
             "restricted_features_enabled",
-            "mcp_servers", "rag_ok",
+            "mcp_servers", "rag_ok", "im_channels",
         }
         self.assertEqual(set(snap.keys()), expected_fields)
 

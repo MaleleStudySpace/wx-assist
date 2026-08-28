@@ -348,7 +348,10 @@ class OpenAICompatSummarizer(AbstractSummarizer):
 
         start = time.monotonic()
         try:
-            response = self.client.chat.completions.create(**params)
+            response = self._retry_with_backoff(
+                lambda: self.client.chat.completions.create(**params),
+                "agent chat",
+            )
             latency = (time.monotonic() - start) * 1000
         except Exception:
             latency = (time.monotonic() - start) * 1000

@@ -1,7 +1,7 @@
-"""Optional WeChat adapter wrapper.
+"""WeChat iLink PushChannel compatibility exports.
 
-The existing src.wechat backends remain the source of truth until the
-migration segment explicitly connects this wrapper to Bot.
+The legacy WeChat runtime remains outside the optional adapter registry.  The
+unfinished ``WechatAdapter`` placeholder is intentionally not auto-registered.
 """
 
 from .adapter import WechatAdapter

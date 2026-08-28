@@ -238,6 +238,9 @@ class CronScheduler:
         if is_silent:
             logger.info("[CRON] %s 无新内容，跳过推送", job_name)
             return text
+
+        # The message-push page controls the actual destinations.  Keep
+        # the legacy push target only in the stored job for compatibility.
         push_cfg = job.get("push", {})
         if not push_cfg.get("enabled", True):
             return text
@@ -275,14 +278,16 @@ class CronScheduler:
                 push_status = "skipped"
             else:
                 from src.im.targets import bound_push_targets
-                if not bound_push_targets():
+                bound = bound_push_targets()
+                if not bound:
                     self._outbox.update_push_result(nid, "ilink", "skipped", "未绑定任何推送渠道")
                     push_status = "skipped"
                 else:
+                    fmt_target = bound[0]
                     msg = f"⏰ {job_name}\n\n{text}"
                     from src.im.delivery import DeliveryRequest, get_delivery_service
                     result = get_delivery_service().send_text(DeliveryRequest(
-                        platform=push_cfg.get("target") or "wechat", text=msg, source_type="cron",
+                        platform=fmt_target, text=msg, source_type="cron",
                         source_id=str(nid), outbox_id=nid, task_id=task_center_id or 0,
                         auto_route=True,
                         conversation_key=job.get("chat_id", ""),
@@ -290,7 +295,7 @@ class CronScheduler:
                     ok = result.get("success", False)
                     err = result.get("error", "") if not ok else ""
                     self._outbox.update_push_result(
-                        nid, push_cfg.get("target") or "ilink", "success" if ok else "failed", err)
+                        nid, fmt_target, "success" if ok else "failed", err)
                     push_status = "success" if ok else "failed"
                     logger.info("[CRON] 推送 %s: %s", "成功" if ok else "失败", job_name)
             # 同步更新 TaskCenter 推送状态

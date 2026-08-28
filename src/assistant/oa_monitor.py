@@ -543,15 +543,20 @@ class OAMonitorEngine:
         return False
 
     def _push_to_wechat(self, nid: int, group_name: str, title: str, content: str, push_target: str = "ilink") -> tuple[bool, str]:
-        """Push an OA article alert through the selected IM platform(s)."""
+        """Push an OA article alert through every currently bound IM channel."""
         try:
             import json as _json
             from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+            from src.im.targets import bound_push_targets
+            bound = bound_push_targets()
+            if not bound:
+                return False, "未绑定任何推送渠道"
+            fmt_target = bound[0]
             push_data = _json.loads(content) if isinstance(content, str) else content
             push_text = push_data.get("display", content)
-            push_msg = DeliveryService.format_text(push_target, title, push_text)
+            push_msg = DeliveryService.format_text(fmt_target, title, push_text)
             result = get_delivery_service().send_text(DeliveryRequest(
-                platform=push_target,
+                platform=fmt_target,
                 text=push_msg,
                 source_type="oa_article_alert",
                 source_id=str(nid),
@@ -562,7 +567,7 @@ class OAMonitorEngine:
             push_ok = result.get("success", False)
             push_err = result.get("error", "") if not push_ok else ""
             self._outbox.update_push_result(
-                nid, push_target, "success" if push_ok else "failed", push_err)
+                nid, fmt_target, "success" if push_ok else "failed", push_err)
             if push_ok:
                 logger.info("OAMonitor: pushed through IM for '%s'", group_name)
             else:
@@ -580,7 +585,12 @@ class OAMonitorEngine:
         except Exception as e:
             logger.warning("OAMonitor: IM push error for '%s': %s", group_name, e)
             try:
-                self._outbox.update_push_result(nid, push_target, "failed", str(e))
+                fallback_channel = "ilink"
+                from src.im.targets import bound_push_targets
+                bound = bound_push_targets()
+                if bound:
+                    fallback_channel = bound[0]
+                self._outbox.update_push_result(nid, fallback_channel, "failed", str(e))
             except Exception:
                 pass
             return False, str(e)

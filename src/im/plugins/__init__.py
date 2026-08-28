@@ -20,8 +20,12 @@ def register(name: str):
 
 
 def load_builtin_plugins() -> None:
-    """Import built-in adapters explicitly before registry lookup."""
-    from . import wechat  # noqa: F401
+    """Import optional adapters explicitly before registry lookup.
+
+    The legacy WeChat path is intentionally excluded: its real runtime is
+    still Bot + iLink, while ``wechat.adapter.WechatAdapter`` is only a
+    migration placeholder and must not enter the optional adapter registry.
+    """
     try:
         from . import qqbot  # noqa: F401
     except Exception:

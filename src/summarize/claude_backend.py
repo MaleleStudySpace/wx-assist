@@ -3,6 +3,7 @@
 Uses the Anthropic Python SDK with native structured output (Pydantic parse).
 """
 
+import json
 import logging
 import time
 from typing import Iterator
@@ -133,8 +134,16 @@ class ClaudeSummarizer(AbstractSummarizer):
             request_kwargs["tools"] = [_to_anthropic_tool(t) for t in tools]
 
         start = time.monotonic()
-        response = self.client.messages.create(**request_kwargs)
-        latency = (time.monotonic() - start) * 1000
+        try:
+            response = self._retry_with_backoff(
+                lambda: self.client.messages.create(**request_kwargs),
+                "agent chat",
+            )
+            latency = (time.monotonic() - start) * 1000
+        except Exception:
+            latency = (time.monotonic() - start) * 1000
+            logger.info("[LLM] agent_chat FAILED after %.1fms", latency)
+            raise
 
         content_parts: list[str] = []
         tool_calls: list[dict] = []
