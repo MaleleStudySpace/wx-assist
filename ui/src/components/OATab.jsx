@@ -645,7 +645,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
         <div>
           <label className="block text-sm text-text-muted mb-2">推送设置</label>
           <div className="rounded-lg border border-border-main bg-bg-raised px-3 py-2">
-            <p className="text-xs text-text-muted">自动推送到已绑定的平台（在「消息推送 → 多平台调度」完成绑定后生效）</p>
+            <p className="text-xs text-text-muted">自动推送到已绑定的平台（在「系统配置 → 消息推送」完成绑定后生效）</p>
           </div>
         </div>
       </div>
@@ -938,7 +938,7 @@ function MonitorGroupEditor({ group, accounts, onSave, onCancel }) {
       </div>
 
       <div className="rounded-lg border border-border-main bg-bg-raised px-3 py-2">
-        <p className="text-xs text-text-muted">自动推送到已绑定的平台（在「消息推送 → 多平台调度」完成绑定后生效）</p>
+        <p className="text-xs text-text-muted">自动推送到已绑定的平台（在「系统配置 → 消息推送」完成绑定后生效）</p>
       </div>
 
       {/* 免打扰时段 — 默认收起，有配置时展开 */}

@@ -330,13 +330,17 @@ class ILinkReceiver:
             except Exception:
                 pass
         if self._thread:
-            self._thread.join(timeout=POLL_TIMEOUT_SEC + 1)
+            # Don't block QR rebind for 30s; close session above already aborts the request.
+            # Short join is enough — old thread will exit on next loop check.
+            self._thread.join(timeout=2)
             if self._thread.is_alive():
-                logger.warning("ILinkReceiver thread did not stop in %ss", POLL_TIMEOUT_SEC + 1)
-                return False
+                logger.warning("ILinkReceiver thread still winding down; proceeding with new receiver")
             self._thread = None
         self._account = None
         self._callback = None
+        # Ensure dedup set exists even for instances created before the fix
+        if not hasattr(self, "_recent_msg_ids"):
+            self._recent_msg_ids: set[str] = set()
         logger.info("ILinkReceiver stopped")
         return True
 
@@ -353,6 +357,8 @@ class ILinkReceiver:
         while self._running:
             try:
                 result = fetch_updates(self._account, self._sync_buf, self._session)
+                if not self._running:
+                    break
 
                 new_buf = result.get("new_sync_buf")
                 if new_buf:
@@ -386,6 +392,11 @@ class ILinkReceiver:
 
     def _handle_message(self, raw_msg: dict) -> None:
         """Process a single parsed iLink message."""
+        if not self._running:
+            return
+        # Dedup — ensure set exists for hot-patched old instances
+        if not hasattr(self, "_recent_msg_ids"):
+            self._recent_msg_ids: set[str] = set()
         # Dedup
         msg_id = (raw_msg.get("msg_id")
                   or raw_msg.get("message_id")

@@ -476,7 +476,7 @@ function TaskForm({ skills, initial, onSave, onCancel, onRefresh }) {
         {/* 投递设置 */}
         <div>
           <div className="rounded-lg bg-bg-raised border border-border-main px-3 py-2">
-            <p className="text-xs text-text-muted">自动推送到已绑定的平台（在「消息推送 → 多平台调度」完成绑定后生效）</p>
+            <p className="text-xs text-text-muted">自动推送到已绑定的平台（在「系统配置 → 消息推送」完成绑定后生效）</p>
           </div>
           <hr className="border-border-main my-3" />
           <div className="flex items-center justify-between py-2.5">

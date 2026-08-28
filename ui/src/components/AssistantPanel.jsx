@@ -15,6 +15,8 @@ function parsePushTargets(value) {
   try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : [value] } catch { return [value] }
 }
 
+const PRESET_TIMES = ['09:00', '12:00', '14:00', '18:00', '21:00', '23:00']
+
 function PushTargetSelect({ value, onChange, enabledPlatforms = ['ilink'] }) {
   const selected = parsePushTargets(value)
   function toggle(platform) {
@@ -752,7 +754,7 @@ export default function AssistantPanel() {
           title="关键词即时提醒"
           accent="#f59e0b"
           icon={Lightning}
-          subtitle="检测到关键词时即时提醒，可推送到 IM"
+          subtitle="检测到关键词时即时提醒"
         />
         <div className={`bg-bg-card rounded-2xl border border-border-main shadow-sm overflow-hidden transition-opacity duration-300 ${!assistantOn ? 'opacity-40' : ''}`}>
           <div className="p-6 space-y-3">
@@ -930,7 +932,7 @@ export default function AssistantPanel() {
           title="定时群摘要"
           accent="var(--status-warn)"
           icon={Clock}
-          subtitle="定时生成群聊摘要，可推送到 IM"
+          subtitle="定时生成群聊摘要"
         />
         <div className={`bg-bg-card rounded-2xl border border-border-main shadow-sm overflow-hidden transition-opacity duration-300 ${!assistantOn ? 'opacity-40' : ''}`}>
           <div className="p-6 space-y-3">
@@ -1295,9 +1297,7 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
             {(values.keywords || []).map((kw, ki) => (
               <span key={ki} className="text-xs px-2 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">{kw}</span>
             ))}
-            {values.push_target === 'ilink' && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-status-warn-soft text-status-warn font-medium">推送</span>
-            )}
+            <span className="text-xs px-1.5 py-0.5 rounded bg-status-warn-soft text-status-warn font-medium">推送</span>
           </div>
         </div>
         <DeleteButton onDelete={onDelete} />
@@ -1342,7 +1342,7 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
                 />
               </div>
               <div className="rounded-lg bg-bg-raised border border-border-main px-3 py-2">
-                <p className="text-xs text-text-muted">自动推送到已扫码绑定的平台（在「消息推送 → 多平台调度」完成绑定后生效）</p>
+                <p className="text-xs text-text-muted">自动推送到已扫码绑定的平台（在「系统配置 → 消息推送」完成绑定后生效）</p>
               </div>
               {/* Save / Cancel buttons */}
               {draft && (
@@ -1620,9 +1620,7 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
             {values.unread_only && (
               <span className="text-xs px-1.5 py-0.5 rounded bg-status-warn-soft text-status-warn font-medium">未读</span>
             )}
-            {values.push_target === 'ilink' && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-status-info-soft text-status-info font-medium">推送</span>
-            )}
+            <span className="text-xs px-1.5 py-0.5 rounded bg-status-info-soft text-status-info font-medium">推送</span>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -1734,7 +1732,7 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
               </div>
               {/* Push — auto to bound platforms */}
               <div className="rounded-lg bg-bg-raised border border-border-main px-3 py-2">
-                <p className="text-xs text-text-muted">开启后摘要结果自动推送到已绑定的平台（在「消息推送 → 多平台调度」完成绑定后生效）</p>
+                <p className="text-xs text-text-muted">开启后摘要结果自动推送到已绑定的平台（在「系统配置 → 消息推送」完成绑定后生效）</p>
               </div>
               {/* Group profile */}
               <div>
@@ -1893,7 +1891,7 @@ function AlertGroupEditor({ draft, groups, error, onDraftChange, onSave, onCance
         />
       </div>
       <div className="rounded-lg bg-bg-raised border border-border-main px-3 py-2">
-        <p className="text-xs text-text-muted">保存后自动推送到已绑定的平台（在「消息推送 → 多平台调度」完成绑定后生效）</p>
+        <p className="text-xs text-text-muted">保存后自动推送到已绑定的平台（在「系统配置 → 消息推送」完成绑定后生效）</p>
       </div>
       <div className="flex items-center gap-2 pt-1">
         <button
@@ -1984,7 +1982,7 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
         <Toggle enabled={draft.unread_only || false} onChange={v => onDraftChange({ ...draft, unread_only: v })} />
       </div>
       <div className="rounded-lg bg-bg-raised border border-border-main px-3 py-2">
-        <p className="text-xs text-text-muted">自动推送到已绑定的平台（在「消息推送 → 多平台调度」完成绑定后生效）</p>
+        <p className="text-xs text-text-muted">自动推送到已绑定的平台（在「系统配置 → 消息推送」完成绑定后生效）</p>
       </div>
       {/* Profile */}
       <div>
