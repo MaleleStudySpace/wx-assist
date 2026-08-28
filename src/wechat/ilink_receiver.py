@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 SYNC_BUF_PATH = Path("data/ilink_sync_buf.json")
 
-POLL_TIMEOUT_SEC = 30              # long-poll timeout for getupdates
+POLL_TIMEOUT_SEC = 5               # short poll keeps bind/unbind responsive
 POLL_INTERVAL_SEC = 3.0            # normal poll interval
 BACKOFF_THRESHOLD = 3              # consecutive failures before backoff
 BACKOFF_SHORT_SEC = 3.0            # normal retry interval
@@ -181,7 +181,7 @@ def _try_extract_my_user_id(json_data: dict) -> Optional[str]:
 
 # ── API call ────────────────────────────────────────────────────────
 
-def fetch_updates(account: dict, sync_buf: str) -> dict:
+def fetch_updates(account: dict, sync_buf: str, session=None) -> dict:
     """Call ilink/bot/getupdates to fetch new messages.
 
     Returns:
@@ -198,7 +198,7 @@ def fetch_updates(account: dict, sync_buf: str) -> dict:
     payload = {"get_updates_buf": sync_buf}
 
     try:
-        resp = requests.post(
+        resp = (session or requests).post(
             url, json=payload, headers=headers, timeout=POLL_TIMEOUT_SEC,
         )
         resp.raise_for_status()
@@ -287,7 +287,7 @@ class ILinkReceiver:
         self._sync_buf: str = _load_sync_buf()
         self._account: Optional[dict] = None
         self._callback: Optional[Callable] = None
-        self._recent_msg_ids: set[str] = set()
+        self._session = requests.Session()
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -310,6 +310,7 @@ class ILinkReceiver:
         self._running = True
         self._account = account
         self._callback = callback
+        self._session = requests.Session()
         self._thread = threading.Thread(
             target=self._poll_loop,
             name="ilink-receiver",
@@ -321,7 +322,12 @@ class ILinkReceiver:
 
     def stop(self) -> bool:
         """Stop the polling thread and report whether it fully exited."""
-        self._running = False
+        if self._running:
+            self._running = False
+            try:
+                self._session.close()
+            except Exception:
+                pass
         if self._thread:
             self._thread.join(timeout=POLL_TIMEOUT_SEC + 1)
             if self._thread.is_alive():
@@ -329,6 +335,7 @@ class ILinkReceiver:
                 return False
             self._thread = None
         self._account = None
+        self._callback = None
         logger.info("ILinkReceiver stopped")
         return True
 
@@ -344,7 +351,7 @@ class ILinkReceiver:
 
         while self._running:
             try:
-                result = fetch_updates(self._account, self._sync_buf)
+                result = fetch_updates(self._account, self._sync_buf, self._session)
 
                 new_buf = result.get("new_sync_buf")
                 if new_buf:

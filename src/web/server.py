@@ -2172,6 +2172,15 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 configs = {item.name: item for item in configs_list}
                 registry = get_global_registry()
                 health = registry.get_health() if registry else {}
+                try:
+                    from src.im.delivery import get_delivery_service
+                    delivery = get_delivery_service()
+                    delivery_status = {
+                        channel: (delivery.list_recent_failures(channel, limit=1) or [None])[0]
+                        for channel in ("ilink", "qqbot", "feishu")
+                    }
+                except Exception:
+                    delivery_status = {"ilink": None, "qqbot": None, "feishu": None}
                 def _public_platform_config(config):
                     if config is None:
                         return {"configured": False}
@@ -2213,6 +2222,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             "ok": bool(_status.wechat_online),
                             "detail": "已连接" if _status.wechat_online else "未连接",
                         },
+                        "delivery": {"channel": "ilink", "last_failure": delivery_status.get("ilink")},
                         "config": {"configured": True},
                     },
                     {
@@ -2221,6 +2231,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         "enabled": bool(qq_config),
                         "configurable": True,
                         "status": health.get("qqbot", {"ok": False, "detail": "未配置"}),
+                        "delivery": {"channel": "qqbot", "last_failure": delivery_status.get("qqbot")},
                         "config": qq_public,
                     },
                     {
@@ -2229,6 +2240,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         "enabled": bool(feishu_config),
                         "configurable": True,
                         "status": health.get("feishu", {"ok": False, "detail": "未配置"}),
+                        "delivery": {"channel": "feishu", "last_failure": delivery_status.get("feishu")},
                         "config": feishu_public,
                     },
                 ]

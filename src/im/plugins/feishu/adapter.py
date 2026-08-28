@@ -22,6 +22,7 @@ from .openapi_client import FeishuOpenAPIClient
 from .push import FeishuPushChannel
 
 logger = logging.getLogger(__name__)
+_WS_LIFECYCLE_LOCK = threading.Lock()
 
 
 @register("feishu")
@@ -57,17 +58,21 @@ class FeishuAdapter(BasePlatformAdapter):
         if not self._client.app_id or not self._client.app_secret:
             logger.error("[feishu] app_id/app_secret 未配置")
             return False
-        self._callback = callback
-        self._running = True
-        self._ws_stop.clear()
-        self._ws_error = ""
-        self._ws_reconnect_delay = 5.0
-        self._ws_thread = threading.Thread(
-            target=self._run_websocket,
-            name="feishu-gateway",
-            daemon=True,
-        )
-        self._ws_thread.start()
+        with self._lock:
+            if self._running and self._ws_thread and self._ws_thread.is_alive():
+                logger.info("[feishu] websocket already running; start skipped")
+                return True
+            self._callback = callback
+            self._running = True
+            self._ws_stop.clear()
+            self._ws_error = ""
+            self._ws_reconnect_delay = 5.0
+            self._ws_thread = threading.Thread(
+                target=self._run_websocket,
+                name="feishu-gateway",
+                daemon=True,
+            )
+            self._ws_thread.start()
         logger.info("[feishu] official websocket connection thread started")
         return True
 
@@ -85,9 +90,13 @@ class FeishuAdapter(BasePlatformAdapter):
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        _WS_LIFECYCLE_LOCK.acquire()
         ws_client_module.loop = loop
         self._ws_thread_loop = loop
         try:
+            # lark-oapi keeps its asyncio loop at module scope.  Hold the
+            # process lock for the complete client lifetime so another adapter
+            # cannot replace that loop while this client is running.
             while not self._ws_stop.is_set():
                 try:
                     handler = EventDispatcherHandler.builder(
@@ -125,6 +134,7 @@ class FeishuAdapter(BasePlatformAdapter):
             loop.close()
             self._ws_thread_loop = None
             logger.info("[feishu] websocket connection thread exited")
+            _WS_LIFECYCLE_LOCK.release()
 
     def _config_value(self, key: str) -> str:
         return str(self._config_extra.get(key, ""))

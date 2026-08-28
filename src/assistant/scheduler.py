@@ -614,27 +614,35 @@ class DigestScheduler:
         # Task progress: pushing
         self._tc_update(task_id, progress='推送中')
 
-        # 7. Push through the configured IM platform(s)
-        if dg.push_target:
-            try:
-                import json as _json
-                from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+        # Auto-deliver to every QR-bound channel; legacy push_target is only the old opt-in flag.
+        try:
+            import json as _json
+            from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+            from src.im.targets import bound_push_targets
+            bound = bound_push_targets()
+            if not bound:
+                self._outbox.update_push_result(nid, "ilink", "skipped", "未绑定任何推送渠道")
+                self._tc_push_result(task_id, "skipped", "未绑定任何推送渠道")
+            else:
                 push_data = _json.loads(content) if isinstance(content, str) else content
                 push_text = push_data.get("display", content)
-                push_msg = DeliveryService.format_text(dg.push_target, title, push_text)
+                # Use first bound for formatting, actual fan-out is handled by DeliveryService.
+                fmt_target = bound[0] if bound else (dg.push_target or "ilink")
+                push_msg = DeliveryService.format_text(fmt_target, title, push_text)
                 result = get_delivery_service().send_text(DeliveryRequest(
-                    platform=dg.push_target,
+                    platform=dg.push_target or fmt_target,
                     text=push_msg,
                     source_type="group_digest",
                     source_id=str(nid),
                     outbox_id=nid,
                     task_id=task_id or 0,
+                    auto_route=True,
                     conversation_key=dg.chat_id if hasattr(dg, "chat_id") else dg.group_name,
                 ))
                 push_ok = result.get("success", False)
                 push_err = result.get("error", "") if not push_ok else ""
                 self._outbox.update_push_result(
-                    nid, dg.push_target, "success" if push_ok else "failed", push_err,
+                    nid, fmt_target, "success" if push_ok else "failed", push_err,
                 )
                 self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
                 logger.info("Digest IM push %s for '%s'", "succeeded" if push_ok else "failed", dg.group_name)
@@ -648,12 +656,12 @@ class DigestScheduler:
                     })
                 except Exception:
                     pass
-            except Exception as e:
-                logger.warning("Digest IM push error for '%s': %s", dg.group_name, e)
-                try:
-                    self._outbox.update_push_result(nid, dg.push_target, "failed", str(e))
-                except Exception:
-                    pass
+        except Exception as e:
+            logger.warning("Digest IM push error for '%s': %s", dg.group_name, e)
+            try:
+                self._outbox.update_push_result(nid, "ilink", "failed", str(e))
+            except Exception:
+                pass
 
         elapsed = (time.monotonic() - start_ts) * 1000
         # Task: completed or failed (if LLM error)
@@ -796,27 +804,34 @@ class DigestScheduler:
         )
         self._tc_update(task_id, outbox_id=nid)
 
-        # Push through configured IM platform(s)
-        if oa.push_target:
-            try:
-                import json as _json
-                from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+        # Auto-deliver OA digest to every QR-bound channel.
+        try:
+            import json as _json
+            from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+            from src.im.targets import bound_push_targets
+            bound = bound_push_targets()
+            if not bound:
+                self._outbox.update_push_result(nid, "ilink", "skipped", "未绑定任何推送渠道")
+                self._tc_push_result(task_id, "skipped", "未绑定任何推送渠道")
+            else:
                 push_data = _json.loads(content) if isinstance(content, str) else content
                 push_text = push_data.get("display", content)
-                msg = DeliveryService.format_text(oa.push_target, title, push_text)
+                fmt_target = bound[0] if bound else (oa.push_target or "ilink")
+                msg = DeliveryService.format_text(fmt_target, title, push_text)
                 push_result = get_delivery_service().send_text(DeliveryRequest(
-                    platform=oa.push_target,
+                    platform=oa.push_target or fmt_target,
                     text=msg,
                     source_type="oa_digest",
                     source_id=str(nid),
                     outbox_id=nid,
                     task_id=task_id or 0,
+                    auto_route=True,
                     conversation_key=oa.name,
                 ))
                 push_ok = push_result.get("success", False)
                 push_err = push_result.get("error", "") if not push_ok else ""
                 self._outbox.update_push_result(
-                    nid, oa.push_target, "success" if push_ok else "failed", push_err,
+                    nid, fmt_target, "success" if push_ok else "failed", push_err,
                 )
                 self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
                 logger.info("[OA-DIGEST] IM push %s for '%s'", "succeeded" if push_ok else "failed", oa.name)
@@ -828,12 +843,12 @@ class DigestScheduler:
                     })
                 except Exception:
                     pass
-            except Exception as e:
-                logger.warning("[OA-DIGEST] IM push error for '%s': %s", oa.name, e)
-                try:
-                    self._outbox.update_push_result(nid, oa.push_target, "failed", str(e))
-                except Exception:
-                    pass
+        except Exception as e:
+            logger.warning("[OA-DIGEST] IM push error for '%s': %s", oa.name, e)
+            try:
+                self._outbox.update_push_result(nid, "ilink", "failed", str(e))
+            except Exception:
+                pass
 
         # Broadcast completion via WebSocket
         try:
@@ -934,6 +949,7 @@ class DigestScheduler:
                     get_delivery_service().send_text(DeliveryRequest(
                         platform=oa.push_target, text=msg, source_type="oa_digest_failure",
                         source_id=str(task_id), conversation_key=oa.name,
+                        auto_route=True,
                     ))
                     logger.info("[OA-DIGEST] 失败通知已推送: '%s'", oa.name)
                 except Exception as e:

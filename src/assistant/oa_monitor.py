@@ -482,8 +482,14 @@ class OAMonitorEngine:
                     logger.debug("OAMonitor: 创建推送任务失败: %s", _e)
                     _task_id = None
 
-            from src.im.targets import normalize_targets
-            if normalize_targets(mg.push_target):
+            from src.im.targets import bound_push_targets
+            if not bound_push_targets():
+                if _task_id:
+                    try:
+                        self._task_center.complete_task(_task_id, result="未绑定任何推送渠道（仅入库）")
+                    except Exception:
+                        pass
+            else:
                 _ok, _err = self._push_to_wechat(nid, mg.name or source, notif_title, notif_content, mg.push_target)
                 if _task_id:
                     try:
@@ -493,13 +499,6 @@ class OAMonitorEngine:
                             self._task_center.fail_task(_task_id, error=_err or "推送失败")
                     except Exception as _e:
                         logger.debug("OAMonitor: 完结推送任务失败: %s", _e)
-            else:
-                # 未配置 iLink 推送：任务记为成功（已写入 outbox），说明未推送原因
-                if _task_id:
-                    try:
-                        self._task_center.complete_task(_task_id, result="未配置 iLink 推送（仅入库）")
-                    except Exception:
-                        pass
 
         # 返回本号新增缓存数，由 _poll_cycle 汇总后整轮只触发一次 RAG 索引
         return cached_new
@@ -557,6 +556,7 @@ class OAMonitorEngine:
                 source_type="oa_article_alert",
                 source_id=str(nid),
                 outbox_id=nid,
+                auto_route=True,
                 conversation_key=group_name,
             ))
             push_ok = result.get("success", False)

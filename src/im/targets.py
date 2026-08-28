@@ -29,6 +29,34 @@ def normalize_targets(value: Any) -> list[str]:
     return result
 
 
+def bound_push_targets() -> list[str]:
+    """Return the currently QR-bound outbound channels.
+
+    The returned values are actual delivery channel names.  In particular,
+    WeChat remains ``ilink`` internally; ``wechat`` is only a legacy business
+    alias accepted by ``normalize_targets``.
+    """
+    targets: list[str] = []
+    try:
+        from src.wechat.ilink_push import get_ilink_push
+        if get_ilink_push().is_available():
+            targets.append("ilink")
+    except Exception:
+        pass
+
+    for config in load_platforms_config():
+        extra = config.extra or {}
+        if not config.enabled:
+            continue
+        if config.name == "qqbot":
+            if extra.get("app_id") and extra.get("client_secret") and extra.get("user_openid"):
+                targets.append("qqbot")
+        elif config.name == "feishu":
+            if extra.get("app_id") and extra.get("app_secret") and extra.get("open_id"):
+                targets.append("feishu")
+    return targets
+
+
 def default_target(platform: str) -> str:
     for config in load_platforms_config():
         if config.name != platform:

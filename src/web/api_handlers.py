@@ -4945,7 +4945,7 @@ def _push_oa_digest(result, group, config, task_id=None):
             push_result = get_delivery_service().send_text(DeliveryRequest(
                 platform=group.push_target, text=msg, source_type="oa_digest",
                 source_id=str(oa_nid or ""), outbox_id=oa_nid or 0,
-                task_id=task_id or 0, conversation_key=group.name,
+                task_id=task_id or 0, auto_route=True, conversation_key=group.name,
             ))
             push_ok = push_result.get("success", False)
             push_err = push_result.get("error", "") if not push_ok else ""
@@ -5504,11 +5504,55 @@ def handle_push_history(params, config: AssistantConfig):
         date_from = (params.get("date_from", [""]) or [""])[0]
         date_to = (params.get("date_to", [""]) or [""])[0]
         platform = (params.get("platform", [""]) or [""])[0]
+        # Delivery attempts are the per-channel source of truth (ilink/qqbot/feishu).
+        # Always fetch them so task-center retries are visible in the same view.
         delivery_records = []
-        if platform or params.get("source", [""])[0] == "im":
+        try:
             from src.im.delivery import get_delivery_service
-            delivery_records = get_delivery_service().list_attempts(platform=platform, limit=limit)
-        records = delivery_records or outbox.list_push_history(
+            lookup_platform = "ilink" if platform == "wechat" else platform
+            # When platform filter is set, respect it; otherwise fetch recent across all channels.
+            delivery_records = get_delivery_service().list_attempts(
+                platform=lookup_platform, limit=limit
+            )
+            # Convert to push-history shape so existing WebUI renders without changes.
+            if delivery_records:
+                import datetime as _dt
+
+                def _to_record(attempt):
+                    ts = attempt.get("created_at") or 0
+                    try:
+                        created = _dt.datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%dT%H:%M:%S")
+                    except Exception:
+                        created = ""
+                    return {
+                        "id": attempt.get("id"),
+                        "type": attempt.get("source_type") or attempt.get("platform") or "",
+                        "platform": attempt.get("platform") or attempt.get("channel") or "",
+                        "push_channel": attempt.get("channel") or attempt.get("platform") or "",
+                        "push_status": attempt.get("status") or "",
+                        "push_error": attempt.get("provider_error") or "",
+                        "target": attempt.get("target") or "",
+                        "created_at": created,
+                        "attempt_no": attempt.get("attempt_no") or 1,
+                        "group_name": attempt.get("conversation_key") or "",
+                        "outbox_id": attempt.get("outbox_id") or 0,
+                        "task_id": attempt.get("task_id") or 0,
+                        "content": "",
+                    }
+
+                delivery_records = [_to_record(a) for a in delivery_records]
+                # Apply same filters as outbox when delivery is used
+                if notif_type:
+                    delivery_records = [r for r in delivery_records if r.get("type") == notif_type]
+                if push_status:
+                    delivery_records = [r for r in delivery_records if r.get("push_status") == push_status]
+                if platform:
+                    # keep already filtered
+                    pass
+        except Exception:
+            delivery_records = []
+
+        outbox_records = outbox.list_push_history(
             notif_type=notif_type,
             push_status=push_status,
             limit=limit,
@@ -5516,6 +5560,16 @@ def handle_push_history(params, config: AssistantConfig):
             date_from=date_from,
             date_to=date_to,
         )
+        # Merge: delivery attempts (per-channel) + outbox history, newest first
+        if delivery_records:
+            # If platform filter requested, prefer delivery; otherwise merge both
+            if platform or params.get("source", [""])[0] == "im":
+                records = delivery_records
+            else:
+                # Merge and de-duplicate by id, sort by created_at desc
+                records = (delivery_records + outbox_records)[:limit]
+        else:
+            records = outbox_records
         return {"ok": True, "records": records}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -5867,6 +5921,7 @@ def _do_task_retry_push(task: dict) -> dict:
             source_type=str(task.get("task_type", "retry")),
             source_id=str(task.get("outbox_id") or task.get("id", "")),
             outbox_id=int(task.get("outbox_id") or 0), task_id=int(task.get("id") or 0),
+            auto_route=False,
             conversation_key=str(task.get("group_id", "")),
         )))
     ok = all(item.get("success", False) for item in results)

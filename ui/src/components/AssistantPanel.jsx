@@ -1341,13 +1341,8 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
                   placeholder="输入关键词后按回车添加"
                 />
               </div>
-              {/* Push to WeChat toggle */}
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm text-text-main/80 font-medium">推送方式</p>
-                  <p className="text-xs text-text-muted mt-0.5">开启后自动推送到已配置的 IM 平台（请在「系统配置 → 消息推送」中完成配置）</p>
-                </div>
-                <PushTargetSelect value={values.push_target} onChange={onPushTargetChange} enabledPlatforms={['ilink', 'qqbot', 'feishu']} />
+              <div className="rounded-lg bg-bg-raised border border-border-main px-3 py-2">
+                <p className="text-xs text-text-muted">自动推送到已扫码绑定的平台（在「消息推送 → 多平台调度」完成绑定后生效）</p>
               </div>
               {/* Save / Cancel buttons */}
               {draft && (
@@ -1737,13 +1732,9 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
                   onChange={onUnreadOnlyChange}
                 />
               </div>
-              {/* Push to WeChat toggle — 加深标签 */}
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm text-text-main/80 font-medium">推送方式</p>
-                  <p className="text-xs text-text-muted mt-0.5">开启后摘要结果自动推送到已配置的 IM 平台（请在「系统配置 → 消息推送」中完成配置）</p>
-                </div>
-                <PushTargetSelect value={values.push_target} onChange={onPushTargetChange} enabledPlatforms={['ilink', 'qqbot', 'feishu']} />
+              {/* Push — auto to bound platforms */}
+              <div className="rounded-lg bg-bg-raised border border-border-main px-3 py-2">
+                <p className="text-xs text-text-muted">开启后摘要结果自动推送到已绑定的平台（在「消息推送 → 多平台调度」完成绑定后生效）</p>
               </div>
               {/* Group profile */}
               <div>
@@ -1901,13 +1892,8 @@ function AlertGroupEditor({ draft, groups, error, onDraftChange, onSave, onCance
           placeholder="输入关键词后按回车添加"
         />
       </div>
-      {/* Push to WeChat toggle */}
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-sm text-text-main/80 font-medium">推送方式</p>
-          <p className="text-xs text-text-muted mt-0.5">开启后自动推送到已配置的 IM 平台（请在「系统配置 → 消息推送」中完成配置）</p>
-        </div>
-        <Toggle enabled={draft.push_target === 'ilink'} onChange={v => onDraftChange({ ...draft, push_target: v ? 'ilink' : '' })} />
+      <div className="rounded-lg bg-bg-raised border border-border-main px-3 py-2">
+        <p className="text-xs text-text-muted">保存后自动推送到已绑定的平台（在「消息推送 → 多平台调度」完成绑定后生效）</p>
       </div>
       <div className="flex items-center gap-2 pt-1">
         <button
@@ -1997,13 +1983,8 @@ function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCanc
         </div>
         <Toggle enabled={draft.unread_only || false} onChange={v => onDraftChange({ ...draft, unread_only: v })} />
       </div>
-      {/* 推送方式 */}
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-sm text-text-main/80 font-medium">推送方式</p>
-          <p className="text-xs text-text-muted mt-0.5">开启后摘要结果自动推送到已配置的 IM 平台（请在「系统配置 → 消息推送」中完成配置）</p>
-        </div>
-        <Toggle enabled={draft.push_target === 'ilink'} onChange={v => onDraftChange({ ...draft, push_target: v ? 'ilink' : '' })} />
+      <div className="rounded-lg bg-bg-raised border border-border-main px-3 py-2">
+        <p className="text-xs text-text-muted">自动推送到已绑定的平台（在「消息推送 → 多平台调度」完成绑定后生效）</p>
       </div>
       {/* Profile */}
       <div>

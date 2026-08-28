@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from .plugins import get_plugin_push_channel
-from .targets import default_target, normalize_targets
+from .targets import bound_push_targets, default_target, normalize_targets
 
 logger = logging.getLogger(__name__)
 DB_PATH = Path("data/im_delivery.db")
@@ -36,6 +36,9 @@ class DeliveryRequest:
     notification_id: str = ""
     outbox_id: int = 0
     task_id: int = 0
+    # None keeps the source-type compatibility rule; False is used by retry
+    # to preserve its historical failed-channel selection.
+    auto_route: Optional[bool] = None
 
 
 class DeliveryService:
@@ -93,7 +96,22 @@ class DeliveryService:
     def _channel_name(platform: str) -> str:
         return "ilink" if platform in ("wechat", "ilink") else platform
 
+    def send_bound_text(self, request: DeliveryRequest) -> dict:
+        """Deliver to every currently QR-bound channel."""
+        platforms = bound_push_targets()
+        if not platforms:
+            return {"success": True, "skipped": True, "error": "no bound delivery platform"}
+        results = []
+        for platform in platforms:
+            target = default_target(platform) if platform != "ilink" else ""
+            results.append(self._send_one(request, platform, target))
+        success = all(item.get("success", False) for item in results)
+        return {"success": success, "results": results,
+                "error": "" if success else "; ".join(item.get("error", "") for item in results if item.get("error"))}
+
     def send_text(self, request: DeliveryRequest) -> dict:
+        if request.auto_route is True:
+            return self.send_bound_text(request)
         platforms = normalize_targets(request.platform)
         if not platforms:
             return {"success": True, "skipped": True, "error": "no delivery platform"}
@@ -107,17 +125,18 @@ class DeliveryService:
                 "error": "" if success else "; ".join(item.get("error", "") for item in results if item.get("error"))}
 
     def _send_one(self, request: DeliveryRequest, platform: str, target: str) -> dict:
-        channel_name = self._channel_name(platform)
+        platform_name = platform
+        channel_name = self._channel_name(platform_name)
         channel = get_plugin_push_channel(channel_name)
         attempt_id = uuid.uuid4().hex
         started = time.time()
         if channel is None:
-            result = {"success": False, "error": f"IM channel unavailable: {platform}", "retryable": False}
+            result = {"success": False, "error": f"IM channel unavailable: {platform_name}", "retryable": False}
             self._record(request, attempt_id, channel_name, target, started, result)
             return result
         try:
             if not channel.is_available():
-                result = {"success": False, "error": f"IM channel not available: {platform}", "retryable": False}
+                result = {"success": False, "error": f"IM channel not available: {platform_name}", "retryable": False}
             else:
                 result = channel.send_message(
                     request.text,
@@ -154,6 +173,13 @@ class DeliveryService:
         record_platform = channel_name
         try:
             with self._db_lock, self._connect() as conn:
+                record_platform = channel_name
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(attempt_no), 0) FROM im_delivery_attempts "
+                    "WHERE outbox_id=? AND platform=? AND target=?",
+                    (int(request.outbox_id or 0), record_platform, target),
+                ).fetchone()
+                attempt_no = int(row[0] or 0) + 1
                 conn.execute("""
                     INSERT INTO im_delivery_attempts
                     (id, platform, channel, target, source_type, source_id,
@@ -166,7 +192,7 @@ class DeliveryService:
                     attempt_id, record_platform, channel_name, target,
                     request.source_type, request.source_id, request.inbound_message_id,
                     request.conversation_key, "success" if result.get("success") else "failed",
-                    1, str(result.get("message_id", "")), str(result.get("code", "")),
+                    attempt_no, str(result.get("message_id", "")), str(result.get("code", "")),
                     str(result.get("error", ""))[:1000], int(bool(result.get("retryable"))),
                     started, time.time(), request.notification_id,
                     int(request.outbox_id or 0), int(request.task_id or 0),
@@ -175,6 +201,15 @@ class DeliveryService:
         except Exception as exc:
             # Delivery auditing must never break the actual notification path.
             logger.warning("[delivery] audit write failed: %s", exc)
+
+    def list_recent_failures(self, channel: str, limit: int = 1) -> list[dict]:
+        """Return the latest failed attempt unless a newer success cleared it."""
+        rows = self.list_attempts(platform=channel, limit=max(2, limit * 3))
+        if not rows:
+            return []
+        if rows[0].get("status") == "success":
+            return []
+        return [row for row in rows if row.get("status") == "failed"][:limit]
 
     def list_attempts(self, platform: str = "", limit: int = 50,
                       *, source_type: str = "", source_id: str = "",

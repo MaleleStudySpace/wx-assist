@@ -211,51 +211,48 @@ class AlertEngine:
                     sender_name, matched, group_name,
                 )
 
-                # Push to WeChat via iLink (if configured)
-                if ag.push_target:
+                # Push to all QR-bound IM channels.  Keep the legacy field only
+                # as the business opt-in; the actual platform list is resolved
+                # centrally by DeliveryService.
+                if ag.enabled:
                     try:
-                        from src.im.plugins import get_plugin_push_channel
                         import json as _json
-                        channel = get_plugin_push_channel(ag.push_target)
-                        if channel and channel.is_available():
-                            # Extract display text from JSON content (not raw JSON)
-                            push_data = _json.loads(notif_content) if isinstance(notif_content, str) else notif_content
-                            push_text = push_data.get("display", notif_content)
-                            from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
-                            push_msg = DeliveryService.format_text(ag.push_target, title, push_text)
-                            result = get_delivery_service().send_text(DeliveryRequest(
-                                platform=ag.push_target or "wechat",
-                                text=push_msg,
-                                target="",
-                                source_type="keyword_alert",
-                                source_id=str(nid),
-                                inbound_message_id=message_id,
-                                conversation_key=chat_id,
-                            ))
-                            push_ok = result.get("success", False)
-                            push_err = result.get("error", "") if not push_ok else ""
-                            self._outbox.update_push_result(
-                                nid, "ilink",
-                                "success" if push_ok else "failed",
-                                push_err,
-                            )
-                            if push_ok:
-                                logger.info("Alert pushed to WeChat for '%s'", group_name)
-                            else:
-                                logger.warning("WeChat push failed for '%s': %s", group_name, push_err)
-                            try:
-                                from src.web.api_handlers import broadcast_event
-                                broadcast_event("alert_push_result", {
-                                    "group_name": group_name,
-                                    "success": push_ok,
-                                    "error": push_err,
-                                })
-                            except Exception:
-                                pass
+                        push_data = _json.loads(notif_content) if isinstance(notif_content, str) else notif_content
+                        push_text = push_data.get("display", notif_content)
+                        from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+                        push_msg = DeliveryService.format_text(ag.push_target, title, push_text)
+                        result = get_delivery_service().send_text(DeliveryRequest(
+                            platform=ag.push_target or "ilink",
+                            text=push_msg,
+                            target="",
+                            source_type="keyword_alert",
+                            source_id=str(nid),
+                            inbound_message_id=message_id,
+                            conversation_key=chat_id,
+                            auto_route=True,
+                        ))
+                        push_ok = result.get("success", False)
+                        push_err = result.get("error", "") if not push_ok else ""
+                        self._outbox.update_push_result(
+                            nid, "ilink",
+                            "success" if push_ok else "failed",
+                            push_err,
+                        )
+                        if push_ok:
+                            logger.info("Alert pushed through bound IM channels for '%s'", group_name)
                         else:
-                            logger.warning("WeChat push skipped for '%s': iLink not bound", group_name)
+                            logger.warning("IM push failed for '%s': %s", group_name, push_err)
+                        try:
+                            from src.web.api_handlers import broadcast_event
+                            broadcast_event("alert_push_result", {
+                                "group_name": group_name,
+                                "success": push_ok,
+                                "error": push_err,
+                            })
+                        except Exception:
+                            pass
                     except Exception as e:
-                        logger.warning("WeChat push error for '%s': %s", group_name, e)
+                        logger.warning("IM push error for '%s': %s", group_name, e)
                         try:
                             self._outbox.update_push_result(nid, "ilink", "failed", str(e))
                         except Exception:
