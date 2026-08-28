@@ -2172,10 +2172,24 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 configs = {item.name: item for item in configs_list}
                 registry = get_global_registry()
                 health = registry.get_health() if registry else {}
-                if not registry:
-                    for name, config in configs.items():
-                        if config.enabled and config.extra.get("app_id"):
-                            health[name] = {"ok": True, "detail": "已配置"}
+                config_health = {}
+                for name, config in configs.items():
+                    if not config.enabled:
+                        config_health[name] = {"state": "unconfigured", "ok": False, "detail": "未配置"}
+                    elif name == "qqbot":
+                        config_health[name] = {"state": "pending", "ok": False, "detail": "正在连接"}
+                    elif name == "feishu":
+                        config_health[name] = {"state": "pending", "ok": False, "detail": "正在连接"}
+                for name, item in health.items():
+                    if item.get("ok"):
+                        config_health[name] = {"state": "ok", "ok": True, "detail": "已连接", "error": ""}
+                    elif name in config_health and config_health[name]["state"] != "unconfigured":
+                        config_health[name] = {"state": "error", "ok": False, "detail": "推送错误", "error": item.get("detail", "")}
+                health = config_health
+                health['summary'] = {
+                    'state': 'ok' if any(item.get('state') == 'ok' for item in config_health.values()) else ('pending' if any(item.get('state') == 'pending' for item in config_health.values()) else ('error' if any(item.get('state') == 'error' for item in config_health.values()) else 'unconfigured')),
+                    'ok': any(item.get('state') == 'ok' for item in config_health.values()),
+                }
                 try:
                     from src.im.delivery import get_delivery_service
                     delivery = get_delivery_service()

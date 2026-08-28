@@ -2153,9 +2153,8 @@ function PushPlatformOverview({ platforms, onSelect }) {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {platforms.map(platform => {
-          const ok = platform.status?.ok
-          const deliveryFailed = Boolean(platform.delivery?.last_failure)
-          const statusClass = ok ? 'bg-status-ok' : deliveryFailed ? 'bg-status-error' : 'bg-status-warn'
+          const state = platform.status?.state || (platform.status?.ok ? 'ok' : 'unconfigured')
+          const statusClass = state === 'ok' ? 'bg-status-ok' : state === 'error' ? 'bg-status-error' : state === 'pending' ? 'bg-status-warn' : 'bg-text-muted/40'
           return (
             <button key={platform.name} type="button" onClick={() => onSelect(platform.name)}
               className="text-left rounded-xl border border-border-main p-4 hover:border-brand-green/50 hover:shadow-sm transition-all cursor-pointer">
@@ -2163,7 +2162,7 @@ function PushPlatformOverview({ platforms, onSelect }) {
                 <span className="font-semibold text-text-main">{platform.label}</span>
                 <span className={`w-2.5 h-2.5 rounded-full ${statusClass}`} />
               </div>
-              <p className="text-xs text-text-muted mt-2">{ok ? '已连接' : deliveryFailed ? (platform.delivery.last_failure.provider_error || platform.delivery.last_failure.error || '推送报错') : (platform.status?.detail || '未配置')}</p>
+              <p className="text-xs text-text-muted mt-2">{state === 'ok' ? '已连接' : state === 'error' ? `错误：${platform.status?.error || platform.status?.detail || '推送失败'}` : state === 'pending' ? '连接中' : '未配置'}</p>
               <p className="text-xs text-brand-green-hover mt-4">{platform.configurable ? '进入配置 →' : '暂未支持'}</p>
             </button>
           )

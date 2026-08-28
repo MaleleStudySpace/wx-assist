@@ -524,11 +524,14 @@ export default function Dashboard({ status, onTabChange }) {
 
         <div className="px-6 pb-4 grid grid-cols-2 md:grid-cols-5 gap-3">
           <StatusTile icon={Database} label="数据库" ok={status.db_ok} okText="正常" errText="异常" />
-          <StatusTile icon={WechatLogo} label="消息推送" ok={status.wechat_online || Object.values(status.im_channels || {}).some(ch => ch?.ok)} okText="已连接" errText="未连接" detail={
+          <StatusTile icon={WechatLogo} label="消息推送" ok={status.im_channels?.summary?.state === 'ok'} okText="可用" errText={status.im_channels?.summary?.state === 'error' ? '错误' : status.im_channels?.summary?.state === 'pending' ? '连接中' : '未配置'} detail={
             <span className="flex items-center gap-2 text-[10px] font-mono">
-              <span className="flex items-center gap-0.5"><span className={`inline-block w-1.5 h-1.5 rounded-full ${status.wechat_online ? 'bg-brand-green' : 'bg-status-error/50'}`} />微信</span>
-              <span className="flex items-center gap-0.5"><span className={`inline-block w-1.5 h-1.5 rounded-full ${(status.im_channels?.qqbot?.ok) ? 'bg-brand-green' : 'bg-status-error/50'}`} />QQ</span>
-              <span className="flex items-center gap-0.5"><span className={`inline-block w-1.5 h-1.5 rounded-full ${(status.im_channels?.feishu?.ok) ? 'bg-brand-green' : 'bg-status-error/50'}`} />飞书</span>
+              {['ilink', 'qqbot', 'feishu'].map(name => {
+                const channel = status.im_channels?.[name] || { state: 'unconfigured' }
+                const label = name === 'ilink' ? '微信' : name === 'qqbot' ? 'QQ' : '飞书'
+                const color = channel.state === 'ok' ? 'bg-brand-green' : channel.state === 'error' ? 'bg-status-error' : channel.state === 'pending' ? 'bg-status-warn' : 'bg-text-muted/40'
+                return <span key={name} className="flex items-center gap-0.5"><span className={`inline-block w-1.5 h-1.5 rounded-full ${color}`} />{label}</span>
+              })}
             </span>
           } />
           <StatusTile icon={Brain} label="AI 后端" ok={status.ai_ok} okText="可达" errText="未响应"
