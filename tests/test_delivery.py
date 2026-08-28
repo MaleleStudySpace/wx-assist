@@ -35,7 +35,10 @@ def test_delivery_records_each_normalized_channel_for_multi_platform(monkeypatch
     }
 
 
-def test_delivery_records_canonical_ilink_for_wechat_alias(tmp_path):
+def test_delivery_records_canonical_ilink_for_wechat_alias(monkeypatch, tmp_path):
+    # Ensure deterministic: no auto-route, channel unavailable -> failure
+    monkeypatch.setattr("src.im.delivery.bound_push_targets", lambda: [])
+    monkeypatch.setattr("src.im.delivery.get_plugin_push_channel", lambda _: None)
     service = DeliveryService(tmp_path / "delivery.db")
     result = service.send_text(DeliveryRequest(
         platform="wechat", text="hello", target="wechat-user",

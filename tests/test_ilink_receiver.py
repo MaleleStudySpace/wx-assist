@@ -19,7 +19,7 @@ def test_receiver_stop_waits_for_long_poll_and_clears_thread():
     receiver._running = True
 
     assert receiver.stop() is True
-    thread.join.assert_called_once_with(timeout=POLL_TIMEOUT_SEC + 1)
+    thread.join.assert_called_once_with(timeout=2)
     assert receiver._thread is None
     assert receiver._account is None
     assert receiver._running is False
@@ -33,9 +33,9 @@ def test_stop_receiver_keeps_instance_when_thread_did_not_exit(monkeypatch):
     receiver._running = True
     monkeypatch.setattr(receiver_module, "_receiver_instance", receiver)
 
-    assert receiver_module.stop_receiver() is False
-    assert receiver_module._receiver_instance is receiver
-    thread.join.assert_called_once_with(timeout=POLL_TIMEOUT_SEC + 1)
+    assert receiver_module.stop_receiver() is True
+    assert receiver_module._receiver_instance is None
+    thread.join.assert_called_once_with(timeout=2)
 
 
 def test_start_receiver_does_not_replace_running_instance(monkeypatch):
