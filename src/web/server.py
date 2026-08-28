@@ -2184,7 +2184,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     if item.get("ok"):
                         config_health[name] = {"state": "ok", "ok": True, "detail": "已连接", "error": ""}
                     elif name in config_health and config_health[name]["state"] != "unconfigured":
-                        config_health[name] = {"state": "error", "ok": False, "detail": "推送错误", "error": item.get("detail", "")}
+                        # An adapter that has not started or is still connecting
+                        # is a transient state, not a delivery error.
+                        detail = str(item.get("detail") or "")
+                        if registry and detail not in {"未启动", "未连接", "正在连接", "长连接运行中"}:
+                            config_health[name] = {"state": "error", "ok": False, "detail": "推送错误", "error": detail}
                 health = config_health
                 health['summary'] = {
                     'state': 'ok' if any(item.get('state') == 'ok' for item in config_health.values()) else ('pending' if any(item.get('state') == 'pending' for item in config_health.values()) else ('error' if any(item.get('state') == 'error' for item in config_health.values()) else 'unconfigured')),
