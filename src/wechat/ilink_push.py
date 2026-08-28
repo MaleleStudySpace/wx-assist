@@ -205,10 +205,10 @@ def _save_account(bot_token: str, account_id: str, base_url: str, user_id: str) 
 def _delete_account() -> None:
     """Delete ilink account file (unbind)."""
     try:
-        if ACCOUNT_PATH.exists():
-            ACCOUNT_PATH.unlink()
-            logger.info("iLink account deleted (unbound)")
+        ACCOUNT_PATH.unlink(missing_ok=True)
+        logger.info("iLink account deleted (unbound)")
     except OSError as e:
+        # missing_ok already handles not-found; only real I/O errors reach here
         logger.warning("Failed to delete ilink account: %s", e)
 
 
