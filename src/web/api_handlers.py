@@ -5994,7 +5994,7 @@ def handle_tasks_retry(params, config: AssistantConfig):
         ok = result.get("success", False)
         err = result.get("error", "")
         _task_retry_after(tc, task, ok, err)
-        return {"ok": True, "task_id": task_id, "success": ok, "error": err}
+        return {"ok": True, "task_id": task_id, "success": ok, "error": err, "results": result.get("results", []), "skipped": result.get("skipped", False)}
     except Exception as e:
         logger.error(f"[TASK-RETRY] retry task failed: {e}")
         return {"ok": False, "error": "Internal error"}

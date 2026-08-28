@@ -1297,7 +1297,7 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
             {(values.keywords || []).map((kw, ki) => (
               <span key={ki} className="text-xs px-2 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">{kw}</span>
             ))}
-            <span className="text-xs px-1.5 py-0.5 rounded bg-status-warn-soft text-status-warn font-medium">推送</span>
+            <span className="text-xs px-1.5 py-0.5 rounded bg-status-info-soft text-status-info font-medium">推送</span>
           </div>
         </div>
         <DeleteButton onDelete={onDelete} />

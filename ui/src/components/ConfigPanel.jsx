@@ -2163,6 +2163,9 @@ function PushPlatformOverview({ platforms, onSelect }) {
                 <span className={`w-2.5 h-2.5 rounded-full ${deliveryFailed ? 'bg-status-error' : ok ? 'bg-status-ok' : 'bg-status-warn'}`} title={deliveryFailed ? `最近推送失败：${platform.delivery.last_failure.provider_error || platform.delivery.last_failure.error || '未知错误'}` : undefined} />
               </div>
               <p className="text-xs text-text-muted mt-2">{platform.status?.detail || '未配置'}</p>
+              {deliveryFailed && (
+                <p className="text-xs text-status-error mt-1 line-clamp-2">错误：{platform.delivery.last_failure.provider_error || platform.delivery.last_failure.error || '推送失败'}</p>
+              )}
               <p className="text-xs text-brand-green-hover mt-4">{platform.configurable ? '进入配置 →' : '暂未支持'}</p>
             </button>
           )

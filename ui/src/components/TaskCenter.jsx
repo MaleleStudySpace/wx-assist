@@ -49,6 +49,7 @@ export default function TaskCenter({ open, onClose }) {
   const [typeFilter, setTypeFilter] = useState('all')
   const [retryingIds, setRetryingIds] = useState({})   // 单条重推中: { [taskId]: true }
   const [batchState, setBatchState] = useState(null)   // 批量重推进度: { total, done, success, fail, active }
+  const [retryFloating, setRetryFloating] = useState(null) // { taskId, platforms: [{platform, label, status, error}], visible }
   const refreshTimer = useRef(null)
 
   // Fetch tasks
@@ -75,8 +76,33 @@ export default function TaskCenter({ open, onClose }) {
   // 单条重推：同步等待结果，成功则任务 push_status 变 success 按钮自然消失
   async function retryTask(taskId) {
     setRetryingIds(prev => ({ ...prev, [taskId]: true }))
+    setRetryFloating({ taskId, status: 'pushing', platforms: [] })
     try {
-      await fetch(`${API_BASE}/api/tasks/${taskId}/retry`, { method: 'POST' })
+      const res = await fetch(`${API_BASE}/api/tasks/${taskId}/retry`, { method: 'POST' })
+      const data = await res.json()
+      const platformLabels = { ilink: '微信', qqbot: 'QQ', feishu: '飞书' }
+      if (data.ok && Array.isArray(data.results)) {
+        // data.results is array of delivery responses, each may contain nested results
+        const flat = []
+        for (const r of data.results) {
+          if (Array.isArray(r.results)) {
+            for (const inner of r.results) {
+              flat.push({ platform: inner.platform || r.platform || '', label: platformLabels[inner.platform || r.platform] || inner.platform || r.platform || '未知', success: !!inner.success, error: inner.error || '' })
+            }
+          } else {
+            flat.push({ platform: r.platform || '', label: platformLabels[r.platform] || r.platform || '未知', success: !!r.success, error: r.error || '' })
+          }
+        }
+        // If no per-platform in results, fallback to single
+        const platforms = flat.length ? flat : [{ platform: '', label: '已绑定平台', success: !!data.success, error: data.error || '' }]
+        setRetryFloating({ taskId, status: data.success ? 'success' : 'failed', platforms, error: data.error || '' })
+      } else if (data.ok) {
+        const success = !!data.success
+        setRetryFloating({ taskId, status: success ? 'success' : 'failed', platforms: [{ platform: '', label: '已绑定平台', success, error: data.error || '' }], error: data.error || '' })
+      } else {
+        setRetryFloating({ taskId, status: 'failed', platforms: [{ platform: '', label: '已绑定平台', success: false, error: data.error || '重推失败' }], error: data.error || '' })
+      }
+      setTimeout(() => setRetryFloating(null), 8000)
     } catch {}
     loadTasks()
     setTimeout(() => {
@@ -429,6 +455,38 @@ export default function TaskCenter({ open, onClose }) {
             )
           })}
         </div>
+        {/* 重推浮窗：展示正在推送的平台与结果 */}
+        {retryFloating && (
+          <div className="absolute bottom-4 left-4 right-4 bg-bg-card border border-border-main rounded-xl shadow-xl p-3 z-10">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-text-main">
+                {retryFloating.status === 'pushing' ? '正在推送已绑定的平台...' : retryFloating.status === 'success' ? '重推完成' : '重推完成'}
+              </span>
+              <button onClick={() => setRetryFloating(null)} className="p-1 rounded hover:bg-bg-raised text-text-muted hover:text-text-main">
+                <X size={12} />
+              </button>
+            </div>
+            <div className="space-y-1.5">
+              {retryFloating.platforms.length === 0 && retryFloating.status === 'pushing' && (
+                <div className="flex items-center gap-2 text-xs text-text-muted">
+                  <Spinner size={12} className="animate-spin" />
+                  <span>正在推送已绑定的平台...</span>
+                </div>
+              )}
+              {retryFloating.platforms.map((p, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs">
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${p.success ? 'bg-status-ok' : 'bg-status-error'}`} />
+                  <span className="text-text-main font-medium">{p.label}</span>
+                  <span className={p.success ? 'text-brand-green' : 'text-[#d45656]'}>{p.success ? '成功' : '失败'}</span>
+                  {p.error && <span className="text-text-muted truncate flex-1" title={p.error}>{p.error.slice(0, 60)}</span>}
+                </div>
+              ))}
+              {retryFloating.error && retryFloating.platforms.length === 1 && (
+                <p className="text-[11px] text-text-muted mt-1 truncate" title={retryFloating.error}>{retryFloating.error.slice(0, 80)}</p>
+              )}
+            </div>
+          </div>
+        )}
       </motion.div>
     </>
   )
