@@ -145,7 +145,7 @@ function KeywordAlertCard({ onTabChange }) {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="text-sm text-text-main font-semibold truncate">{ag.group_name || ag.chat_id || `提醒群 #${i + 1}`}</span>
-                        {ag.push_target === 'ilink' && (
+                        {ag.enabled !== false && (
                           <span className="text-xs font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
                             <PaperPlaneTilt size={8} />推送
                           </span>
@@ -186,7 +186,7 @@ function KeywordAlertCard({ onTabChange }) {
                       <div className="flex items-center gap-1.5">
                         <span className="text-sm text-text-main font-semibold truncate">{mg.name || mg.id}</span>
                         <span className="text-xs text-text-muted">{(mg.accounts || []).length} 个号</span>
-                        {mg.push_target === 'ilink' && (
+                        {mg.enabled !== false && (
                           <span className="text-xs font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
                             <PaperPlaneTilt size={8} />推送
                           </span>
@@ -345,7 +345,7 @@ function TaskRow({ task, index }) {
         {/* Line 1: name + push tag */}
         <div className="flex items-center gap-1.5">
           <span className="text-sm text-text-main font-semibold truncate">{task.name || meta.label}</span>
-          {task.push && task.push !== '不推送' && (
+          {task.push === '推送' && (
             <span className="text-xs font-mono font-bold text-brand-green bg-brand-green/[0.08] dark:bg-brand-green/[0.12] px-1.5 py-px rounded flex items-center gap-0.5">
               <PaperPlaneTilt size={8} />推送
             </span>

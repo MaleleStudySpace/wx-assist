@@ -1422,7 +1422,7 @@ function PushHistory({ platform = 'im' }) {
         <div className="py-10 text-center">
           <PaperPlaneTilt size={28} className="text-text-muted mx-auto mb-2" />
           <p className="text-xs text-text-muted">暂无推送记录</p>
-          <p className="text-xs text-text-muted mt-1">选择推送方式后，投递记录会出现在这里</p>
+          <p className="text-xs text-text-muted mt-1">业务通知发送后，投递记录会出现在这里</p>
         </div>
       ) : (
         <div className="space-y-2 max-h-[480px] overflow-y-auto">
@@ -2130,8 +2130,8 @@ function PushSection() {
         <div className="space-y-2 text-xs text-text-muted leading-relaxed">
           <p>1. 在此页面绑定 iLink Bot（扫描二维码）</p>
           <p>2. 在微信中给 Bot 发一条消息激活</p>
-          <p>3. 在「群聊助手」或「公众号助手」中选择推送方式</p>
-          <p>4. 定时摘要触发后，内容会自动推送到你的微信私聊</p>
+          <p>3. 在「群聊助手」或「公众号助手」中开启需要的推送业务</p>
+          <p>4. 业务通知会自动推送到「消息推送」页中已绑定的 IM 平台</p>
           <p className="text-text-muted mt-3 border-t border-border-main/30 pt-3">
             iLink 推送是独立通道，不影响现有的微信窗口操控功能。消息限制 4000 字符，超出自动截断。
           </p>

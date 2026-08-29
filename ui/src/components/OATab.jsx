@@ -164,7 +164,7 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
                 <span className="text-xs text-brand-green/70">{templateInfo.label}</span>
               </>
             )}
-            {group.push_target === 'ilink' && (
+            {group.enabled !== false && (
               <>
                 <span className="text-sm text-text-muted">·</span>
                 <span className="text-xs text-status-success flex items-center gap-0.5">
@@ -216,14 +216,12 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
                     : `${group.lookback_hours || 24} 小时`}
                 </span>
               </div>
-              {group.push_target && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-text-muted">推送目标</span>
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">
-                    消息推送
-                  </span>
-                </div>
-              )}
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-text-muted">推送</span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">
+                  {group.enabled === false ? '未启用' : '自动推送'}
+                </span>
+              </div>
             </div>
 
             {/* Digest preview */}
@@ -705,10 +703,10 @@ function MonitorGroupCard({ group, accounts, onEdit, onDelete, onToggle, onViewA
           </div>
           <div className="flex items-center gap-2 mt-0.5">
             <span className="text-sm text-text-muted">{accountChips.length} 个公众号</span>
-            {group.push_target === 'ilink' && (
+            {group.enabled !== false && (
               <>
                 <span className="text-sm text-text-muted">·</span>
-                <span className="text-xs px-1.5 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">通知</span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">推送</span>
               </>
             )}
             {group.dnd_start && group.dnd_end && (

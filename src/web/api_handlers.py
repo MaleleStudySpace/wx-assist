@@ -5174,7 +5174,7 @@ def handle_scheduled_tasks_overview(params, config: AssistantConfig):
     # 群聊摘要
     for dg in config.digest_groups:
         schedule_label = _format_schedule(dg.schedule, dg.cron_expr)
-        push_label = "推送微信" if dg.push_target == "ilink" else "不推送"
+        push_label = "推送" if dg.enabled else "未启用"
         mode_label = "仅未读" if dg.unread_only else "全部消息"
         tasks.append({
             "type": "group_digest",
@@ -5190,7 +5190,7 @@ def handle_scheduled_tasks_overview(params, config: AssistantConfig):
     # 公众号摘要
     for oa in config.oa_groups:
         schedule_label = _format_schedule([], oa.cron_expr)
-        push_label = "推送微信" if oa.push_target == "ilink" else ("推送" + oa.push_target if oa.push_target else "不推送")
+        push_label = "推送" if oa.enabled else "未启用"
         account_count = len(oa.accounts) if oa.accounts else 0
         tasks.append({
             "type": "oa_digest",

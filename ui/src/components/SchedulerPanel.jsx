@@ -121,9 +121,9 @@ function TaskCard({ task, skills, onToggle, onDelete, onRunNow, onEdit, onCopy, 
                   <span className="text-text-secondary">{task.created_at || '—'}</span>
                 </div>
                 <div>
-                  <div className="text-text-muted mb-1 text-xs text-xs">推送目标</div>
+                  <div className="text-text-muted mb-1 text-xs text-xs">推送</div>
                   <span className="text-text-secondary">
-                    {task.push?.enabled === false ? '不推送' : (task.push?.target || 'iLink')}
+                    {task.push?.enabled === false ? '不推送' : '自动推送'}
                   </span>
                 </div>
                 <div>

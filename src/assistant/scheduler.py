@@ -932,18 +932,22 @@ class DigestScheduler:
             title = f"⚠️ 公众号摘要失败 · {oa.name}"
             display = f"⚠️ **摘要生成失败**\n📰 **公众号:** {oa.name}\n❌ **原因:** {error_msg}\n\n请稍后手动重试。"
             # 记录到 outbox
-            self._outbox.add(
-                notif_type="oa_digest",
-                chat_id=oa.id,
-                group_name=oa.name,
-                title=title,
-                content=json.dumps({
-                    "group": oa.name,
-                    "error": error_msg,
-                    "display": display,
-                }, ensure_ascii=False),
-                priority="high",
-            )
+            failure_nid = 0
+            try:
+                failure_nid = int(self._outbox.add(
+                    notif_type="oa_digest",
+                    chat_id=oa.id,
+                    group_name=oa.name,
+                    title=title,
+                    content=json.dumps({
+                        "group": oa.name,
+                        "error": error_msg,
+                        "display": display,
+                    }, ensure_ascii=False),
+                    priority="high",
+                ) or 0)
+            except Exception as e:
+                logger.warning("[OA-DIGEST] 失败通知写入 outbox 失败: %s", e)
             # Push the failure notice through every currently bound channel.
             from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
             from src.im.targets import bound_push_targets
@@ -953,11 +957,33 @@ class DigestScheduler:
                 msg = DeliveryService.format_text(fmt_target, title, display)
                 result = get_delivery_service().send_text(DeliveryRequest(
                     platform=fmt_target, text=msg, source_type="oa_digest_failure",
-                    source_id=str(task_id), conversation_key=oa.name,
+                    source_id=str(failure_nid or task_id or ""),
+                    notification_id=str(failure_nid or ""),
+                    outbox_id=int(failure_nid or 0), task_id=int(task_id or 0),
+                    conversation_key=oa.name,
                     auto_route=True,
                 ))
-                logger.info("[OA-DIGEST] 失败通知已推送: '%s' success=%s", oa.name, result.get("success", False))
+                push_ok = bool(result.get("success", False))
+                push_err = result.get("error", "") if not push_ok else ""
+                if failure_nid:
+                    self._outbox.update_push_result(
+                        failure_nid, fmt_target,
+                        "success" if push_ok else "failed", push_err,
+                    )
+                if task_id and self._task_center:
+                    self._tc_push_result(
+                        task_id, "success" if push_ok else "failed", push_err,
+                    )
+                logger.info("[OA-DIGEST] 失败通知已推送: '%s' success=%s", oa.name, push_ok)
             else:
+                if failure_nid:
+                    self._outbox.update_push_result(
+                        failure_nid, "ilink", "skipped", "未绑定任何推送渠道",
+                    )
+                if task_id and self._task_center:
+                    self._tc_push_result(
+                        task_id, "skipped", "未绑定任何推送渠道",
+                    )
                 logger.info("[OA-DIGEST] 失败通知跳过: 未绑定任何推送渠道")
         except Exception as e:
             logger.warning("[OA-DIGEST] _notify_oa_digest_failure 异常: %s", e)

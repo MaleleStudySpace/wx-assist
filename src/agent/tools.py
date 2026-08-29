@@ -509,6 +509,9 @@ class ToolExecutor:
                     "push_target": {"type": "string", "enum": ["ilink", "qqbot", "feishu", ""],
                                     "description": "历史兼容字段；实际推送到消息推送页中已绑定的平台，留空也会自动推送",
                                     "default": ""},
+                    "push_enabled": {"type": "boolean",
+                                     "description": "是否发送推送；false 表示静默任务，默认 true",
+                                     "default": True},
                 },
                 "required": ["name", "skill", "cron"],
             },
@@ -1251,10 +1254,11 @@ class ToolExecutor:
 
     def _handle_create_cron(self, name: str, skill: str, cron: str,
                             args: dict = None,
-                            push_target: str = "") -> str:
+                            push_target: str = "",
+                            push_enabled: bool = True) -> str:
         """创建定时任务（引用 skill 执行）。"""
-        logger.info("[CronTool] create_cron — name=%s skill=%s cron=%s args=%s",
-                    name, skill, cron, args)
+        logger.info("[CronTool] create_cron — name=%s skill=%s cron=%s push_enabled=%s args=%s",
+                    name, skill, cron, push_enabled, args)
         if not self._cron_scheduler:
             logger.warning("[CronTool] create_cron 失败: cron_scheduler 未就绪")
             return "定时任务系统未就绪"
@@ -1284,7 +1288,7 @@ class ToolExecutor:
             "name": name,
             "skill": skill,
             "cron": cron,
-            "push": {"enabled": True,
+            "push": {"enabled": bool(push_enabled),
                      "target": push_target or "ilink"},
         }
         if args:
@@ -1297,7 +1301,8 @@ class ToolExecutor:
                 f"ID: {jid}\n"
                 f"Skill: {skill}\n"
                 f"Cron: {cron}\n"
-                "推送: 自动发送到消息推送页中已绑定的平台")
+                + ("推送: 自动发送到消息推送页中已绑定的平台" if push_enabled
+                   else "推送: 静默任务，不发送推送"))
 
     def _handle_delete_cron(self, id: str) -> str:
         if not self._cron_scheduler:
