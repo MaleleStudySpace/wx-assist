@@ -950,7 +950,7 @@ def register_agent_engine(engine):
 def _im_channel_snapshot():
     """Return the single IM status snapshot shared by all UI surfaces."""
     from src.im.config_schema import load_platforms_config
-    from src.im.plugins import get_plugin_push_channel
+    from src.im.plugins import get_plugin_load_errors, get_plugin_push_channel
     configs = {cfg.name: cfg for cfg in load_platforms_config()}
     channels = {}
     for name in ("ilink", "qqbot", "feishu"):
@@ -968,7 +968,11 @@ def _im_channel_snapshot():
             continue
         channel = get_plugin_push_channel(name)
         if channel is None:
-            channels[name] = {"state": "pending", "ok": False, "detail": "正在连接", "error": ""}
+            load_error = get_plugin_load_errors().get(name, "")
+            if load_error:
+                channels[name] = {"state": "error", "ok": False, "detail": "插件加载失败", "error": load_error}
+            else:
+                channels[name] = {"state": "pending", "ok": False, "detail": "正在连接", "error": ""}
             continue
         try:
             available = bool(channel.is_available())

@@ -186,10 +186,6 @@ function TaskForm({ skills, initial, onSave, onCancel, onRefresh }) {
   const [skill, setSkill] = useState(initial?.skill || (skills[0]?.name || ''))
   const [cronExpr, setCronExpr] = useState(initial?.cron || '0 8 * * *')
   const [pushEnabled, setPushEnabled] = useState(initial?.push?.enabled !== false)
-  const [pushTargets, setPushTargets] = useState(() => {
-    const value = initial?.push_target || initial?.push?.target || 'ilink'
-    try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : [value] } catch { return value ? [value] : [] }
-  })
   const [enabled, setEnabled] = useState(initial?.enabled !== false)
   const [argsJson, setArgsJson] = useState(
     initial?.args ? JSON.stringify(initial.args, null, 2) : '{}'

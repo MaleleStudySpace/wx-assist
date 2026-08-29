@@ -221,10 +221,10 @@ class AlertEngine:
                     from src.im.targets import bound_push_targets
                     bound = bound_push_targets()
                     if not bound:
-                        self._outbox.update_push_result(nid, "ilink", "skipped", "未绑定任何推送渠道")
+                        self._outbox.update_push_result(nid, "", "skipped", "未绑定任何推送渠道")
                         return nid
                     fmt_target = bound[0]
-                    push_msg = DeliveryService.format_text(fmt_target, title, push_text)
+                    push_msg = DeliveryService.format_text("", title, push_text)
                     result = get_delivery_service().send_text(DeliveryRequest(
                         platform=fmt_target,
                         text=push_msg,
@@ -238,7 +238,7 @@ class AlertEngine:
                     push_ok = result.get("success", False)
                     push_err = result.get("error", "") if not push_ok else ""
                     self._outbox.update_push_result(
-                        nid, fmt_target,
+                        nid, DeliveryService.outbox_channel(result, bound),
                         "success" if push_ok else "failed",
                         push_err,
                     )
@@ -258,7 +258,10 @@ class AlertEngine:
                 except Exception as e:
                     logger.warning("IM push error for '%s': %s", group_name, e)
                     try:
-                        self._outbox.update_push_result(nid, "ilink", "failed", str(e))
+                        fallback_channel = DeliveryService.outbox_channel(
+                            {"success": False, "error": str(e)}, bound_push_targets()
+                        )
+                        self._outbox.update_push_result(nid, fallback_channel, "failed", str(e))
                     except Exception:
                         pass
 

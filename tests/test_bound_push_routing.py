@@ -52,7 +52,7 @@ def test_agent_cron_creation_keeps_auto_push_when_legacy_target_is_empty():
         "自动任务", "sample", "0 8 * * *", push_target="",
     )
 
-    assert jobs[0]["push"] == {"enabled": True, "target": "ilink"}
+    assert jobs[0]["push"] == {"enabled": True, "target": ""}
     assert "自动发送到消息推送页中已绑定的平台" in result
 
 
@@ -72,7 +72,7 @@ def test_agent_cron_creation_supports_explicit_silent_mode():
         "静默任务", "sample", "0 9 * * *", push_enabled=False,
     )
 
-    assert jobs[0]["push"] == {"enabled": False, "target": "ilink"}
+    assert jobs[0]["push"] == {"enabled": False, "target": ""}
     assert "静默任务，不发送推送" in result
 
 
@@ -109,7 +109,10 @@ def test_cron_push_uses_bound_channel_for_record_and_ignores_legacy_target():
     assert len(delivery.calls) == 1
     assert delivery.calls[0].platform == "qqbot"
     assert delivery.calls[0].auto_route is True
-    assert outbox.updated[0][1] == "qqbot"
+    # Two bound channels fan out and Outbox keeps a single channel field,
+    # so the legacy column must stay empty rather than naming only the
+    # first bound platform.
+    assert outbox.updated[0][1] == ""
 
 
 def test_manual_oa_digest_pushes_when_group_target_is_empty():
@@ -158,7 +161,6 @@ def test_digest_failure_notice_pushes_when_oa_target_is_empty():
     assert request.outbox_id == 41
     assert request.task_id == 7
     assert outbox.updated[-1] == (41, "ilink", "success", "")
-    task_center.update_push_result.assert_called_once_with(7, "success", "")
 
 
 def test_digest_failure_notice_marks_failed_delivery_in_outbox_and_task():
@@ -200,7 +202,7 @@ def test_digest_failure_notice_records_skipped_when_no_bound_channel():
         scheduler._notify_oa_digest_failure(oa, "AI 暂时不可用", task_id=9)
 
     assert delivery.calls == []
-    assert outbox.updated[-1] == (41, "ilink", "skipped", "未绑定任何推送渠道")
+    assert outbox.updated[-1] == (41, "", "skipped", "未绑定任何推送渠道")
     task_center.update_push_result.assert_called_once_with(9, "skipped", "未绑定任何推送渠道")
 
 

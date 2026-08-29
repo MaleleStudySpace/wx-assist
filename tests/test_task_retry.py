@@ -22,6 +22,8 @@ def test_retry_targets_only_failed_channels():
     outbox = MagicMock()
     outbox.get_notification.return_value = {"title": "title", "content": "content"}
     with (
+        patch("src.im.targets.bound_push_targets", return_value=["qqbot"]),
+        patch("src.im.targets.default_target", return_value="qqbot:user"),
         patch("src.im.delivery.get_delivery_service", return_value=delivery),
         patch("src.im.delivery.DeliveryService.format_text", side_effect=lambda platform, title, text: text),
         patch("src.assistant.outbox.Outbox", return_value=outbox),
@@ -57,6 +59,7 @@ def test_retry_uses_latest_attempt_instead_of_any_historical_success():
     outbox.get_notification.return_value = {"title": "title", "content": "content"}
     with (
         patch("src.im.delivery.get_delivery_service", return_value=delivery),
+        patch("src.im.targets.bound_push_targets", return_value=["ilink"]),
         patch("src.im.delivery.DeliveryService.format_text", side_effect=lambda platform, title, text: text),
         patch("src.assistant.outbox.Outbox", return_value=outbox),
     ):

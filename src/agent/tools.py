@@ -214,7 +214,7 @@ class ToolExecutor:
         r.register(
             name="add_alert",
             description="为指定群聊添加关键词预警。当群里有人提到这些关键词时，"
-                       "系统会生成通知并可选推送到微信。"
+                       "系统会生成通知并自动推送到消息推送页中已绑定的平台。"
                        "用户说'帮我盯着某某群的关键词'时调用。"
                        "这是写操作，会修改系统配置。",
             parameters={
@@ -240,7 +240,7 @@ class ToolExecutor:
         r.register(
             name="add_digest",
             description="【群聊定时摘要】为指定群聊配置定时消息摘要。"
-                       "配置后，每天在设定时间自动生成该群的聊天摘要并推送到微信。"
+                       "配置后，每天在设定时间自动生成该群的聊天摘要并自动推送到消息推送页中已绑定的平台。"
                        "如果该群已存在定时摘要配置，则更新已有配置。"
                        "用户说'每天早上9点给我发群摘要'、'帮我总结项目群的消息'时调用。"
                        "这是写操作，会修改系统配置。"
@@ -264,8 +264,8 @@ class ToolExecutor:
                     },
                     "push_target": {
                         "type": "string",
-                        "description": "推送方式：\"ilink\"=微信、\"qqbot\"=QQ、\"feishu\"=飞书、\"\"=不推送，默认 \"ilink\"",
-                        "default": "ilink",
+                        "description": "历史兼容字段；业务启用后自动推送到消息推送页中已绑定的平台，留空也会自动推送",
+                        "default": "",
                     },
                 },
                 "required": ["group_name"],
@@ -278,7 +278,7 @@ class ToolExecutor:
         r.register(
             name="add_oa_scheduled_digest",
             description="【公众号定时摘要】为指定公众号分组配置定时文章摘要。"
-                       "配置后，每天在设定时间自动总结该分组内所有公众号的最新文章并推送到微信。"
+                       "配置后，每天在设定时间自动总结该分组内所有公众号的最新文章并自动推送到消息推送页中已绑定的平台。"
                        "如果该分组已存在定时摘要配置，则更新已有配置。"
                        "用户说'每天早上9点总结AI学习的文章'时调用。"
                        "这是写操作，会修改系统配置。"
@@ -301,8 +301,8 @@ class ToolExecutor:
                     },
                     "push_target": {
                         "type": "string",
-                        "description": "推送方式：\"ilink\"=微信、\"qqbot\"=QQ、\"feishu\"=飞书、\"\"=不推送，默认 \"ilink\"",
-                        "default": "ilink",
+                        "description": "历史兼容字段；业务启用后自动推送到消息推送页中已绑定的平台，留空也会自动推送",
+                        "default": "",
                     },
                     "template": {
                         "type": "string",
@@ -320,7 +320,7 @@ class ToolExecutor:
         r.register(
             name="add_oa_monitor",
             description="【公众号文章更新提醒】为指定公众号开启文章更新推送。"
-                       "当该公众号发布新文章时，系统立即推送通知到微信。"
+                       "当该公众号发布新文章时，自动推送通知到消息推送页中已绑定的平台。"
                        "用户说'帮我盯着机器之心的文章更新'、'关注XX公众号的动态'时调用。"
                        "这是写操作，会修改系统配置。"
                        "调用前建议先调 search_oa_accounts 确认公众号名称正确。"
@@ -336,8 +336,8 @@ class ToolExecutor:
                     },
                     "push_target": {
                         "type": "string",
-                        "description": "推送方式：\"ilink\"=微信、\"qqbot\"=QQ、\"feishu\"=飞书、\"\"=不推送，默认 \"ilink\"",
-                        "default": "ilink",
+                        "description": "历史兼容字段；业务启用后自动推送到消息推送页中已绑定的平台，留空也会自动推送",
+                        "default": "",
                     },
                 },
                 "required": ["account_name"],
@@ -657,7 +657,7 @@ class ToolExecutor:
                 accts += f" 等 {len(g.accounts)} 个公众号"
             elif not g.accounts:
                 accts = "未绑定具体公众号"
-            push_icon = "📮 推送到微信" if g.push_target == "ilink" else ""
+            push_icon = "📮 自动推送到已绑定平台"
             lines.append(f"{i}. {g.name} — {accts} {push_icon}".strip())
         return "\n".join(lines)
 
@@ -794,7 +794,7 @@ class ToolExecutor:
 
         try:
             self._scheduler._generate_oa_digest(oa_group, task_id=tid)
-            return f"✅ 已开始为「{group_name}」生成摘要，完成后将通过微信通知你。"
+            return f"✅ 已开始为「{group_name}」生成摘要，完成后将自动推送到消息推送页中已绑定的平台。"
         except Exception as e:
             logger.warning("run_oa_digest failed: %s", e)
             if tid:
@@ -854,7 +854,7 @@ class ToolExecutor:
     def _handle_add_digest(self, group_name: str,
                            schedule: str = "08:00",
                            lookback_hours: int = 6,
-                           push_target: str = "ilink") -> str:
+                           push_target: str = "") -> str:
         """【群聊定时摘要】配置或更新。"""
         if not group_name:
             return "请提供群聊名称"
@@ -881,7 +881,7 @@ class ToolExecutor:
             save_assistant_config(cfg)
             if self._scheduler:
                 self._scheduler.update_config(cfg)
-            push_label = "推送到微信" if push_target == "ilink" else "不推送"
+            push_label = "自动推送到已绑定平台"
             return (
                 f"✅ 已更新「{group_name}」的群聊定时摘要\n"
                 f"📅 时间: 每天 {schedule}\n"
@@ -903,7 +903,7 @@ class ToolExecutor:
 
         if self._scheduler:
             self._scheduler.update_config(cfg)
-        push_label = "推送到微信" if push_target == "ilink" else "不推送"
+        push_label = "自动推送到已绑定平台"
         return (
             f"✅ 已为「{group_name}」配置群聊定时摘要\n"
             f"📅 时间: 每天 {schedule}\n"
@@ -946,7 +946,7 @@ class ToolExecutor:
             save_assistant_config(cfg)
             if self._scheduler:
                 self._scheduler.update_config(cfg)
-            push_label = "推送到微信" if push_target == "ilink" else "不推送"
+            push_label = "自动推送到已绑定平台"
             return (
                 f"✅ 已更新「{group_name}」的公众号定时摘要\n"
                 f"📅 时间: 每天 {schedule}\n"
@@ -974,7 +974,7 @@ class ToolExecutor:
 
         if self._scheduler:
             self._scheduler.update_config(cfg)
-        push_label = "推送到微信" if push_target == "ilink" else "不推送"
+        push_label = "自动推送到已绑定平台"
         return (
             f"✅ 已为「{group_name}」配置公众号定时摘要\n"
             f"📅 时间: 每天 {schedule}\n"
@@ -986,7 +986,7 @@ class ToolExecutor:
     # ── add_oa_monitor (写操作) ────────────────────────────────────
 
     def _handle_add_oa_monitor(self, account_name: str,
-                                push_target: str = "ilink") -> str:
+                                push_target: str = "") -> str:
         """【公众号文章提醒】按公众号名称添加更新提醒。"""
         if not account_name:
             return "请提供公众号名称"
@@ -1055,7 +1055,7 @@ class ToolExecutor:
         if self._oa_monitor:
             self._oa_monitor.update_config(cfg)
 
-        push_label = "推送到微信" if push_target == "ilink" else "不推送"
+        push_label = "自动推送到已绑定平台"
         return (
             f"✅ 已为「{display_name}」开启文章更新提醒\n"
             f"📮 推送: {push_label}"
@@ -1289,7 +1289,7 @@ class ToolExecutor:
             "skill": skill,
             "cron": cron,
             "push": {"enabled": bool(push_enabled),
-                     "target": push_target or "ilink"},
+                     "target": push_target},
         }
         if args:
             job["args"] = args

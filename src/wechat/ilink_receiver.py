@@ -435,7 +435,7 @@ class ILinkReceiver:
             if push.is_available():
                 from src.im.delivery import DeliveryRequest, get_delivery_service
                 get_delivery_service().send_text(DeliveryRequest(
-                    platform="wechat", text=reply, source_type="agent_reply",
+                    platform="ilink", text=reply, source_type="agent_reply",
                     source_id=str(std_msg.get("message_id", "")),
                     inbound_message_id=str(std_msg.get("message_id", "")),
                     conversation_key=str(std_msg.get("chat_id", "")),

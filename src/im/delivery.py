@@ -174,17 +174,51 @@ class DeliveryService:
 
     @staticmethod
     def format_text(platform: str, title: str, content: str) -> str:
-        """Format title/body through one channel when possible.
+        """Format notification text with the shared product representation.
 
-        For multi-target delivery, use a neutral representation so one target's
-        provider-specific formatter cannot corrupt another target's message.
+        The existing WeChat/iLink formatting is also the intended format for
+        QQ and Feishu.  Keep ``platform`` in the signature for compatibility,
+        but do not let the first bound channel choose a different format.
         """
-        targets = normalize_targets(platform)
-        if len(targets) == 1:
-            channel = get_plugin_push_channel(DeliveryService._channel_name(targets[0]))
-            if channel is not None:
-                return channel.format_message(title, content)
-        return f"{title}\n\n{content}" if title and content else (title or content)
+        from src.wechat.ilink_push import format_for_wechat
+        return format_for_wechat(title, content)
+
+    @staticmethod
+    def outbox_channel(result: dict, fallback_platforms=()) -> str:
+        """Choose a truthful channel label for a legacy Outbox row.
+
+        Delivery attempts are the per-platform source of truth.  The legacy
+        Outbox has one channel column, so it is populated only when exactly
+        one actual channel represents the result.  Multi-channel deliveries
+        leave it empty and remain visible through their individual attempts;
+        a skipped result has no channel because no platform was contacted.
+        """
+        result = result or {}
+        if result.get("skipped"):
+            return ""
+        fallback = normalize_targets(fallback_platforms)
+        rows = result.get("results") or []
+        platforms = []
+        failed = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            platform = DeliveryService._channel_name(
+                str(row.get("platform") or row.get("channel") or "").strip()
+            )
+            if platform not in {"ilink", "qqbot", "feishu"}:
+                continue
+            if platform not in platforms:
+                platforms.append(platform)
+            if not row.get("success", False) and platform not in failed:
+                failed.append(platform)
+        selected = failed if not result.get("success", False) and failed else platforms
+        if not selected:
+            selected = fallback
+        # One legacy channel field cannot faithfully represent a multi-channel
+        # delivery.  Leave it empty and let im_delivery_attempts expose the
+        # per-platform records instead of inventing a channel name.
+        return selected[0] if len(selected) == 1 else ""
 
     def _record(self, request, attempt_id, channel_name, target, started, result):
         # The registered WeChat channel is ilink; use the resolved channel name

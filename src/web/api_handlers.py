@@ -4957,7 +4957,7 @@ def _push_oa_digest(result, group, config, task_id=None):
         ac = result.get("articles_count", 0)
         content = f"📄 {ac} 篇文章\n\n{result['digest_text']}"
         fmt_target = bound[0]
-        msg = DeliveryService.format_text(fmt_target, title, content)
+        msg = DeliveryService.format_text("", title, content)
         push_result = get_delivery_service().send_text(DeliveryRequest(
             platform=fmt_target, text=msg, source_type="oa_digest",
             source_id=str(oa_nid or ""), outbox_id=oa_nid or 0,
@@ -4968,8 +4968,9 @@ def _push_oa_digest(result, group, config, task_id=None):
         if oa_nid:
             try:
                 outbox = Outbox()
-                outbox.update_push_result(oa_nid, fmt_target,
-                                          "success" if push_ok else "failed", push_err)
+                outbox.update_push_result(
+                    oa_nid, DeliveryService.outbox_channel(push_result, bound),
+                    "success" if push_ok else "failed", push_err)
             except Exception:
                 pass
         if task_id:
@@ -5276,7 +5277,7 @@ def handle_scheduler_create(params, config):
         "cron": body["cron"],
         "push": {
             "enabled": body.get("push_enabled", True),
-            "target": body.get("push_target", "ilink"),
+            "target": body.get("push_target", ""),
         },
     }
     if body.get("args"):
@@ -5908,7 +5909,6 @@ def _do_task_retry_push(task: dict) -> dict:
             platform = "ilink"
         if platform not in {"ilink", "qqbot", "feishu"}:
             continue
-        target = str(attempt.get("target") or "")
         try:
             created_at = float(attempt.get("created_at") or 0)
         except (TypeError, ValueError):
@@ -5922,31 +5922,41 @@ def _do_task_retry_push(task: dict) -> dict:
         sort_key = (created_at, attempt_no, -index)
         current = latest_by_platform.get(platform)
         if current is None or sort_key > current[0]:
-            latest_by_platform[platform] = (sort_key, target, attempt.get("status"))
+            # The historical target is intentionally not retained.  A retry
+            # must use the recipient belonging to the current binding.
+            latest_by_platform[platform] = (sort_key, attempt.get("status"))
 
-    for platform, (_sort_key, target, status) in latest_by_platform.items():
-        platform_targets[platform] = (platform, target, status)
+    for platform, (_sort_key, status) in latest_by_platform.items():
+        platform_targets[platform] = (platform, status)
 
     if not platform_targets and retry_notif:
         channel = str(retry_notif.get("push_channel") or "").strip()
         if channel == "wechat":
             channel = "ilink"
         if channel in {"ilink", "qqbot", "feishu"}:
-            platform_targets[channel] = (channel, "", "failed")
+            platform_targets[channel] = (channel, "failed")
 
     if not platform_targets:
         return {"success": False, "error": "无法确定原始失败平台，为避免重复发送，本次未重推"}
 
     retry_targets = [
-        (platform, target)
-        for platform, target, status in platform_targets.values()
+        platform for platform, status in platform_targets.values()
         if status != "success"
     ]
     if not retry_targets:
         return {"success": True, "skipped": True, "error": "原始平台最新结果均已成功，无需重复发送", "results": []}
 
+    from src.im.targets import bound_push_targets, default_target
+    current_bound = set(bound_push_targets())
     results = []
-    for platform, target in retry_targets:
+    skipped_platforms = []
+    for platform in retry_targets:
+        if platform not in current_bound:
+            skipped_platforms.append(platform)
+            continue
+        # Resolve the recipient from the current binding.  Historical attempt
+        # targets must never route a notification to an unbound old account.
+        target = default_target(platform) if platform != "ilink" else ""
         msg = DeliveryService.format_text(platform, title, push_text)
         results.append(delivery.send_text(DeliveryRequest(
             platform=platform, text=msg, target=target,
@@ -5956,7 +5966,14 @@ def _do_task_retry_push(task: dict) -> dict:
             auto_route=False,
             conversation_key=str(task.get("group_id", "")),
         )))
-    ok = all(item.get("success", False) for item in results)
+    if skipped_platforms:
+        results.extend({
+            "success": False,
+            "error": f"当前未绑定推送渠道: {platform}",
+            "platform": platform,
+            "skipped": True,
+        } for platform in skipped_platforms)
+    ok = bool(results) and all(item.get("success", False) for item in results)
     return {
         "success": ok,
         "results": results,
@@ -5964,12 +5981,11 @@ def _do_task_retry_push(task: dict) -> dict:
     }
 
 
-def _task_retry_after(tc, task: dict, ok: bool, err: str) -> None:
-    """Update task + outbox push state after a retry attempt.
+def _task_retry_after(tc, task: dict, result: dict) -> None:
+    """Update task and Outbox state from the per-channel retry result."""
+    ok = bool(result.get("success", False))
+    err = str(result.get("error", "") or "")
 
-    即时提醒（oa_article_alert）重推成功后恢复 completed —— 否则红标
-    （status='failed'）永不消失；其他类型仅更新 push_status。
-    """
     task_id = task["id"]
     try:
         if task.get("task_type") == "oa_article_alert" and task.get("status") == "failed":
@@ -5992,8 +6008,7 @@ def _task_retry_after(tc, task: dict, ok: bool, err: str) -> None:
         try:
             from src.assistant.outbox import Outbox
             outbox = Outbox()
-            notif = outbox.get_notification(task["outbox_id"]) or {}
-            push_channel = str(notif.get("push_channel") or "ilink")
+            push_channel = DeliveryService.outbox_channel(result)
             outbox.update_push_result(
                 task["outbox_id"], push_channel,
                 "success" if ok else "failed",
@@ -6025,7 +6040,7 @@ def handle_tasks_retry(params, config: AssistantConfig):
         result = _do_task_retry_push(task)
         ok = result.get("success", False)
         err = result.get("error", "")
-        _task_retry_after(tc, task, ok, err)
+        _task_retry_after(tc, task, result)
         return {"ok": True, "task_id": task_id, "success": ok, "error": err, "results": result.get("results", []), "skipped": result.get("skipped", False)}
     except Exception as e:
         logger.error(f"[TASK-RETRY] retry task failed: {e}")
@@ -6061,7 +6076,7 @@ def handle_tasks_retry_batch(params, config: AssistantConfig):
                     result = _do_task_retry_push(task)
                     ok = result.get("success", False)
                     err = result.get("error", "")
-                    _task_retry_after(tc, task, ok, err)
+                    _task_retry_after(tc, task, result)
                 except Exception as e:
                     ok, err = False, str(e)
                     logger.warning("[TASK-RETRY] batch item #%s failed: %s", task["id"], e)

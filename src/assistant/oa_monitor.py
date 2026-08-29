@@ -554,7 +554,7 @@ class OAMonitorEngine:
             fmt_target = bound[0]
             push_data = _json.loads(content) if isinstance(content, str) else content
             push_text = push_data.get("display", content)
-            push_msg = DeliveryService.format_text(fmt_target, title, push_text)
+            push_msg = DeliveryService.format_text("", title, push_text)
             result = get_delivery_service().send_text(DeliveryRequest(
                 platform=fmt_target,
                 text=push_msg,
@@ -567,7 +567,8 @@ class OAMonitorEngine:
             push_ok = result.get("success", False)
             push_err = result.get("error", "") if not push_ok else ""
             self._outbox.update_push_result(
-                nid, fmt_target, "success" if push_ok else "failed", push_err)
+                nid, DeliveryService.outbox_channel(result, bound),
+                "success" if push_ok else "failed", push_err)
             if push_ok:
                 logger.info("OAMonitor: pushed through IM for '%s'", group_name)
             else:
@@ -590,7 +591,7 @@ class OAMonitorEngine:
                 bound = bound_push_targets()
                 if bound:
                     fallback_channel = bound[0]
-                self._outbox.update_push_result(nid, fallback_channel, "failed", str(e))
+                self._outbox.update_push_result(nid, "", "failed", str(e))
             except Exception:
                 pass
             return False, str(e)

@@ -99,7 +99,7 @@ class CronScheduler:
         import uuid
         job.setdefault("id", uuid.uuid4().hex[:12])
         job.setdefault("enabled", True)
-        job.setdefault("push", {"enabled": True, "target": "ilink"})
+        job.setdefault("push", {"enabled": True, "target": ""})
         job.setdefault("created_at", datetime.now().isoformat())
         job.setdefault("last_run", None)
         job.setdefault("status", "idle")
@@ -277,15 +277,15 @@ class CronScheduler:
             if not push_cfg.get("enabled", True):
                 push_status = "skipped"
             else:
+                from src.im.delivery import DeliveryService, DeliveryRequest, get_delivery_service
                 from src.im.targets import bound_push_targets
                 bound = bound_push_targets()
                 if not bound:
-                    self._outbox.update_push_result(nid, "ilink", "skipped", "未绑定任何推送渠道")
+                    self._outbox.update_push_result(nid, "", "skipped", "未绑定任何推送渠道")
                     push_status = "skipped"
                 else:
                     fmt_target = bound[0]
-                    msg = f"⏰ {job_name}\n\n{text}"
-                    from src.im.delivery import DeliveryRequest, get_delivery_service
+                    msg = DeliveryService.format_text("", f"⏰ {job_name}", text)
                     result = get_delivery_service().send_text(DeliveryRequest(
                         platform=fmt_target, text=msg, source_type="cron",
                         source_id=str(nid), outbox_id=nid, task_id=task_center_id or 0,
@@ -295,7 +295,8 @@ class CronScheduler:
                     ok = result.get("success", False)
                     err = result.get("error", "") if not ok else ""
                     self._outbox.update_push_result(
-                        nid, fmt_target, "success" if ok else "failed", err)
+                        nid, DeliveryService.outbox_channel(result, bound),
+                        "success" if ok else "failed", err)
                     push_status = "success" if ok else "failed"
                     logger.info("[CRON] 推送 %s: %s", "成功" if ok else "失败", job_name)
             # 同步更新 TaskCenter 推送状态

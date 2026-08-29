@@ -621,15 +621,15 @@ class DigestScheduler:
             from src.im.targets import bound_push_targets
             bound = bound_push_targets()
             if not bound:
-                self._outbox.update_push_result(nid, "ilink", "skipped", "未绑定任何推送渠道")
+                self._outbox.update_push_result(nid, "", "skipped", "未绑定任何推送渠道")
                 self._tc_push_result(task_id, "skipped", "未绑定任何推送渠道")
             else:
                 push_data = _json.loads(content) if isinstance(content, str) else content
                 push_text = push_data.get("display", content)
-                # Use the first bound channel only for formatting; the delivery
-                # service fans the notification out to every bound channel.
+                # All bound channels use the same product-wide WeChat/iLink
+                # text format; it is not selected by the first bound channel.
                 fmt_target = bound[0]
-                push_msg = DeliveryService.format_text(fmt_target, title, push_text)
+                push_msg = DeliveryService.format_text("", title, push_text)
                 result = get_delivery_service().send_text(DeliveryRequest(
                     platform=fmt_target,
                     text=push_msg,
@@ -643,7 +643,8 @@ class DigestScheduler:
                 push_ok = result.get("success", False)
                 push_err = result.get("error", "") if not push_ok else ""
                 self._outbox.update_push_result(
-                    nid, fmt_target, "success" if push_ok else "failed", push_err,
+                    nid, DeliveryService.outbox_channel(push_result, bound),
+                    "success" if push_ok else "failed", push_err,
                 )
                 self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
                 logger.info("Digest IM push %s for '%s'", "succeeded" if push_ok else "failed", dg.group_name)
@@ -660,7 +661,7 @@ class DigestScheduler:
         except Exception as e:
             logger.warning("Digest IM push error for '%s': %s", dg.group_name, e)
             try:
-                self._outbox.update_push_result(nid, "ilink", "failed", str(e))
+                self._outbox.update_push_result(nid, "", "failed", str(e))
             except Exception:
                 pass
 
@@ -812,15 +813,15 @@ class DigestScheduler:
             from src.im.targets import bound_push_targets
             bound = bound_push_targets()
             if not bound:
-                self._outbox.update_push_result(nid, "ilink", "skipped", "未绑定任何推送渠道")
+                self._outbox.update_push_result(nid, "", "skipped", "未绑定任何推送渠道")
                 self._tc_push_result(task_id, "skipped", "未绑定任何推送渠道")
             else:
                 push_data = _json.loads(content) if isinstance(content, str) else content
                 push_text = push_data.get("display", content)
-                # Use the first bound channel only for formatting; the delivery
-                # service fans the notification out to every bound channel.
+                # All bound channels use the same product-wide WeChat/iLink
+                # text format; it is not selected by the first bound channel.
                 fmt_target = bound[0]
-                msg = DeliveryService.format_text(fmt_target, title, push_text)
+                msg = DeliveryService.format_text("", title, push_text)
                 push_result = get_delivery_service().send_text(DeliveryRequest(
                     platform=fmt_target,
                     text=msg,
@@ -834,7 +835,8 @@ class DigestScheduler:
                 push_ok = push_result.get("success", False)
                 push_err = push_result.get("error", "") if not push_ok else ""
                 self._outbox.update_push_result(
-                    nid, fmt_target, "success" if push_ok else "failed", push_err,
+                    nid, DeliveryService.outbox_channel(push_result, bound),
+                    "success" if push_ok else "failed", push_err,
                 )
                 self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
                 logger.info("[OA-DIGEST] IM push %s for '%s'", "succeeded" if push_ok else "failed", oa.name)
@@ -849,7 +851,7 @@ class DigestScheduler:
         except Exception as e:
             logger.warning("[OA-DIGEST] IM push error for '%s': %s", oa.name, e)
             try:
-                self._outbox.update_push_result(nid, "ilink", "failed", str(e))
+                self._outbox.update_push_result(nid, "", "failed", str(e))
             except Exception:
                 pass
 
@@ -954,7 +956,7 @@ class DigestScheduler:
             bound = bound_push_targets()
             if bound:
                 fmt_target = bound[0]
-                msg = DeliveryService.format_text(fmt_target, title, display)
+                msg = DeliveryService.format_text("", title, display)
                 result = get_delivery_service().send_text(DeliveryRequest(
                     platform=fmt_target, text=msg, source_type="oa_digest_failure",
                     source_id=str(failure_nid or task_id or ""),
@@ -967,7 +969,7 @@ class DigestScheduler:
                 push_err = result.get("error", "") if not push_ok else ""
                 if failure_nid:
                     self._outbox.update_push_result(
-                        failure_nid, fmt_target,
+                        failure_nid, DeliveryService.outbox_channel(result, bound),
                         "success" if push_ok else "failed", push_err,
                     )
                 if task_id and self._task_center:
@@ -978,7 +980,7 @@ class DigestScheduler:
             else:
                 if failure_nid:
                     self._outbox.update_push_result(
-                        failure_nid, "ilink", "skipped", "未绑定任何推送渠道",
+                        failure_nid, "", "skipped", "未绑定任何推送渠道",
                     )
                 if task_id and self._task_center:
                     self._tc_push_result(
