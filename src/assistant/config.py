@@ -118,6 +118,7 @@ class SchedulerTask:
 class AssistantConfig:
     version: int = 1
     assistant_enabled: bool = False
+    rag_enabled: bool = False
     alert_groups: list[AlertGroup] = field(default_factory=list)
     oa_monitor_groups: list[OAMonitorGroup] = field(default_factory=list)
     digest_groups: list[DigestGroup] = field(default_factory=list)
@@ -133,6 +134,7 @@ def _default_config() -> AssistantConfig:
     return AssistantConfig(
         version=1,
         assistant_enabled=False,
+        rag_enabled=False,
         notification_queue=NotificationQueue(enabled=True, retention_hours=24),
     )
 
@@ -145,6 +147,7 @@ def _config_to_dict(cfg: AssistantConfig) -> dict:
     result = {
         "version": cfg.version,
         "assistant_enabled": cfg.assistant_enabled,
+        "rag_enabled": cfg.rag_enabled,
         "alert_groups": [],
         "oa_monitor_groups": [],
         "digest_groups": [],
@@ -315,6 +318,7 @@ def _dict_to_config(data: dict) -> AssistantConfig:
     cfg = AssistantConfig(
         version=data.get("version", 1),
         assistant_enabled=data.get("assistant_enabled", False),
+        rag_enabled=data.get("rag_enabled", False),
         notification_queue=_queue_from_legacy(data),
         fav_export=fav_export,
     )

@@ -28,6 +28,7 @@ class TestAssistantConfig(unittest.TestCase):
     def test_default_config(self):
         cfg = config_mod.load_assistant_config()
         self.assertFalse(cfg.assistant_enabled)
+        self.assertFalse(cfg.rag_enabled)
         self.assertEqual(cfg.version, 1)
         self.assertEqual(cfg.alert_groups, [])
         self.assertEqual(cfg.digest_groups, [])
@@ -35,6 +36,7 @@ class TestAssistantConfig(unittest.TestCase):
     def test_save_and_load(self):
         cfg = config_mod.load_assistant_config()
         cfg.assistant_enabled = True
+        cfg.rag_enabled = True
         cfg.alert_groups.append(config_mod.AlertGroup(
             group_name="测试群",
             keywords=["派单", "急"],
@@ -44,6 +46,7 @@ class TestAssistantConfig(unittest.TestCase):
 
         cfg2 = config_mod.load_assistant_config()
         self.assertTrue(cfg2.assistant_enabled)
+        self.assertTrue(cfg2.rag_enabled)
         self.assertEqual(len(cfg2.alert_groups), 1)
         self.assertEqual(cfg2.alert_groups[0].group_name, "测试群")
         self.assertEqual(cfg2.alert_groups[0].keywords, ["派单", "急"])

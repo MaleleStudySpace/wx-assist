@@ -573,49 +573,66 @@ class Bot:
 
             # ── RAG Engine (optional, zero impact on failure) ──
             rag_engine = None
-            try:
-                import importlib
-                _rag_mod = importlib.import_module('src.assistant.rag')
-                RAGEngine = _rag_mod.RAGEngine
-                FastEmbedder = _rag_mod.FastEmbedder
-                ChromaStore = _rag_mod.ChromaStore
-                SlidingWindowChunker = _rag_mod.SlidingWindowChunker
-
-                embedder = FastEmbedder()
-                vec_store = ChromaStore(path="data/chroma")
-                chunker = SlidingWindowChunker()
-                rag_engine = RAGEngine(store=vec_store, embedder=embedder, chunker=chunker)
-                rag_engine.warmup()
-
-                # Inject into Router（用于实时索引）和 ToolExecutor（用于搜索工具）
-                router.set_rag(rag_engine)
-                tool_executor.set_rag(rag_engine)
-
-                # Register global (for OA Monitor to trigger re-index)
+            if not asst_cfg.rag_enabled:
+                logger.info("[RAG] 已通过配置禁用，跳过 RAG 初始化")
+                router.set_rag(None)
+                tool_executor.set_rag(None)
                 try:
                     from src.web.server import register_rag_engine
-                    register_rag_engine(rag_engine)
+                    register_rag_engine(None)
                 except Exception as e:
-                    logger.debug("register_rag_engine 失败: %s", e)
+                    logger.debug("register_rag_engine 清理失败: %s", e)
+            else:
+                try:
+                    import importlib
+                    _rag_mod = importlib.import_module('src.assistant.rag')
+                    RAGEngine = _rag_mod.RAGEngine
+                    FastEmbedder = _rag_mod.FastEmbedder
+                    ChromaStore = _rag_mod.ChromaStore
+                    SlidingWindowChunker = _rag_mod.SlidingWindowChunker
 
-                logger.info("[RAG] RAGEngine initialized and injected")
+                    embedder = FastEmbedder()
+                    vec_store = ChromaStore(path="data/chroma")
+                    chunker = SlidingWindowChunker()
+                    rag_engine = RAGEngine(store=vec_store, embedder=embedder, chunker=chunker)
+                    rag_engine.warmup()
 
-                # ── Cold start (background thread) ──
-                def _cold_start_task():
+                    # Inject into Router（用于实时索引）和 ToolExecutor（用于搜索工具）
+                    router.set_rag(rag_engine)
+                    tool_executor.set_rag(rag_engine)
+
+                    # Register global (for OA Monitor to trigger re-index)
                     try:
-                        db_conn = self._conn
-                        rag_engine.cold_start(db_conn, tracked_groups=None)
+                        from src.web.server import register_rag_engine
+                        register_rag_engine(rag_engine)
                     except Exception as e:
-                        # 冷启动失败 → RAG 搜索静默退化且无任何日志，
-                        # 用户会以为"语义检索就是找不到"。必须告警。
-                        logger.warning("[RAG] cold start failed: %s", e)
+                        logger.debug("register_rag_engine 失败: %s", e)
 
-                threading.Thread(target=_cold_start_task, daemon=True,
-                                 name="rag-cold-start").start()
+                    logger.info("[RAG] RAGEngine initialized and injected")
 
-            except Exception as rag_e:
-                logger.warning("[RAG] RAGEngine init failed (continuing without): %s", rag_e)
-                rag_engine = None
+                    # ── Cold start (background thread) ──
+                    def _cold_start_task():
+                        try:
+                            db_conn = self._conn
+                            rag_engine.cold_start(db_conn, tracked_groups=None)
+                        except Exception as e:
+                            # 冷启动失败 → RAG 搜索静默退化且无任何日志，
+                            # 用户会以为"语义检索就是找不到"。必须告警。
+                            logger.warning("[RAG] cold start failed: %s", e)
+
+                    threading.Thread(target=_cold_start_task, daemon=True,
+                                     name="rag-cold-start").start()
+
+                except Exception as rag_e:
+                    logger.warning("[RAG] RAGEngine init failed (continuing without): %s", rag_e)
+                    rag_engine = None
+                    router.set_rag(None)
+                    tool_executor.set_rag(None)
+                    try:
+                        from src.web.server import register_rag_engine
+                        register_rag_engine(None)
+                    except Exception as e:
+                        logger.debug("register_rag_engine 清理失败: %s", e)
 
             # ── Cache sync: 后台全量同步 + 定时增量循环（独立于 RAG）──
             if content_cache:

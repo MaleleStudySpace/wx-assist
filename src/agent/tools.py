@@ -1119,7 +1119,7 @@ class ToolExecutor:
                                      top_k: int = 5) -> str:
         """语义搜索聊天记录，返回带群名的结果。"""
         if not self._rag:
-            return "搜索服务未就绪（RAG 引擎未初始化）。"
+            return "RAG功能已关闭，请在系统配置中启动；"
 
         try:
             results = self._rag.search(query=query, top_k=20, final_k=top_k)
@@ -1167,7 +1167,7 @@ class ToolExecutor:
                                     top_k: int = 5) -> str:
         """语义搜索公众号文章。"""
         if not self._rag:
-            return "搜索服务未就绪（RAG 引擎未初始化）。"
+            return "RAG功能已关闭，请在系统配置中启动；"
         try:
             results = self._rag.search(
                 query=query, top_k=top_k * 4, final_k=top_k,
@@ -1198,7 +1198,7 @@ class ToolExecutor:
                                 top_k: int = 5) -> str:
         """语义搜索朋友圈。"""
         if not self._rag:
-            return "搜索服务未就绪（RAG 引擎未初始化）。"
+            return "RAG功能已关闭，请在系统配置中启动；"
         try:
             results = self._rag.search(
                 query=query, top_k=top_k * 4, final_k=top_k,
@@ -1227,7 +1227,7 @@ class ToolExecutor:
                                   top_k: int = 5) -> str:
         """语义搜索收藏。"""
         if not self._rag:
-            return "搜索服务未就绪（RAG 引擎未初始化）。"
+            return "RAG功能已关闭，请在系统配置中启动；"
         try:
             results = self._rag.search(
                 query=query, top_k=top_k * 4, final_k=top_k,

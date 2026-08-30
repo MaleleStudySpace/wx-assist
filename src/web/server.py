@@ -800,6 +800,16 @@ def register_content_cache(cc):
     _content_cache = cc
 
 
+def _load_rag_enabled() -> bool:
+    """Read the persisted RAG switch without affecting .env configuration."""
+    try:
+        from src.assistant.config import load_assistant_config
+        return bool(load_assistant_config().rag_enabled)
+    except Exception as e:
+        logger.warning("Failed to load RAG switch, defaulting to disabled: %s", e)
+        return False
+
+
 _rag_engine = None
 
 def register_rag_engine(re):
@@ -1629,6 +1639,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "ai_provider_type": raw.get("AI_PROVIDER_TYPE", "auto"),
                     "ai_provider_model": raw.get("AI_PROVIDER_MODEL", ""),
                     "ai_provider_extra_body": raw.get("AI_PROVIDER_EXTRA_BODY", ""),
+                    "rag_enabled": _load_rag_enabled(),
                     "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                     "memory_consolidation_enabled": raw.get("MEMORY_CONSOLIDATION_ENABLED", "false").lower() == "true",
                     "log_level": raw.get("LOG_LEVEL", "INFO"),
@@ -1646,6 +1657,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/config/export":
             from datetime import date as _dt_date
             try:
+                from src.assistant.config import load_assistant_config
+                assistant_config = load_assistant_config()
                 env_path = _find_or_create_env()
                 raw = {}
                 if env_path.exists():
@@ -1659,6 +1672,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "ai_provider_api_key": raw.get("AI_PROVIDER_API_KEY", ""),
                     "ai_provider_type": raw.get("AI_PROVIDER_TYPE", "auto"),
                     "ai_provider_model": raw.get("AI_PROVIDER_MODEL", ""),
+                    "rag_enabled": assistant_config.rag_enabled,
                     "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                     "memory_consolidation_enabled": raw.get("MEMORY_CONSOLIDATION_ENABLED", "false").lower() == "true",
                     "log_level": raw.get("LOG_LEVEL", "INFO"),
@@ -1684,6 +1698,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
             body = self.rfile.read(content_len) if content_len else b"{}"
             try:
                 config = json.loads(body)
+                if "rag_enabled" in config:
+                    from src.assistant.config import load_assistant_config, save_assistant_config
+                    rag_config = load_assistant_config()
+                    rag_config.rag_enabled = bool(config["rag_enabled"])
+                    save_assistant_config(rag_config)
                 env_path = _find_or_create_env()
                 if env_path.exists():
                     lines = env_path.read_text(encoding="utf-8").splitlines()
@@ -2897,6 +2916,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     # Merge: update fields from body
                     if "assistant_enabled" in body:
                         existing.assistant_enabled = bool(body["assistant_enabled"])
+                    if "rag_enabled" in body:
+                        existing.rag_enabled = bool(body["rag_enabled"])
                     if "alert_groups" in body:
                         existing.alert_groups = _dict_to_config({"alert_groups": body["alert_groups"]}).alert_groups
                     if "oa_monitor_groups" in body:

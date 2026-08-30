@@ -399,6 +399,26 @@ function ParamRow({ label, hint, children }) {
 function FeaturesSection({ form, update }) {
   return (
     <div>
+      {/* ── RAG ── */}
+      <div className="pt-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <p className="text-[14px] text-text-main font-medium">启用 RAG 语义搜索</p>
+            <div className="relative group">
+              <Info size={15} className="text-text-muted cursor-help" />
+              <div className="hidden group-hover:block absolute left-1/2 top-full -translate-x-1/2 mt-2 w-72 p-3 rounded-lg bg-bg-card border border-border-main shadow-xl text-xs text-text-muted leading-relaxed z-50">
+                开启后支持聊天、收藏、朋友圈、公众号文章语义搜索。<br /><br />
+                首次 RAG 冷启动会大量占用计算机资源，可能会造成 5-30 分钟系统卡顿。取决于数据量大小
+              </div>
+            </div>
+          </div>
+          <Toggle
+            enabled={Boolean(form.rag_enabled)}
+            onChange={v => update('rag_enabled', v)}
+          />
+        </div>
+      </div>
+
       {/* ── Log Level ── */}
       <div className="pt-4">
         <Field label="日志级别" hint="记录机器人运行日志的详细程度">
@@ -2272,7 +2292,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
   }
   const [form, setForm] = useState({
     ai_provider_base_url: '', ai_provider_api_key: '',
-    ai_provider_type: 'auto', ai_provider_model: '',
+    ai_provider_type: 'auto', ai_provider_model: '', rag_enabled: false,
     wechat_backend: 'wcdb', wechat_groups: '*',
     log_level: 'INFO', wechat_data_dir: '',
     wxid: '', db_path: '', has_key: false, key_preview: '', wcdb_key: '',
@@ -2371,6 +2391,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
       ai_provider_type: form.ai_provider_type,
       ai_provider_model: form.ai_provider_model,
       ai_provider_extra_body: form.ai_provider_extra_body || '',
+      rag_enabled: Boolean(form.rag_enabled),
       wechat_backend: form.wechat_backend,
       wechat_groups: form.wechat_groups,
       log_level: form.log_level,
