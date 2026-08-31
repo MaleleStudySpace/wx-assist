@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS task_center (
     error           TEXT DEFAULT '',         -- failure reason
     articles_count  INTEGER DEFAULT 0,
     msg_count       INTEGER DEFAULT 0,
-    push_status     TEXT DEFAULT '',         -- '' | 'pending_push' | 'success' | 'failed'
+    push_status     TEXT DEFAULT '',         -- '' | 'pending_push' | 'success' | 'partial' | 'failed'
     push_error      TEXT DEFAULT '',
     outbox_id       INTEGER DEFAULT 0,       -- 关联 outbox 记录（重推时取完整推送内容）
     created_at      TEXT NOT NULL,
@@ -77,9 +77,8 @@ class TaskCenter:
         try:
             with sqlite3.connect(str(self._db_path)) as conn:
                 conn.executescript(BASE_SCHEMA)
-                # Schema migration: add config column if missing
-                cols = {row[1] for row in conn.execute("PRAGMA table_info(task_center)").fetchall()}
                 # Schema migration: add columns if missing
+                cols = {row[1] for row in conn.execute("PRAGMA table_info(task_center)").fetchall()}
                 for col_name, alter_sql in (
                     ("config", "ALTER TABLE task_center ADD COLUMN config TEXT DEFAULT ''"),
                     ("outbox_id", "ALTER TABLE task_center ADD COLUMN outbox_id INTEGER DEFAULT 0"),
@@ -313,6 +312,7 @@ class TaskCenter:
                     "FROM task_center "
                     "WHERE created_at >= ? AND "
                     "(push_status = 'failed' OR "
+                    " push_status = 'partial' OR "
                     " (task_type = 'oa_article_alert' AND status = 'failed')) "
                     "ORDER BY created_at ASC",
                     (cutoff,),
@@ -360,7 +360,7 @@ class TaskCenter:
                     local_since = _iso_to_local_str(since) or since
                     row = conn.execute(
                         "SELECT COUNT(*) FROM task_center "
-                        "WHERE (status='failed' OR push_status='failed') "
+                    "WHERE (status='failed' OR push_status='failed') "
                         "AND created_at > ?",
                         (local_since,),
                     ).fetchone()

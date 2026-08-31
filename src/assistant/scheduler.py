@@ -643,7 +643,7 @@ class DigestScheduler:
                 push_ok = result.get("success", False)
                 push_err = result.get("error", "") if not push_ok else ""
                 self._outbox.update_push_result(
-                    nid, DeliveryService.outbox_channel(push_result, bound),
+                    nid, DeliveryService.outbox_channel(result, bound),
                     "success" if push_ok else "failed", push_err,
                 )
                 self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
