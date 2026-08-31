@@ -1,6 +1,6 @@
 ﻿import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle, Warning, FloppyDisk, Info, DownloadSimple, UploadSimple, CircleNotch, MagnifyingGlass, Lightning, PaperPlaneTilt, QrCode, SignOut, TestTube, ChatCircle, Trash, CaretDown, CaretRight, X } from '@phosphor-icons/react'
+import { CheckCircle, Warning, FloppyDisk, Info, CircleNotch, MagnifyingGlass, Lightning, PaperPlaneTilt, QrCode, SignOut, TestTube, ChatCircle, Trash, CaretDown, CaretRight, X } from '@phosphor-icons/react'
 import { QRCodeSVG } from 'qrcode.react'
 import { spring, Field, Toggle, Select, Input, API_BASE, getWsUrl } from './SharedComponents'
 import ChatDrawer from './ChatDrawer'
@@ -396,46 +396,33 @@ function ParamRow({ label, hint, children }) {
   )
 }
 
-function FeaturesSection({ form, update }) {
+function RagToggleRow({ form, update }) {
   return (
-    <div>
-      {/* ── RAG ── */}
-      <div className="pt-4">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <p className="text-[14px] text-text-main font-medium">启用 RAG 语义搜索</p>
-            <div className="relative group">
-              <Info size={15} className="text-text-muted cursor-help" />
-              <div className="hidden group-hover:block absolute left-1/2 top-full -translate-x-1/2 mt-2 w-72 p-3 rounded-lg bg-bg-card border border-border-main shadow-xl text-xs text-text-muted leading-relaxed z-50">
-                开启后支持聊天、收藏、朋友圈、公众号文章语义搜索。<br /><br />
-                首次 RAG 冷启动会大量占用计算机资源，可能会造成 5-30 分钟系统卡顿。取决于数据量大小
-              </div>
+    <div className="pt-4">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <p className="text-[14px] text-text-main font-medium">启用 RAG 语义搜索</p>
+          <div className="relative group">
+            <Info size={15} className="text-text-muted cursor-help" />
+            <div className="hidden group-hover:block absolute left-1/2 top-full -translate-x-1/2 mt-2 w-72 p-3 rounded-lg bg-bg-card border border-border-main shadow-xl text-xs text-text-muted leading-relaxed z-50">
+              <div>开启后支持聊天、收藏、朋友圈、公众号文章语义搜索。</div>
+              <div className="mt-2">首次 RAG 冷启动会大量占用计算机资源，</div>
+              <div>可能会造成 5-30 分钟系统卡顿。</div>
+              <div>取决于数据量大小</div>
             </div>
           </div>
-          <Toggle
-            enabled={Boolean(form.rag_enabled)}
-            onChange={v => update('rag_enabled', v)}
-          />
         </div>
-      </div>
-
-      {/* ── Log Level ── */}
-      <div className="pt-4">
-        <Field label="日志级别" hint="记录机器人运行日志的详细程度">
-          <Select value={form.log_level} onChange={v => update('log_level', v)} options={[
-            { value: 'DEBUG', desc: '调试信息', hint: '排查故障时使用' },
-            { value: 'INFO', desc: '常规信息', hint: '日常使用（推荐）' },
-            { value: 'WARNING', desc: '仅警告', hint: '长期稳定运行时使用' },
-            { value: 'ERROR', desc: '仅错误', hint: '只关心故障时使用' },
-          ]} />
-        </Field>
+        <Toggle
+          enabled={Boolean(form.rag_enabled)}
+          onChange={v => update('rag_enabled', v)}
+        />
       </div>
     </div>
   )
 }
 
-const sectionTitles = { ai: 'AI 后端配置', identity: '聊天范围', data: '数据配置', features: '功能开关', push: '消息推送', sandbox: 'AI 调试台' }
-const sectionAccents = { ai: 'var(--brand-green)', identity: 'var(--status-info)', data: 'var(--brand-green)', features: 'var(--status-warn)', push: 'var(--brand-green)', sandbox: 'var(--color-purple-500, #8b5cf6)' }
+const sectionTitles = { ai: 'AI 后端配置', identity: '聊天范围', data: '系统配置', push: '消息推送', sandbox: 'AI 调试台' }
+const sectionAccents = { ai: 'var(--brand-green)', identity: 'var(--status-info)', data: 'var(--brand-green)', push: 'var(--brand-green)', sandbox: 'var(--color-purple-500, #8b5cf6)' }
 
 // ── Credentials Section (连接凭证配置) ─────────────────────────────────
 
@@ -2242,7 +2229,6 @@ function PushPlatformView() {
 export default function ConfigPanel({ activeSection, onNavigate }) {
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState('')
-  const [importSuccess, setImportSuccess] = useState(false)
   const [loaded, setLoaded] = useState(false)
 
   // ── Sandbox drawer state ──
@@ -2294,66 +2280,9 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
     ai_provider_base_url: '', ai_provider_api_key: '',
     ai_provider_type: 'auto', ai_provider_model: '', rag_enabled: false,
     wechat_backend: 'wcdb', wechat_groups: '*',
-    log_level: 'INFO', wechat_data_dir: '',
+    wechat_data_dir: '',
     wxid: '', db_path: '', has_key: false, key_preview: '', wcdb_key: '',
   })
-
-  async function handleExportConfig() {
-    try {
-      const res = await fetch(`${API_BASE}/api/config/export`)
-      if (!res.ok) throw new Error('导出请求失败')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const downloadAnchor = document.createElement('a')
-      downloadAnchor.setAttribute("href", url)
-      downloadAnchor.setAttribute("download", `wx-assist-config-${new Date().toISOString().slice(0, 10)}.json`)
-      document.body.appendChild(downloadAnchor)
-      downloadAnchor.click()
-      downloadAnchor.remove()
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      setSaveError('导出失败：' + e.message)
-      setTimeout(() => setSaveError(''), 5000)
-    }
-  }
-
-  async function handleImportConfig(e) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = async (event) => {
-      try {
-        const parsed = JSON.parse(event.target.result)
-        const expectedKeys = ['ai_provider_base_url', 'wechat_backend']
-        const hasKeys = expectedKeys.some(k => k in parsed)
-        if (!hasKeys) {
-          throw new Error('无效的配置文件格式')
-        }
-        // Update local form state immediately for UI feedback
-        setForm(prev => ({ ...prev, ...parsed }))
-        // Persist to server
-        const res = await fetch(`${API_BASE}/api/config/import`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(parsed),
-        })
-        const data = await res.json()
-        if (data.ok) {
-          setImportSuccess(true)
-          setSaved(false)
-          setSaveError('')
-          setTimeout(() => setImportSuccess(false), 5000)
-        } else {
-          throw new Error(data.error || '写入失败')
-        }
-      } catch (err) {
-        setSaveError('导入失败：' + err.message)
-        setTimeout(() => setSaveError(''), 5000)
-      }
-    }
-    reader.readAsText(file)
-    e.target.value = ''
-  }
 
   // Detected default data dir (auto-detected, shown as placeholder)
   const [detectedDataDir, setDetectedDataDir] = useState('')
@@ -2394,7 +2323,6 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
       rag_enabled: Boolean(form.rag_enabled),
       wechat_backend: form.wechat_backend,
       wechat_groups: form.wechat_groups,
-      log_level: form.log_level,
       wechat_data_dir: form.wechat_data_dir,
       wxid: form.wxid,
       db_path: form.db_path,
@@ -2438,17 +2366,6 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
             <span>配置已保存。需要重启机器人才能生效。</span>
           </motion.div>
         )}
-        {importSuccess && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="mb-4 flex items-center gap-2 px-5 py-2.5 bg-brand-green-light border border-brand-green/20 rounded-full text-sm text-brand-green-hover dark:text-brand-green font-medium shadow-sm"
-          >
-            <CheckCircle size={18} weight="fill" className="text-brand-green-hover dark:text-brand-green" />
-            <span>备份配置导入成功！请确认无误后，点击"保存配置"。</span>
-          </motion.div>
-        )}
         {saveError && (
           <motion.div
             initial={{ opacity: 0, y: -8 }}
@@ -2477,9 +2394,9 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
                   <div className="space-y-4">
                     <CredentialsSection form={form} update={update} />
                     <DataPathSection form={form} update={update} detectedDataDir={detectedDataDir} />
+                    <RagToggleRow form={form} update={update} />
                   </div>
                 )}
-                {activeSection === 'features' && <FeaturesSection form={form} update={update} />}
                 {activeSection === 'push' && <PushPlatformView />}
               </div>
             </div>
@@ -2517,33 +2434,6 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
                 保存将应用所有模块的修改，重启后生效
               </span>
             )}
-          </div>
-
-          {/* Config Backup & Restore Card */}
-          <div className="mt-12 pt-6 border-t border-border-main/50">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-bg-card/40 border border-border-main rounded-2xl p-5">
-              <div>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-text-muted">配置备份与导入</h4>
-                <p className="text-xs text-text-muted mt-1">导出当前的机器人配置为 JSON 文件，或上传 JSON 备份恢复配置</p>
-              </div>
-              <div className="flex items-center gap-2.5">
-                <button
-                  onClick={handleExportConfig}
-                  className="px-4 py-2 rounded-full border border-border-main bg-bg-main text-text-main text-xs font-semibold hover:border-text-muted/30 hover:bg-bg-raised transition-all cursor-pointer flex items-center gap-1.5"
-                >
-                  <DownloadSimple size={14} /> 导出备份
-                </button>
-                <label className="px-4 py-2 rounded-full border border-border-main bg-bg-main text-text-main text-xs font-semibold hover:border-text-muted/30 hover:bg-bg-raised transition-all cursor-pointer flex items-center gap-1.5">
-                  <UploadSimple size={14} /> 导入恢复
-                  <input
-                    type="file"
-                    accept=".json"
-                    onChange={handleImportConfig}
-                    className="hidden"
-                  />
-                </label>
-              </div>
-            </div>
           </div>
         </>
       )}
