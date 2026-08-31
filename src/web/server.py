@@ -565,8 +565,10 @@ class _ServerStatus:
         "wechat_online", "ai_ok", "ai_verified", "model_name", "group_count",
         "last_api_call_sec_ago", "last_api_call_time",
         "timestamp", "error", "avatar_url", "wx_name",
-        "restricted_features_enabled", "rag_ok", "mcp_servers", "im_channels",
+        "restricted_features_enabled", "rag_available", "rag_enabled", "rag_ok", "mcp_servers", "im_channels",
     )
+
+    _RAG_AVAILABLE = None  # memoized capability check for the running build
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -587,6 +589,8 @@ class _ServerStatus:
         self.avatar_url = ""
         self.wx_name = ""
         self.restricted_features_enabled = False
+        self.rag_available = _resolve_rag_availability()
+        self.rag_enabled = _load_rag_enabled()
         self.rag_ok = False
         self.mcp_servers = "{}"
         self.im_channels = {}
@@ -808,6 +812,28 @@ def _load_rag_enabled() -> bool:
     except Exception as e:
         logger.warning("Failed to load RAG switch, defaulting to disabled: %s", e)
         return False
+
+
+def _resolve_rag_availability() -> bool:
+    """Detect whether the current build ships the RAG capability.
+
+    Uses importlib.util.find_spec to check for the RAG subpackage and its
+    native dependencies without actually importing or initialising them. This
+    is safe to call on the no_rag build (it just returns False) and on the
+    full build (it returns True without loading ONNX / ChromaDB into memory).
+    """
+    if _ServerStatus._RAG_AVAILABLE is not None:
+        return _ServerStatus._RAG_AVAILABLE
+    import importlib.util
+    required = (
+        "src.assistant.rag",
+        "fastembed",
+        "chromadb",
+        "onnxruntime",
+    )
+    available = all(importlib.util.find_spec(name) is not None for name in required)
+    _ServerStatus._RAG_AVAILABLE = available
+    return available
 
 
 _rag_engine = None
@@ -1703,6 +1729,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     rag_config = load_assistant_config()
                     rag_config.rag_enabled = bool(config["rag_enabled"])
                     save_assistant_config(rag_config)
+                    update_status(rag_enabled=rag_config.rag_enabled)
                 env_path = _find_or_create_env()
                 if env_path.exists():
                     lines = env_path.read_text(encoding="utf-8").splitlines()
@@ -2918,6 +2945,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         existing.assistant_enabled = bool(body["assistant_enabled"])
                     if "rag_enabled" in body:
                         existing.rag_enabled = bool(body["rag_enabled"])
+                        update_status(rag_enabled=existing.rag_enabled)
                     if "alert_groups" in body:
                         existing.alert_groups = _dict_to_config({"alert_groups": body["alert_groups"]}).alert_groups
                     if "oa_monitor_groups" in body:
