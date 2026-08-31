@@ -5946,7 +5946,7 @@ def _do_task_retry_push(task: dict) -> dict:
             broadcast_event("task_retry_platform", {
                 "task_id": task.get("id"), "platform": platform,
                 "label": label, "status": "success" if result.get("success") else "failed",
-                "error": result.get("error", ""),
+                "error": result.get("error", ""), "response": result.get("response", ""),
             })
         except Exception:
             pass

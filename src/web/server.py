@@ -545,7 +545,25 @@ def _macos_wechat_diagnostics(system_name=None, automation=None):
         }
 
 
-# ── Thread-safe server state classes ────────────────────────────────────
+def _load_rag_enabled() -> bool:
+    """Read the persisted RAG switch without affecting .env configuration."""
+    try:
+        from src.assistant.config import load_assistant_config
+        return bool(load_assistant_config().rag_enabled)
+    except Exception as e:
+        logger.warning("Failed to load RAG switch, defaulting to disabled: %s", e)
+        return False
+
+
+def _resolve_rag_availability() -> bool:
+    """Detect whether the current build ships the RAG capability."""
+    if _ServerStatus._RAG_AVAILABLE is not None:
+        return _ServerStatus._RAG_AVAILABLE
+    import importlib.util
+    required = ("src.assistant.rag", "fastembed", "chromadb", "onnxruntime")
+    available = all(importlib.util.find_spec(name) is not None for name in required)
+    _ServerStatus._RAG_AVAILABLE = available
+    return available
 
 
 class _ServerStatus:
@@ -802,38 +820,6 @@ def register_content_cache(cc):
     """Register the ContentCache so API handlers can do cache-first reads."""
     global _content_cache
     _content_cache = cc
-
-
-def _load_rag_enabled() -> bool:
-    """Read the persisted RAG switch without affecting .env configuration."""
-    try:
-        from src.assistant.config import load_assistant_config
-        return bool(load_assistant_config().rag_enabled)
-    except Exception as e:
-        logger.warning("Failed to load RAG switch, defaulting to disabled: %s", e)
-        return False
-
-
-def _resolve_rag_availability() -> bool:
-    """Detect whether the current build ships the RAG capability.
-
-    Uses importlib.util.find_spec to check for the RAG subpackage and its
-    native dependencies without actually importing or initialising them. This
-    is safe to call on the no_rag build (it just returns False) and on the
-    full build (it returns True without loading ONNX / ChromaDB into memory).
-    """
-    if _ServerStatus._RAG_AVAILABLE is not None:
-        return _ServerStatus._RAG_AVAILABLE
-    import importlib.util
-    required = (
-        "src.assistant.rag",
-        "fastembed",
-        "chromadb",
-        "onnxruntime",
-    )
-    available = all(importlib.util.find_spec(name) is not None for name in required)
-    _ServerStatus._RAG_AVAILABLE = available
-    return available
 
 
 _rag_engine = None

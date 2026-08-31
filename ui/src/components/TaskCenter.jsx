@@ -77,7 +77,25 @@ export default function TaskCenter({ open, onClose }) {
   // 单条重推：同步等待结果，成功或部分成功后任务按钮自然消失
   async function retryTask(taskId) {
     setRetryingIds(prev => ({ ...prev, [taskId]: true }))
-    setRetryFloating({ taskId, status: 'pushing', platforms: [], error: '' })
+    const platformList = Object.entries(platformLabels).map(([platform, label]) => ({
+      platform, label, status: 'pending', error: '', response: '',
+    }))
+    setRetryFloating({ taskId, status: 'pushing', platforms: platformList, error: '' })
+    // Refresh the checklist without blocking the retry request. A slow
+    // platform-status endpoint must never delay the actual retry.
+    fetch(`${API_BASE}/api/platforms`)
+      .then(res => res.json())
+      .then(platformData => {
+        const bound = (platformData.platforms || [])
+          .filter(p => p.name === 'wechat' ? p.status?.ok : p.config?.bound)
+          .map(p => p.name === 'wechat' ? 'ilink' : p.name)
+        if (bound.length) {
+          setRetryFloating(prev => prev?.taskId === taskId ? {
+            ...prev, platforms: platformList.filter(p => bound.includes(p.platform)),
+          } : prev)
+        }
+      })
+      .catch(() => {})
     try {
       const res = await fetch(`${API_BASE}/api/tasks/${taskId}/retry`, { method: 'POST' })
       const data = await res.json()
@@ -479,7 +497,7 @@ export default function TaskCenter({ open, onClose }) {
             </div>
             <div className="space-y-1.5">
               {retryFloating.platforms.length === 0 && retryFloating.status === 'pushing' && (
-                <div className="text-xs text-text-muted">正在获取推送平台...</div>
+                <div className="text-xs text-text-muted">暂无已绑定平台</div>
               )}
               {retryFloating.platforms.map((p, i) => {
                 const pushing = p.status === 'pushing'
