@@ -384,7 +384,7 @@ class ServerStatusTests(unittest.TestCase):
             "last_api_call_sec_ago", "last_api_call_time",
             "timestamp", "error", "avatar_url", "wx_name",
             "restricted_features_enabled",
-            "mcp_servers", "rag_ok", "im_channels",
+            "mcp_servers", "rag_available", "rag_enabled", "rag_ok", "im_channels",
         }
         self.assertEqual(set(snap.keys()), expected_fields)
 
@@ -1311,6 +1311,41 @@ class WebSocketHelperTests(unittest.TestCase):
         result = _read_ws_frame(mock_sock)
         self.assertEqual(result, b"hello")
 
+
+    def test_push_history_enriches_delivery_attempt_with_outbox_content(self):
+        from src.web import api_handlers
+
+        outbox = MagicMock()
+        outbox.get_notification.return_value = {
+            "type": "oa_article_alert",
+            "group_name": "科技公众号",
+            "title": "新文章",
+            "content": json.dumps({
+                "group": "科技公众号",
+                "article_title": "可读文章标题",
+                "digest": "文章摘要",
+                "url": "https://example.com/article",
+            }, ensure_ascii=False),
+            "url": "https://example.com/article",
+        }
+        delivery = MagicMock()
+        delivery.list_attempts.return_value = [{
+            "id": "attempt-1", "platform": "feishu", "channel": "feishu",
+            "status": "failed", "provider_error": "接口超时", "created_at": 1,
+            "source_type": "oa_article_alert", "outbox_id": 7,
+            "conversation_key": "gh_internal_id",
+        }]
+        with (
+            patch("src.assistant.outbox.Outbox", return_value=outbox),
+            patch("src.im.delivery.get_delivery_service", return_value=delivery),
+        ):
+            result = api_handlers.handle_push_history({}, MagicMock())
+
+        record = result["records"][0]
+        self.assertEqual(record["group_name"], "科技公众号")
+        self.assertIn("可读文章标题", record["content"])
+        self.assertEqual(record["url"], "https://example.com/article")
+        self.assertEqual(record["push_error"], "接口超时")
 
 if __name__ == "__main__":
     unittest.main()

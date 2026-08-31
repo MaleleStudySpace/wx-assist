@@ -1,6 +1,6 @@
 ﻿import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle, Warning, FloppyDisk, Info, CircleNotch, MagnifyingGlass, Lightning, PaperPlaneTilt, QrCode, SignOut, TestTube, ChatCircle, Trash, CaretDown, CaretRight, X } from '@phosphor-icons/react'
+import { CheckCircle, Warning, FloppyDisk, Info, CircleNotch, MagnifyingGlass, Lightning, PaperPlaneTilt, QrCode, SignOut, TestTube, ChatCircle, Trash, CaretDown, CaretRight, X, Brain } from '@phosphor-icons/react'
 import { QRCodeSVG } from 'qrcode.react'
 import { spring, Field, Toggle, Select, Input, API_BASE, getWsUrl } from './SharedComponents'
 import ChatDrawer from './ChatDrawer'
@@ -398,30 +398,35 @@ function ParamRow({ label, hint, children }) {
 
 function RagToggleRow({ form, update }) {
   return (
-    <div className="pt-4">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <p className="text-[14px] text-text-main font-medium">启用 RAG 语义搜索</p>
-          <div className="relative group">
-            <Info size={15} className="text-text-muted cursor-help" />
-            <div className="hidden group-hover:block absolute left-1/2 top-full -translate-x-1/2 mt-2 w-72 p-3 rounded-lg bg-bg-card border border-border-main shadow-xl text-xs text-text-muted leading-relaxed z-50">
-              <div>开启后支持聊天、收藏、朋友圈、公众号文章语义搜索。</div>
-              <div className="mt-2">首次 RAG 冷启动会大量占用计算机资源，</div>
-              <div>可能会造成 5-30 分钟系统卡顿。</div>
-              <div>取决于数据量大小</div>
+    <div className="rounded-2xl border border-brand-green/25 bg-brand-green/[0.045] p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-green/15 text-brand-green">
+            <Brain size={20} weight="duotone" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <p className="text-[15px] text-text-main font-semibold">启用 RAG 语义搜索</p>
+              <div className="relative group">
+                <Info size={15} className="text-text-muted cursor-help" />
+                <div className="hidden group-hover:block absolute left-1/2 top-full -translate-x-1/2 mt-2 w-72 p-3 rounded-lg bg-bg-card border border-border-main shadow-xl text-xs text-text-muted leading-relaxed z-50">
+                  <div>开启后支持聊天、收藏、朋友圈、公众号文章语义搜索。</div>
+                  <div className="mt-2">首次 RAG 冷启动会大量占用计算机资源，</div>
+                  <div>可能会造成 5-30 分钟系统卡顿。</div>
+                  <div>取决于数据量大小</div>
+                </div>
+              </div>
             </div>
+            <p className="mt-1 text-xs text-text-muted">建立本地语义索引，用自然语言查找历史内容</p>
           </div>
         </div>
-        <Toggle
-          enabled={Boolean(form.rag_enabled)}
-          onChange={v => update('rag_enabled', v)}
-        />
+        <Toggle enabled={Boolean(form.rag_enabled)} onChange={v => update('rag_enabled', v)} />
       </div>
     </div>
   )
 }
 
-const sectionTitles = { ai: 'AI 后端配置', identity: '聊天范围', data: '系统配置', push: '消息推送', sandbox: 'AI 调试台' }
+const sectionTitles = { ai: 'AI 后端配置', identity: '聊天范围', data: '数据配置', push: '消息推送', sandbox: 'AI 调试台' }
 const sectionAccents = { ai: 'var(--brand-green)', identity: 'var(--status-info)', data: 'var(--brand-green)', push: 'var(--brand-green)', sandbox: 'var(--color-purple-500, #8b5cf6)' }
 
 // ── Credentials Section (连接凭证配置) ─────────────────────────────────
@@ -1454,6 +1459,7 @@ function PushRecordCard({ record }) {
   const platformLabel = { wechat: '微信', qqbot: 'QQ', feishu: '飞书', ilink: '微信' }[record.platform || record.push_channel] || (record.platform || record.push_channel || '')
   const groupName = record.group_name || record.chat_id || ''
   const rawContent = record.content || ''
+  const fallbackContent = record.title || '原始推送内容不可用'
 
   // Format both ISO strings and numeric Unix timestamps without assuming a type.
   const rawTime = record.push_at ?? record.created_at
@@ -1512,7 +1518,7 @@ function PushRecordCard({ record }) {
   }
 
   // ── Expand/collapse logic ──
-  const mainContent = record.type === 'keyword_alert' ? kwBody : rawContent
+  const mainContent = record.type === 'keyword_alert' ? (kwBody || fallbackContent) : (rawContent || fallbackContent)
   const needsExpand = mainContent.length > 100
   const displayContent = expanded ? mainContent : (needsExpand ? mainContent.slice(0, 100) + '...' : mainContent)
 
@@ -1557,7 +1563,7 @@ function PushRecordCard({ record }) {
             return <div className="space-y-1"><div className="font-medium text-text-main/90">{parsed.group}</div><div className="bg-bg-inset rounded-lg p-2.5 border border-border-main/40 text-text-main/80 max-h-48 overflow-y-auto">{parsed.digest}</div><div className="text-text-muted">{parsed.articles_count ?? 0} 篇文章</div></div>
           }
           if (record.type === 'oa_article_alert') {
-            return <div className="space-y-1"><div className="font-medium text-text-main/90">{parsed.article_title || parsed.title}</div><div className="text-text-muted">{parsed.group}{parsed.time ? ' · ' + parsed.time : ''}</div>{parsed.digest && <div className="text-text-muted line-clamp-2">{parsed.digest}</div>}{parsed.url && <a href={parsed.url} target='_blank' className='text-brand-green hover:underline break-all inline-block mt-0.5'>{parsed.url}</a>}</div>
+            return <div className="space-y-1.5"><div className="text-[13px] font-semibold text-text-main/90">公众号：{parsed.group || groupName || '公众号名称未知'}</div><div className="font-medium text-text-main/90">文章：{parsed.article_title || parsed.title || '文章标题未知'}</div><div className="text-text-muted">{parsed.time ? '发布时间：' + parsed.time : ''}</div>{parsed.digest && <div className="bg-bg-inset rounded-lg p-2.5 border border-border-main/40 text-text-main/80 whitespace-pre-wrap">{parsed.digest}</div>}{parsed.url && <a href={parsed.url} target='_blank' rel='noreferrer' className='text-brand-green hover:underline break-all inline-block mt-0.5'>查看原文：{parsed.url}</a>}</div>
           }
           return <div className="text-text-main/80">{parsed.display || displayContent}</div>
         })() : (

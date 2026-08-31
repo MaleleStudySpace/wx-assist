@@ -5532,9 +5532,23 @@ def handle_push_history(params, config: AssistantConfig):
                         created = _dt.datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%dT%H:%M:%S")
                     except Exception:
                         created = ""
+                    outbox_id = attempt.get("outbox_id") or 0
+                    original = outbox.get_notification(int(outbox_id)) if outbox_id else None
+                    original = original or {}
+                    content = original.get("content") or ""
+                    parsed = {}
+                    if isinstance(content, str) and content.lstrip().startswith("{"):
+                        try:
+                            parsed = json.loads(content)
+                        except (TypeError, ValueError):
+                            parsed = {}
+                    readable_group = (
+                        parsed.get("group") or original.get("group_name")
+                        or attempt.get("conversation_key") or original.get("chat_id") or ""
+                    )
                     return {
                         "id": attempt.get("id"),
-                        "type": attempt.get("source_type") or attempt.get("platform") or "",
+                        "type": attempt.get("source_type") or original.get("type") or attempt.get("platform") or "",
                         "platform": attempt.get("platform") or attempt.get("channel") or "",
                         "push_channel": attempt.get("channel") or attempt.get("platform") or "",
                         "push_status": attempt.get("status") or "",
@@ -5542,10 +5556,12 @@ def handle_push_history(params, config: AssistantConfig):
                         "target": attempt.get("target") or "",
                         "created_at": created,
                         "attempt_no": attempt.get("attempt_no") or 1,
-                        "group_name": attempt.get("conversation_key") or "",
-                        "outbox_id": attempt.get("outbox_id") or 0,
+                        "group_name": readable_group,
+                        "outbox_id": outbox_id,
                         "task_id": attempt.get("task_id") or 0,
-                        "content": "",
+                        "title": original.get("title") or "",
+                        "content": content,
+                        "url": original.get("url") or parsed.get("url") or "",
                     }
 
                 delivery_records = [_to_record(a) for a in delivery_records]
@@ -5568,14 +5584,11 @@ def handle_push_history(params, config: AssistantConfig):
             date_from=date_from,
             date_to=date_to,
         )
-        # Merge: delivery attempts (per-channel) + outbox history, newest first
+        # Delivery attempts already carry the original Outbox content after
+        # enrichment above. Avoid appending duplicate notification-level rows.
+        # Keep the Outbox fallback only when no delivery audit row exists.
         if delivery_records:
-            # If platform filter requested, prefer delivery; otherwise merge both
-            if platform or params.get("source", [""])[0] == "im":
-                records = delivery_records
-            else:
-                # Merge and de-duplicate by id, sort by created_at desc
-                records = (delivery_records + outbox_records)[:limit]
+            records = delivery_records
         else:
             records = outbox_records
         return {"ok": True, "records": records}
