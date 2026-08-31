@@ -77,8 +77,8 @@ export default function TaskCenter({ open, onClose }) {
   // 单条重推：同步等待结果，成功或部分成功后任务按钮自然消失
   async function retryTask(taskId) {
     setRetryingIds(prev => ({ ...prev, [taskId]: true }))
-    const platformList = Object.entries(platformLabels).map(([platform, label]) => ({
-      platform, label, status: 'pending', error: '', response: '',
+    const platformList = Object.entries(platformLabels).map(([platform, label], index) => ({
+      platform, label, status: index === 0 ? 'pushing' : 'pending', error: '', response: '',
     }))
     setRetryFloating({ taskId, status: 'pushing', platforms: platformList, error: '' })
     // Refresh the checklist without blocking the retry request. A slow
