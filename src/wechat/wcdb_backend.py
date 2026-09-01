@@ -56,6 +56,9 @@ class WcdbBackend(AbstractWeChatBackend):
         self._window = WeChatWindowController()
         self._talker_ids: dict[str, str] = {}
         self._known_ids = DedupSet(max_size=MAX_DEDUP_SIZE)
+        # Remember the smallest working batch per talker. Large公众号
+        # payloads should not retry a known-bad limit on every poll cycle.
+        self._message_fetch_limits: dict[str, int] = {}
         # DLL call serialization is now handled by _dll_lock in wcdb_client.py
         # — no per-backend lock needed.
         # Callback thread pool — fire-and-forget AI calls so the poll loop
@@ -249,6 +252,7 @@ class WcdbBackend(AbstractWeChatBackend):
                 raise
         # Clear dedup set — WCDB may return messages with new IDs
         self._known_ids = DedupSet(max_size=MAX_DEDUP_SIZE)
+        self._message_fetch_limits.clear()
         self._seed_known_ids()
         # Re-resolve groups (talker IDs may have changed)
         self._resolve_groups()
@@ -400,7 +404,13 @@ class WcdbBackend(AbstractWeChatBackend):
         # Some公众号会话 contain large appmsg/XML payloads. The DLL may
         # truncate a 50-row JSON response, so retry the same talker with
         # progressively smaller batches before skipping this poll cycle.
-        for fetch_limit in (50, 20, 10, 5):
+        fetch_limits = (50, 20, 10, 5)
+        cached_limit = self._message_fetch_limits.get(talker)
+        if cached_limit in fetch_limits:
+            fetch_limits = (cached_limit,) + tuple(
+                limit for limit in fetch_limits if limit < cached_limit
+            )
+        for fetch_limit in fetch_limits:
             try:
                 messages = self._client.get_messages(talker=talker, limit=fetch_limit)
                 if fetch_limit != 50:
@@ -408,6 +418,9 @@ class WcdbBackend(AbstractWeChatBackend):
                         "WCDB get_messages for '%s' succeeded with fallback limit=%d",
                         group_name, fetch_limit,
                     )
+                    self._message_fetch_limits[talker] = fetch_limit
+                else:
+                    self._message_fetch_limits.pop(talker, None)
                 break
             except Exception as e:
                 last_error = e
