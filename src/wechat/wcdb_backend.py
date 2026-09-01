@@ -395,10 +395,33 @@ class WcdbBackend(AbstractWeChatBackend):
         counter triggers _reinitialize() and clears _known_ids, causing
         already-processed messages to fire keyword alerts again.
         """
-        try:
-            messages = self._client.get_messages(talker=talker, limit=50)
-        except Exception as e:
-            logger.error("DLL get_messages failed for '%s': %s", group_name, e)
+        messages = None
+        last_error = None
+        # Some公众号会话 contain large appmsg/XML payloads. The DLL may
+        # truncate a 50-row JSON response, so retry the same talker with
+        # progressively smaller batches before skipping this poll cycle.
+        for fetch_limit in (50, 20, 10, 5):
+            try:
+                messages = self._client.get_messages(talker=talker, limit=fetch_limit)
+                if fetch_limit != 50:
+                    logger.warning(
+                        "WCDB get_messages for '%s' succeeded with fallback limit=%d",
+                        group_name, fetch_limit,
+                    )
+                break
+            except Exception as e:
+                last_error = e
+                if fetch_limit != 5:
+                    logger.warning(
+                        "WCDB get_messages failed for '%s' with limit=%d; "
+                        "retrying with a smaller batch: %s",
+                        group_name, fetch_limit, e,
+                    )
+        if messages is None:
+            logger.error(
+                "DLL get_messages failed for '%s' after limits 50,20,10,5: %s",
+                group_name, last_error,
+            )
             return
         if not messages:
             return
