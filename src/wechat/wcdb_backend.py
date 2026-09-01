@@ -414,11 +414,18 @@ class WcdbBackend(AbstractWeChatBackend):
             try:
                 messages = self._client.get_messages(talker=talker, limit=fetch_limit)
                 if fetch_limit != 50:
-                    logger.warning(
-                        "WCDB get_messages for '%s' succeeded with fallback limit=%d",
-                        group_name, fetch_limit,
-                    )
+                    previous_limit = self._message_fetch_limits.get(talker)
                     self._message_fetch_limits[talker] = fetch_limit
+                    if previous_limit != fetch_limit:
+                        logger.warning(
+                            "WCDB get_messages for '%s' succeeded with fallback limit=%d",
+                            group_name, fetch_limit,
+                        )
+                    else:
+                        logger.debug(
+                            "WCDB get_messages for '%s' used cached limit=%d",
+                            group_name, fetch_limit,
+                        )
                 else:
                     self._message_fetch_limits.pop(talker, None)
                 break
