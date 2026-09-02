@@ -165,3 +165,34 @@ def test_retry_uses_latest_attempt_instead_of_any_historical_success():
     assert len(delivery.calls) == 1
     assert delivery.calls[0].platform == "ilink"
     assert delivery.calls[0].target == ""
+
+
+def test_retry_payload_refuses_to_push_oa_alert_status_label():
+    """Outbox 24h 就清、任务留 72h，重推会落到 result 兜底。
+
+    oa_article_alert 的 result 是"推送失败"这类状态文案，不是正文，
+    必须返回 None 让调用方报"无可用推送内容"，而不是把文案推给用户。
+    """
+    outbox = MagicMock()
+    outbox.get_notification.return_value = None
+    task = {
+        "id": 7, "task_type": "oa_article_alert", "outbox_id": 99,
+        "group_id": "gh", "result": "推送失败", "push_status": "failed",
+    }
+    with patch("src.web.api_handlers._match_outbox_by_time", return_value=None):
+        assert handlers._task_retry_payload(task, outbox) is None
+
+
+def test_retry_payload_still_falls_back_to_result_for_digest():
+    """digest/cron 的 result 存的是完整正文，兜底行为必须保留。"""
+    outbox = MagicMock()
+    outbox.get_notification.return_value = None
+    task = {
+        "id": 8, "task_type": "group_digest", "outbox_id": 100,
+        "group_id": "gh", "result": "今日群聊摘要正文", "push_status": "failed",
+    }
+    with patch("src.web.api_handlers._match_outbox_by_time", return_value=None):
+        payload = handlers._task_retry_payload(task, outbox)
+
+    assert payload is not None
+    assert payload[1] == "今日群聊摘要正文"

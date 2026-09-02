@@ -5855,7 +5855,10 @@ def _task_retry_payload(task: dict, outbox) -> Optional[tuple[str, str]]:
         notif = _match_outbox_by_time(task, outbox)
         if notif and notif.get("title") and notif.get("content"):
             title, content = notif["title"], notif["content"]
-    if not content:
+    # Outbox 只留 24h、task_center 留 72h，且单条重推不设时间窗，因此第 24~72
+    # 小时内前两级都会落空。oa_article_alert 的 result 存的是"推送失败"这类状态
+    # 文案而非正文，绝不能当内容推出去，宁可返回 None 让调用方报"无可用内容"。
+    if not content and task.get("task_type") != "oa_article_alert":
         content = task.get("result") or ""
     if not title:
         title = _task_retry_title(task)

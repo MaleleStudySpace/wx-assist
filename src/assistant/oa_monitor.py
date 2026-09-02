@@ -170,7 +170,8 @@ class OAMonitorEngine:
             is_known = art.url in self._alerted_urls
             if not is_known and self._outbox:
                 try:
-                    # 只认"推送成功"的记录：推送失败/进行中的不拦截 → 窗口内下轮重试
+                    # 认"已送达"的记录（success 或 partial）：partial 已有渠道收到，
+                    # 拦截以免下轮重推造成重复；全失败/进行中的不拦截 → 窗口内下轮重试
                     is_known = self._outbox.query_by_url(
                         art.url, notif_type="oa_article_alert", only_success=True)
                 except Exception as e:
