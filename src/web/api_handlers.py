@@ -4963,14 +4963,15 @@ def _push_oa_digest(result, group, config, task_id=None):
             source_id=str(oa_nid or ""), outbox_id=oa_nid or 0,
             task_id=task_id or 0, auto_route=True, conversation_key=group.name,
         ))
-        push_ok = push_result.get("success", False)
-        push_err = push_result.get("error", "") if not push_ok else ""
+        push_status = push_result.get("status") or (
+            "success" if push_result.get("success", False) else "failed")
+        push_err = "" if push_status == "success" else push_result.get("error", "")
         if oa_nid:
             try:
                 outbox = Outbox()
                 outbox.update_push_result(
                     oa_nid, DeliveryService.outbox_channel(push_result, bound),
-                    "success" if push_ok else "failed", push_err)
+                    push_status, push_err)
             except Exception:
                 pass
         if task_id:
@@ -4978,7 +4979,7 @@ def _push_oa_digest(result, group, config, task_id=None):
                 tc = get_task_center()
                 if tc:
                     tc.update_task(task_id, outbox_id=oa_nid)
-                    tc.update_push_result(task_id, "success" if push_ok else "failed", push_err)
+                    tc.update_push_result(task_id, push_status, push_err)
             except Exception:
                 pass
     except Exception as e:
@@ -5874,20 +5875,12 @@ def _task_is_retryable(task: dict) -> bool:
     )
 
 
-def _retry_result_status(results: list[dict]) -> str:
-    """Summarize per-platform retry results without treating partial success as failure."""
-    successful = sum(1 for item in results if item.get("success", False))
-    if successful == len(results) and successful > 0:
-        return "success"
-    if successful > 0:
-        return "partial"
-    return "failed"
-
-
 def _do_task_retry_push(task: dict) -> dict:
     """Retry the notification on every platform bound at retry time."""
     from src.assistant.outbox import Outbox
-    from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
+    from src.im.delivery import (
+        DeliveryRequest, DeliveryService, aggregate_status, get_delivery_service,
+    )
     from src.im.targets import bound_push_targets, default_target
 
     outbox = Outbox()
@@ -5964,7 +5957,7 @@ def _do_task_retry_push(task: dict) -> dict:
         except Exception:
             pass
 
-    status = _retry_result_status(results)
+    status = aggregate_status(results)
     return {
         "success": status in {"success", "partial"},
         "status": status,

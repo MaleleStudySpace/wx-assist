@@ -641,13 +641,14 @@ class DigestScheduler:
                     conversation_key=dg.chat_id if hasattr(dg, "chat_id") else dg.group_name,
                 ))
                 push_ok = result.get("success", False)
-                push_err = result.get("error", "") if not push_ok else ""
+                push_status = result.get("status") or ("success" if push_ok else "failed")
+                push_err = "" if push_status == "success" else result.get("error", "")
                 self._outbox.update_push_result(
                     nid, DeliveryService.outbox_channel(result, bound),
-                    "success" if push_ok else "failed", push_err,
+                    push_status, push_err,
                 )
-                self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
-                logger.info("Digest IM push %s for '%s'", "succeeded" if push_ok else "failed", dg.group_name)
+                self._tc_push_result(task_id, push_status, push_err)
+                logger.info("Digest IM push %s for '%s'", push_status, dg.group_name)
                 try:
                     from src.web.api_handlers import broadcast_event
                     broadcast_event("digest_push_result", {
@@ -833,13 +834,14 @@ class DigestScheduler:
                     conversation_key=oa.name,
                 ))
                 push_ok = push_result.get("success", False)
-                push_err = push_result.get("error", "") if not push_ok else ""
+                push_status = push_result.get("status") or ("success" if push_ok else "failed")
+                push_err = "" if push_status == "success" else push_result.get("error", "")
                 self._outbox.update_push_result(
                     nid, DeliveryService.outbox_channel(push_result, bound),
-                    "success" if push_ok else "failed", push_err,
+                    push_status, push_err,
                 )
-                self._tc_push_result(task_id, "success" if push_ok else "failed", push_err)
-                logger.info("[OA-DIGEST] IM push %s for '%s'", "succeeded" if push_ok else "failed", oa.name)
+                self._tc_push_result(task_id, push_status, push_err)
+                logger.info("[OA-DIGEST] IM push %s for '%s'", push_status, oa.name)
                 try:
                     from src.web.api_handlers import broadcast_event
                     broadcast_event("oa_digest_push_result", {
@@ -966,17 +968,18 @@ class DigestScheduler:
                     auto_route=True,
                 ))
                 push_ok = bool(result.get("success", False))
-                push_err = result.get("error", "") if not push_ok else ""
+                push_status = result.get("status") or ("success" if push_ok else "failed")
+                push_err = "" if push_status == "success" else result.get("error", "")
                 if failure_nid:
                     self._outbox.update_push_result(
                         failure_nid, DeliveryService.outbox_channel(result, bound),
-                        "success" if push_ok else "failed", push_err,
+                        push_status, push_err,
                     )
                 if task_id and self._task_center:
                     self._tc_push_result(
-                        task_id, "success" if push_ok else "failed", push_err,
+                        task_id, push_status, push_err,
                     )
-                logger.info("[OA-DIGEST] 失败通知已推送: '%s' success=%s", oa.name, push_ok)
+                logger.info("[OA-DIGEST] 失败通知已推送: '%s' status=%s", oa.name, push_status)
             else:
                 if failure_nid:
                     self._outbox.update_push_result(

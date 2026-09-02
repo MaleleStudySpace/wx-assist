@@ -236,10 +236,11 @@ class AlertEngine:
                         auto_route=True,
                     ))
                     push_ok = result.get("success", False)
-                    push_err = result.get("error", "") if not push_ok else ""
+                    push_status = result.get("status") or ("success" if push_ok else "failed")
+                    push_err = "" if push_status == "success" else result.get("error", "")
                     self._outbox.update_push_result(
                         nid, DeliveryService.outbox_channel(result, bound),
-                        "success" if push_ok else "failed",
+                        push_status,
                         push_err,
                     )
                     if push_ok:

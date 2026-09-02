@@ -466,7 +466,7 @@ class OAMonitorEngine:
             )
 
             # ── 推送 + 任务中心追踪（可选，task_center 为 None 时跳过）──
-            # 创建"公众号即时提醒"任务：推送成功 complete / 失败 fail(error)
+            # 创建"公众号即时提醒"任务：任务恒 completed，推送结果记在 push_status
             # group_name 存 "公众号名 · 文章名"，任务中心直接可见文章详情
             # outbox_id 关联 outbox 记录 —— 推送失败后"重新推送"可取完整内容
             _task_id = None
@@ -482,23 +482,20 @@ class OAMonitorEngine:
                     logger.debug("OAMonitor: 创建推送任务失败: %s", _e)
                     _task_id = None
 
-            from src.im.targets import bound_push_targets
-            if not bound_push_targets():
-                if _task_id:
-                    try:
-                        self._task_center.complete_task(_task_id, result="未绑定任何推送渠道（仅入库）")
-                    except Exception:
-                        pass
-            else:
-                _ok, _err = self._push_to_wechat(nid, mg.name or source, notif_title, notif_content, mg.push_target)
-                if _task_id:
-                    try:
-                        if _ok:
-                            self._task_center.complete_task(_task_id, result="推送成功")
-                        else:
-                            self._task_center.fail_task(_task_id, error=_err or "推送失败")
-                    except Exception as _e:
-                        logger.debug("OAMonitor: 完结推送任务失败: %s", _e)
+            _status, _err = self._push_to_wechat(nid, mg.name or source, notif_title, notif_content, mg.push_target)
+            if _task_id:
+                try:
+                    # 推送结果记在 push_status 轴（success/partial/failed/skipped），
+                    # 任务本身恒为 completed —— 内容已生成，与其他场景口径一致，
+                    # 任务中心的"失败"筛选因此只反映真正的推送全失败。
+                    self._task_center.complete_task(_task_id, result={
+                        "success": "推送成功",
+                        "partial": "推送部分成功",
+                        "skipped": "未绑定任何推送渠道（仅入库）",
+                    }.get(_status, "推送失败"))
+                    self._task_center.update_push_result(_task_id, _status, _err)
+                except Exception as _e:
+                    logger.debug("OAMonitor: 完结推送任务失败: %s", _e)
 
         # 返回本号新增缓存数，由 _poll_cycle 汇总后整轮只触发一次 RAG 索引
         return cached_new
@@ -542,15 +539,20 @@ class OAMonitorEngine:
             logger.warning("[CACHE] _cache_article 失败: %s", e)
         return False
 
-    def _push_to_wechat(self, nid: int, group_name: str, title: str, content: str, push_target: str = "ilink") -> tuple[bool, str]:
-        """Push an OA article alert through every currently bound IM channel."""
+    def _push_to_wechat(self, nid: int, group_name: str, title: str, content: str, push_target: str = "ilink") -> tuple[str, str]:
+        """Push an OA article alert through every currently bound IM channel.
+
+        Returns ``(status, error)``; status is the unified push state
+        ``success`` / ``partial`` / ``failed`` / ``skipped``.
+        """
         try:
             import json as _json
             from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
             from src.im.targets import bound_push_targets
             bound = bound_push_targets()
             if not bound:
-                return False, "未绑定任何推送渠道"
+                self._outbox.update_push_result(nid, "", "skipped", "未绑定任何推送渠道")
+                return "skipped", "未绑定任何推送渠道"
             fmt_target = bound[0]
             push_data = _json.loads(content) if isinstance(content, str) else content
             push_text = push_data.get("display", content)
@@ -565,14 +567,16 @@ class OAMonitorEngine:
                 conversation_key=group_name,
             ))
             push_ok = result.get("success", False)
-            push_err = result.get("error", "") if not push_ok else ""
+            push_status = result.get("status") or ("success" if push_ok else "failed")
+            push_err = "" if push_status == "success" else result.get("error", "")
             self._outbox.update_push_result(
                 nid, DeliveryService.outbox_channel(result, bound),
-                "success" if push_ok else "failed", push_err)
-            if push_ok:
+                push_status, push_err)
+            if push_status == "success":
                 logger.info("OAMonitor: pushed through IM for '%s'", group_name)
             else:
-                logger.warning("OAMonitor: IM push failed for '%s': %s", group_name, push_err)
+                logger.warning("OAMonitor: IM push %s for '%s': %s",
+                               push_status, group_name, push_err)
             try:
                 from src.web.api_handlers import broadcast_event
                 broadcast_event("oa_monitor_push_result", {
@@ -582,7 +586,7 @@ class OAMonitorEngine:
                 })
             except Exception:
                 pass
-            return push_ok, push_err
+            return push_status, push_err
         except Exception as e:
             logger.warning("OAMonitor: IM push error for '%s': %s", group_name, e)
             try:
@@ -594,7 +598,7 @@ class OAMonitorEngine:
                 self._outbox.update_push_result(nid, "", "failed", str(e))
             except Exception:
                 pass
-            return False, str(e)
+            return "failed", str(e)
 
     # ── Dedup management ────────────────────────────────────────────────
 

@@ -86,6 +86,40 @@ class TestOutbox(unittest.TestCase):
         # Pending items should still be empty (we acked the only one)
         self.assertEqual(outbox.count_pending(), 0)
 
+    def test_query_by_url_treats_partial_as_delivered(self):
+        """部分成功算已推送 —— 否则下一轮轮询重推，已送达渠道会收到重复提醒。"""
+        outbox = Outbox(db_path=self._db_path)
+        url = "https://mp.weixin.qq.com/s/partial-test"
+        nid = outbox.add("oa_article_alert", "公众号", "标题", "{}", url=url)
+        outbox.update_push_result(nid, "feishu", "partial", "ilink 发送失败")
+
+        self.assertTrue(outbox.query_by_url(url, "oa_article_alert", only_success=True))
+
+    def test_query_by_url_treats_failed_as_not_delivered(self):
+        """全渠道失败不算已推送，调用方仍可重试。"""
+        outbox = Outbox(db_path=self._db_path)
+        url = "https://mp.weixin.qq.com/s/failed-test"
+        nid = outbox.add("oa_article_alert", "公众号", "标题", "{}", url=url)
+        outbox.update_push_result(nid, "", "failed", "全部渠道失败")
+
+        self.assertFalse(outbox.query_by_url(url, "oa_article_alert", only_success=True))
+
+    def test_get_push_stats_counts_partial_as_success(self):
+        """至少一个渠道送达即计入成功，部分失败不应拉低成功率。"""
+        outbox = Outbox(db_path=self._db_path)
+        n1 = outbox.add("oa_digest", "公众号1", "标题", "内容")
+        outbox.update_push_result(n1, "ilink", "success")
+        n2 = outbox.add("oa_digest", "公众号2", "标题", "内容")
+        outbox.update_push_result(n2, "feishu", "partial", "qqbot 发送失败")
+        n3 = outbox.add("oa_digest", "公众号3", "标题", "内容")
+        outbox.update_push_result(n3, "", "failed", "全部渠道失败")
+
+        stats = outbox.get_push_stats()
+        # n3 的 push_channel 为空（多渠道结果无法归属单一渠道），按既有口径不计入统计
+        self.assertEqual(stats["today_total"], 2)
+        self.assertEqual(stats["today_success"], 2)
+        self.assertEqual(stats["today_rate"], 100.0)
+
 
 if __name__ == "__main__":
     unittest.main()

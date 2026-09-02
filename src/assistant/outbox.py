@@ -207,8 +207,10 @@ class Outbox:
         Args:
             url: Article URL.
             notif_type: Optional filter (e.g. "oa_article_alert").
-            only_success: True 时只认"推送成功"的记录（push_status='success'）。
-                推送失败/进行中的记录不算已推送 → 调用方可在窗口内重试。
+            only_success: True 时只认"已送达"的记录（push_status 为
+                'success' 或 'partial'）。partial 表示至少一个渠道已收到，
+                视为已推送 —— 否则下一轮轮询会重推，已成功的渠道收到重复
+                文章提醒。全失败/进行中的记录不算已推送 → 调用方可重试。
         """
         if not url:
             return False
@@ -216,7 +218,7 @@ class Outbox:
             if only_success:
                 row = conn.execute(
                     "SELECT 1 FROM assistant_outbox WHERE url=? AND type=? "
-                    "AND push_status='success' LIMIT 1",
+                    "AND push_status IN ('success', 'partial') LIMIT 1",
                     (url, notif_type or ""),
                 ).fetchone()
             elif notif_type:
@@ -288,7 +290,9 @@ class Outbox:
         Args:
             notif_id: Notification ID
             push_channel: 'ilink' etc.
-            push_status: 'success' / 'failed' / 'pending_push'
+            push_status: 'success' / 'partial' / 'failed' / 'skipped' /
+                'pending_push'，与 TaskCenter.push_status 同一套词表
+                （partial = 至少一个渠道送达、至少一个失败，为终态不重推）
             push_error: Error message (truncated to 500 chars)
         """
         push_error = (push_error or "")[:500]
@@ -341,7 +345,7 @@ class Outbox:
             # Today's stats
             row = conn.execute(
                 "SELECT COUNT(*) as total, "
-                "SUM(CASE WHEN push_status='success' THEN 1 ELSE 0 END) as success "
+                "SUM(CASE WHEN push_status IN ('success', 'partial') THEN 1 ELSE 0 END) as success "
                 "FROM assistant_outbox WHERE push_channel != '' AND created_at >= ?",
                 (today,),
             ).fetchone()
@@ -353,7 +357,7 @@ class Outbox:
             rows = conn.execute(
                 "SELECT SUBSTR(created_at,1,10) as day, "
                 "COUNT(*) as total, "
-                "SUM(CASE WHEN push_status='success' THEN 1 ELSE 0 END) as success "
+                "SUM(CASE WHEN push_status IN ('success', 'partial') THEN 1 ELSE 0 END) as success "
                 "FROM assistant_outbox WHERE push_channel != '' AND created_at >= ? "
                 "GROUP BY day ORDER BY day",
                 (cutoff,),

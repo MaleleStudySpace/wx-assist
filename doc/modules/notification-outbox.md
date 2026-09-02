@@ -28,10 +28,27 @@
 | content | TEXT | JSON 结构化内容 |
 | priority | TEXT | "high" / "normal" |
 | status | TEXT | "pending" / "delivered" / "ignored" / "failed" |
-| push_status | TEXT | iLink 推送结果 |
-| push_channel | TEXT | 推送通道 |
-| push_error | TEXT | 推送错误信息 |
+| push_status | TEXT | 统一推送结果："success" / "partial" / "failed" / "skipped" / "pending_push"，与 task_center.push_status 同一套词表 |
+| push_channel | TEXT | 推送通道；多渠道结果无法归属单一通道时为空，逐渠道明细见 im_delivery_attempts |
+| push_error | TEXT | 推送错误信息（partial 时保留失败渠道的原因） |
 | created_at | TEXT | ISO-8601 创建时间 |
+
+### 推送状态三态判定
+
+一次推送会扇出到所有已绑定的 IM 渠道（iLink / QQ bot / 飞书），聚合规则由
+`src/im/delivery.py::aggregate_status` 统一给出，原始推送与任务中心重推共用：
+
+| 各渠道结果 | push_status | 任务中心展示 | 可重推 |
+|---|---|---|---|
+| 全部送达 | `success` | ✓ 已推送 | 否 |
+| 部分送达 | `partial` | △ 部分成功（琥珀色） | **否** |
+| 全部失败 | `failed` | ✗ 推送失败 | 是 |
+| 无绑定渠道 | `skipped` | 推送中/跳过 | 否 |
+
+`partial` 是**终态**：已有渠道收到消息，重推会让这些渠道收到重复内容，因此
+既不显示重推按钮，也不进"一键重推"候选集（`get_failed_push_tasks`）。
+它同样不计入任务中心的失败红点与"失败"筛选，但在 Outbox 去重
+（`query_by_url(only_success=True)`）和推送成功率统计中**算作已送达**。
 
 ### content 字段结构
 

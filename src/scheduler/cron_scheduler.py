@@ -273,6 +273,7 @@ class CronScheduler:
             if task_center_id and self._task_center:
                 self._task_center.update_task(task_center_id, outbox_id=nid)
             push_cfg = job.get("push", {})
+            push_err = ""
             # Bound-channel auto routing: enabled flag still respected, but target is ignored.
             if not push_cfg.get("enabled", True):
                 push_status = "skipped"
@@ -283,6 +284,7 @@ class CronScheduler:
                 if not bound:
                     self._outbox.update_push_result(nid, "", "skipped", "未绑定任何推送渠道")
                     push_status = "skipped"
+                    push_err = "未绑定任何推送渠道"
                 else:
                     fmt_target = bound[0]
                     msg = DeliveryService.format_text("", f"⏰ {job_name}", text)
@@ -293,17 +295,17 @@ class CronScheduler:
                         conversation_key=job.get("chat_id", ""),
                     ))
                     ok = result.get("success", False)
-                    err = result.get("error", "") if not ok else ""
+                    push_status = result.get("status") or ("success" if ok else "failed")
+                    push_err = "" if push_status == "success" else result.get("error", "")
                     self._outbox.update_push_result(
                         nid, DeliveryService.outbox_channel(result, bound),
-                        "success" if ok else "failed", err)
-                    push_status = "success" if ok else "failed"
-                    logger.info("[CRON] 推送 %s: %s", "成功" if ok else "失败", job_name)
+                        push_status, push_err)
+                    logger.info("[CRON] 推送 %s: %s", push_status, job_name)
             # 同步更新 TaskCenter 推送状态
             if task_center_id and self._task_center:
                 try:
                     self._task_center.update_push_result(
-                        task_center_id, push_status, "")
+                        task_center_id, push_status, push_err)
                 except Exception as e:
                     logger.warning("[CRON] task_center push_status 更新失败: %s", e)
         except Exception as e:

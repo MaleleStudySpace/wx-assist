@@ -390,8 +390,11 @@ export default function TaskCenter({ open, onClose }) {
             const typeMeta = TASK_TYPES[task.task_type] || TASK_TYPES.group_digest
             const statusMeta = STATUS_STYLES[task.status] || STATUS_STYLES.pending
             const TypeIcon = typeMeta.icon
-            // 可重推：推送失败的任务（digest/cron 类 push_status=failed；
-            // 即时提醒 oa_article_alert 推送失败时 status=failed）
+            // 可重推 = 推送全渠道失败，与后端 get_failed_push_tasks 同口径：
+            //   - push_status='failed'（各业务场景的统一推送结果）
+            //   - oa_article_alert 且 status='failed'（推送完成前被中断，
+            //     例如 bot 重启，此时 push_status 仍为空）
+            // partial（部分成功）刻意不可重推 —— 已有渠道收到，重推会重复。
             const canRetry = task.push_status === 'failed' ||
               (task.task_type === 'oa_article_alert' && task.status === 'failed')
 

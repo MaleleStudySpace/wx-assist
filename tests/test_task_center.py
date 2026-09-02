@@ -170,6 +170,36 @@ class TestTaskCenter(unittest.TestCase):
         self.assertIn(t2, ids)
         self.assertNotIn(t3, ids)
 
+    def test_get_failed_push_tasks_excludes_partial_and_skipped(self):
+        """部分成功是终态：已有渠道收到消息，重推会让这些渠道收到重复内容。"""
+        t_partial = self.tc.create_task('group_digest', 'scheduler', 'g1', '群1')
+        self.tc.complete_task(t_partial, result='摘要')
+        self.tc.update_push_result(t_partial, 'partial', 'feishu: token expired')
+
+        t_skipped = self.tc.create_task('cron', 'scheduler', 'g2', '定时任务')
+        self.tc.complete_task(t_skipped, result='输出')
+        self.tc.update_push_result(t_skipped, 'skipped', '未绑定任何推送渠道')
+
+        t_failed = self.tc.create_task('group_digest', 'scheduler', 'g3', '群3')
+        self.tc.complete_task(t_failed, result='摘要')
+        self.tc.update_push_result(t_failed, 'failed', 'timeout')
+
+        ids = {t['id'] for t in self.tc.get_failed_push_tasks(hours=24)}
+        self.assertIn(t_failed, ids)
+        self.assertNotIn(t_partial, ids)
+        self.assertNotIn(t_skipped, ids)
+
+    def test_partial_is_not_counted_as_failed(self):
+        """部分成功不计入失败红点与失败筛选，只在推送状态位单独展示。"""
+        t = self.tc.create_task('group_digest', 'scheduler', 'g1', '群1')
+        self.tc.complete_task(t, result='摘要')
+        self.tc.update_push_result(t, 'partial', 'feishu 发送失败')
+
+        self.assertEqual(self.tc.count_failed_since(), 0)
+        self.assertEqual(len(self.tc.list_tasks(status='failed')), 0)
+        # 内容已生成，任务本身仍归在已完成
+        self.assertEqual(len(self.tc.list_tasks(status='completed')), 1)
+
     def test_list_tasks_exclude(self):
         self.tc.create_task('cache_oa_incremental', 'system', 'g1', 'OA增量同步')
         self.tc.create_task('cache_fav_incremental', 'system', 'g2', '收藏增量')

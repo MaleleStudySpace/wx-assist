@@ -1421,6 +1421,7 @@ function PushHistory({ platform = 'im' }) {
           className="bg-bg-raised border border-border-main rounded-lg px-3 py-2 text-sm text-text-main focus:outline-none focus:border-brand-green">
           <option value="">全部状态</option>
           <option value="success">推送成功</option>
+          <option value="partial">部分成功</option>
           <option value="failed">推送失败</option>
         </select>
       </div>
@@ -1452,6 +1453,7 @@ function PushRecordCard({ record }) {
   const [expanded, setExpanded] = useState(false)
   const isFailed = record.push_status === 'failed'
   const isSuccess = record.push_status === 'success'
+  const isPartial = record.push_status === 'partial'
   const isSessionExpired = (record.push_error || '').includes('session_expired')
   const typeLabel = PUSH_TYPE_LABELS[record.type] || record.type
   const typeBadge = PUSH_TYPE_BADGE[record.type] || 'bg-bg-raised text-text-muted border-border-main'
@@ -1540,7 +1542,7 @@ function PushRecordCard({ record }) {
           <span className={`w-[5px] h-[5px] rounded-full ${
             isSuccess ? 'bg-brand-green' : isFailed ? 'bg-status-error' : 'bg-status-warn'
           }`} />
-          {isSuccess ? '推送成功' : isFailed ? '推送失败' : record.push_status}
+          {isSuccess ? '推送成功' : isPartial ? '部分成功' : isFailed ? '推送失败' : record.push_status}
         </span>
         <span className="text-[11px] text-text-muted">{displayTime}</span>
       </div>

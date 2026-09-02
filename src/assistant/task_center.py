@@ -294,11 +294,14 @@ class TaskCenter:
     def get_failed_push_tasks(self, hours: int = 24) -> list[dict]:
         """Return retryable push-failed tasks within the last N hours.
 
-        可重推任务 = 两类推送失败：
-          - push_status='failed'（digest/cron 类：任务成功但推送失败）
+        可重推 = 推送全渠道失败：
+          - push_status='failed'（内容已生成，但一个渠道都没发出去）
           - task_type='oa_article_alert' AND status='failed'
-            （即时提醒推送失败时通过 fail_task 标记，result 为空，
-              重推内容从 outbox 关联记录取）
+            （即时提醒在推送完成前被中断，例如 bot 重启，此时 push_status
+              仍为空；正常推送结果已统一记在 push_status 轴上）
+
+        push_status='partial' 刻意排除 —— 部分成功是终态：已有渠道收到
+        消息，重推会让这些渠道收到重复内容。
 
         Returns:
             按时间从旧到新排序的任务列表（供批量重推逐条处理）。
@@ -312,7 +315,6 @@ class TaskCenter:
                     "FROM task_center "
                     "WHERE created_at >= ? AND "
                     "(push_status = 'failed' OR "
-                    " push_status = 'partial' OR "
                     " (task_type = 'oa_article_alert' AND status = 'failed')) "
                     "ORDER BY created_at ASC",
                     (cutoff,),

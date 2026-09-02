@@ -42,6 +42,21 @@ class DeliveryRequest:
     auto_route: Optional[bool] = None
 
 
+def aggregate_status(results: list[dict]) -> str:
+    """Collapse per-channel results into one push status.
+
+    ``partial`` means at least one channel delivered and at least one did not.
+    Callers treat it as terminal — it is deliberately excluded from task-center
+    re-push so channels that already delivered are never sent a duplicate.
+    """
+    delivered = sum(1 for item in results if item.get("success", False))
+    if delivered == len(results) and delivered > 0:
+        return "success"
+    if delivered > 0:
+        return "partial"
+    return "failed"
+
+
 class DeliveryService:
     """Serialize delivery auditing while delegating protocol work to channels."""
 
@@ -101,13 +116,14 @@ class DeliveryService:
         """Deliver to every currently QR-bound channel."""
         platforms = bound_push_targets()
         if not platforms:
-            return {"success": True, "skipped": True, "error": "no bound delivery platform"}
+            return {"success": True, "skipped": True, "status": "skipped",
+                    "error": "no bound delivery platform"}
         results = []
         for platform in platforms:
             target = default_target(platform) if platform != "ilink" else ""
             results.append(self._send_one(request, platform, target))
         success = all(item.get("success", False) for item in results)
-        return {"success": success, "results": results,
+        return {"success": success, "status": aggregate_status(results), "results": results,
                 "error": "" if success else "; ".join(item.get("error", "") for item in results if item.get("error"))}
 
     def send_text(self, request: DeliveryRequest) -> dict:
@@ -115,14 +131,15 @@ class DeliveryService:
             return self.send_bound_text(request)
         platforms = normalize_targets(request.platform)
         if not platforms:
-            return {"success": True, "skipped": True, "error": "no delivery platform"}
+            return {"success": True, "skipped": True, "status": "skipped",
+                    "error": "no delivery platform"}
         results = []
         for platform in platforms:
             target = request.target or default_target(platform)
             result = self._send_one(request, platform, target)
             results.append(result)
         success = all(item.get("success", False) for item in results)
-        return {"success": success, "results": results,
+        return {"success": success, "status": aggregate_status(results), "results": results,
                 "error": "" if success else "; ".join(item.get("error", "") for item in results if item.get("error"))}
 
     def _send_one(self, request: DeliveryRequest, platform: str, target: str) -> dict:

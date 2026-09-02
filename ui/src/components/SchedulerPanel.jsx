@@ -710,7 +710,7 @@ function ExecutionHistory() {
                     { label: '状态', val: detail.status === 'completed' ? '✅ 成功' : detail.status === 'failed' ? '❌ 失败' : '⏳ 运行中', cls: detail.status === 'failed' ? 'text-[#d45656]' : detail.status === 'completed' ? 'text-brand-green' : '' },
                     { label: '耗时', val: (() => { try { if (detail.finished_at && detail.created_at) return `${((new Date(detail.finished_at) - new Date(detail.created_at)) / 1000).toFixed(1)}s` } catch {} return '—' })() },
                     { label: '触发时间', val: detail.created_at ? detail.created_at.slice(11, 19) : '—' },
-                    { label: '推送状态', val: detail.push_status === 'success' ? '✓ 已推送' : detail.push_status === 'failed' ? '✗ 推送失败' : '—', cls: detail.push_status === 'success' ? 'text-brand-green' : detail.push_status === 'failed' ? 'text-[#d45656]' : '' },
+                    { label: '推送状态', val: detail.push_status === 'success' ? '✓ 已推送' : detail.push_status === 'partial' ? '△ 部分成功' : detail.push_status === 'failed' ? '✗ 推送失败' : '—', cls: detail.push_status === 'success' ? 'text-brand-green' : detail.push_status === 'partial' ? 'text-amber-400/80' : detail.push_status === 'failed' ? 'text-[#d45656]' : '' },
                   ].map((item, i) => (
                     <div key={i} className="bg-bg-raised/60 rounded-lg px-4 py-3">
                       <div className="text-[10px] font-medium text-text-muted/70 uppercase tracking-wider mb-0.5">{item.label}</div>
