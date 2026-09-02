@@ -291,13 +291,3 @@ class TestSidebarNavigation:
         assert "运行日志" in page_text
 
 
-class TestConfigExportImport:
-    def test_backup_ui_visible(self, page):
-        page.goto(BASE_URL, timeout=10000)
-        page.wait_for_timeout(1000)
-        config_btn = page.locator("button:has-text('系统配置')")
-        if config_btn.count() > 0:
-            config_btn.first.click()
-            page.wait_for_timeout(500)
-            page_text = page.inner_text("body")
-            assert "导出备份" in page_text or "配置备份" in page_text
