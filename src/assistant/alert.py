@@ -231,6 +231,7 @@ class AlertEngine:
                         target="",
                         source_type="keyword_alert",
                         source_id=str(nid),
+                        outbox_id=nid or 0,
                         inbound_message_id=message_id,
                         conversation_key=chat_id,
                         auto_route=True,

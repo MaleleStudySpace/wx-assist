@@ -283,7 +283,8 @@ class DeliveryService:
 
     def list_attempts(self, platform: str = "", limit: int = 50,
                       *, source_type: str = "", source_id: str = "",
-                      outbox_id: int = 0, task_id: int = 0) -> list[dict]:
+                      outbox_id: int = 0, task_id: int = 0, status: str = "",
+                      exclude_source_types=()) -> list[dict]:
         limit = max(1, min(int(limit), 500))
         sql = "SELECT * FROM im_delivery_attempts"
         args = []
@@ -294,6 +295,15 @@ class DeliveryService:
         if source_type:
             clauses.append("source_type = ?")
             args.append(source_type)
+        if status:
+            clauses.append("status = ?")
+            args.append(status)
+        excluded = tuple(str(t).strip() for t in (exclude_source_types or ()) if str(t).strip())
+        if excluded:
+            # 在 SQL 层排除，LIMIT 才作用于排除之后的结果集；调用方取回后再过滤
+            # 会让每页条数不足，分页与计数全部失真。
+            clauses.append("source_type NOT IN (%s)" % ",".join("?" * len(excluded)))
+            args.extend(excluded)
         if source_id:
             clauses.append("source_id = ?")
             args.append(str(source_id))

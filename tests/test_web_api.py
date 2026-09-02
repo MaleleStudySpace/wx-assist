@@ -1347,5 +1347,107 @@ class WebSocketHelperTests(unittest.TestCase):
         self.assertEqual(record["url"], "https://example.com/article")
         self.assertEqual(record["push_error"], "接口超时")
 
+    def test_push_history_falls_back_to_source_id_when_outbox_id_missing(self):
+        """早期 keyword_alert 记录没写 outbox_id，但 source_id 就是 Outbox 主键。
+
+        不回退的话这些历史记录永远显示原始 chatroom ID + "原始推送内容不可用"。
+        """
+        from src.web import api_handlers
+
+        outbox = MagicMock()
+        outbox.get_notification.return_value = {
+            "type": "keyword_alert",
+            "group_name": "捡破烂的",
+            "title": "🔑 关键词命中 · 捡破烂的",
+            "content": json.dumps({
+                "group": "捡破烂的",
+                "sender": "马乐乐",
+                "keywords": ["急单"],
+                "message": "急单！谁来接",
+            }, ensure_ascii=False),
+        }
+        delivery = MagicMock()
+        delivery.list_attempts.return_value = [{
+            "id": "attempt-legacy", "platform": "qqbot", "channel": "qqbot",
+            "status": "success", "provider_error": "", "created_at": 1,
+            "source_type": "keyword_alert", "source_id": "49", "outbox_id": 0,
+            "conversation_key": "47474516850@chatroom",
+        }]
+        with (
+            patch("src.assistant.outbox.Outbox", return_value=outbox),
+            patch("src.im.delivery.get_delivery_service", return_value=delivery),
+        ):
+            result = api_handlers.handle_push_history({}, MagicMock())
+
+        outbox.get_notification.assert_called_once_with(49)
+        record = result["records"][0]
+        self.assertEqual(record["group_name"], "捡破烂的")
+        self.assertIn("马乐乐", record["content"])
+        self.assertEqual(record["outbox_id"], 49)
+
+    def test_push_history_does_not_treat_platform_message_id_as_outbox_id(self):
+        """飞书 om_xxx 这类平台消息 ID 不是 Outbox 主键，不能拿去回查。"""
+        from src.web import api_handlers
+
+        outbox = MagicMock()
+        delivery = MagicMock()
+        delivery.list_attempts.return_value = [{
+            "id": "attempt-agent", "platform": "feishu", "channel": "feishu",
+            "status": "success", "provider_error": "", "created_at": 1,
+            "source_type": "agent_reply", "source_id": "om_abc123", "outbox_id": 0,
+            "conversation_key": "oc_chat",
+        }]
+        with (
+            patch("src.assistant.outbox.Outbox", return_value=outbox),
+            patch("src.im.delivery.get_delivery_service", return_value=delivery),
+        ):
+            result = api_handlers.handle_push_history({}, MagicMock())
+
+        outbox.get_notification.assert_not_called()
+        self.assertEqual(result["records"][0]["content"], "")
+
+    def test_push_history_excludes_non_business_source_types(self):
+        """agent_reply 与绑定/调试探测不属于业务通知推送，必须在查询层排除。"""
+        from src.web import api_handlers
+
+        outbox = MagicMock()
+        delivery = MagicMock()
+        delivery.list_attempts.return_value = []
+        with (
+            patch("src.assistant.outbox.Outbox", return_value=outbox),
+            patch("src.im.delivery.get_delivery_service", return_value=delivery),
+        ):
+            api_handlers.handle_push_history({}, MagicMock())
+
+        excluded = delivery.list_attempts.call_args.kwargs["exclude_source_types"]
+        self.assertIn("agent_reply", excluded)
+        self.assertIn("binding_test", excluded)
+        self.assertEqual(
+            set(excluded),
+            {"agent_reply", "binding_test", "test", "test_multi"},
+        )
+
+    def test_push_history_pushes_type_and_status_filters_into_query(self):
+        """筛选必须下推到 SQL。
+
+        在取回的窗口上再过滤，会让窗口外的记录永远筛不出来 —— 库里明明有
+        cron 记录，选"定时任务"却显示"暂无推送记录"。
+        """
+        from src.web import api_handlers
+
+        outbox = MagicMock()
+        delivery = MagicMock()
+        delivery.list_attempts.return_value = []
+        with (
+            patch("src.assistant.outbox.Outbox", return_value=outbox),
+            patch("src.im.delivery.get_delivery_service", return_value=delivery),
+        ):
+            api_handlers.handle_push_history(
+                {"type": ["cron"], "push_status": ["failed"]}, MagicMock())
+
+        kwargs = delivery.list_attempts.call_args.kwargs
+        self.assertEqual(kwargs["source_type"], "cron")
+        self.assertEqual(kwargs["status"], "failed")
+
 if __name__ == "__main__":
     unittest.main()

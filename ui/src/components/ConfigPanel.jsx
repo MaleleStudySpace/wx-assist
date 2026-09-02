@@ -1329,6 +1329,8 @@ const PUSH_TYPE_LABELS = {
   group_digest: '群定时摘要',
   oa_digest: '公众号摘要',
   oa_article_alert: '公众号即时',
+  cron: '定时任务',
+  oa_digest_failure: '摘要失败通知',
 }
 
 /* Type badge styles — each type has a distinct color for quick identification */
@@ -1337,6 +1339,8 @@ const PUSH_TYPE_BADGE = {
   group_digest: 'bg-blue-500/[0.10] text-blue-600 dark:text-blue-400 border-blue-500/20',
   oa_digest: 'bg-brand-green/[0.10] text-brand-green-hover dark:text-brand-green border-brand-green/20',
   oa_article_alert: 'bg-orange-500/[0.10] text-orange-600 dark:text-orange-400 border-orange-500/20',
+  cron: 'bg-purple-500/[0.10] text-purple-600 dark:text-purple-400 border-purple-500/20',
+  oa_digest_failure: 'bg-status-error-soft text-status-error border-status-error/20',
 }
 
 const PUSH_TYPE_ICONS = {
@@ -1344,6 +1348,8 @@ const PUSH_TYPE_ICONS = {
   group_digest: '📋',
   oa_digest: '📰',
   oa_article_alert: '🔔',
+  cron: '⏰',
+  oa_digest_failure: '⚠️',
 }
 
 function PushHistory({ platform = 'im' }) {
@@ -1412,10 +1418,9 @@ function PushHistory({ platform = 'im' }) {
         <select value={filters.type} onChange={e => setFilters(prev => ({ ...prev, type: e.target.value }))}
           className="bg-bg-raised border border-border-main rounded-lg px-3 py-2 text-sm text-text-main focus:outline-none focus:border-brand-green">
           <option value="">全部类型</option>
-          <option value="keyword_alert">关键词提醒</option>
-          <option value="group_digest">群定时摘要</option>
-          <option value="oa_digest">公众号摘要</option>
-          <option value="oa_article_alert">公众号即时</option>
+          {Object.entries(PUSH_TYPE_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
         </select>
         <select value={filters.push_status} onChange={e => setFilters(prev => ({ ...prev, push_status: e.target.value }))}
           className="bg-bg-raised border border-border-main rounded-lg px-3 py-2 text-sm text-text-main focus:outline-none focus:border-brand-green">

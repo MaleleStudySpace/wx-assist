@@ -5501,6 +5501,16 @@ def handle_api_request(path: str, params: dict, config: AssistantConfig, body: d
 
 # ── 推送记录 API ─────────────────────────────────────────────────────────
 
+# 推送记录只展示真正的业务通知推送。
+#   agent_reply   —— Agent 在双向对话里的回复，不是通知；无 Outbox 行、正文也从未
+#                    落盘，只能渲染成"原始推送内容不可用"
+#   binding_test  —— 扫码绑定探测
+#   test/test_multi —— 早期调试遗留
+# 注意：渠道健康探测走 list_recent_failures，不在此排除范围内 —— agent_reply 的
+# 失败对判断渠道可用性是有效信号。
+_HIDDEN_PUSH_SOURCE_TYPES = ("agent_reply", "binding_test", "test", "test_multi")
+
+
 def handle_push_history(params, config: AssistantConfig):
     """GET /api/push/history — Push delivery history with filters."""
     try:
@@ -5521,7 +5531,9 @@ def handle_push_history(params, config: AssistantConfig):
             lookup_platform = "ilink" if platform == "wechat" else platform
             # When platform filter is set, respect it; otherwise fetch recent across all channels.
             delivery_records = get_delivery_service().list_attempts(
-                platform=lookup_platform, limit=limit
+                platform=lookup_platform, limit=limit,
+                source_type=notif_type, status=push_status,
+                exclude_source_types=_HIDDEN_PUSH_SOURCE_TYPES,
             )
             # Convert to push-history shape so existing WebUI renders without changes.
             if delivery_records:
@@ -5534,6 +5546,13 @@ def handle_push_history(params, config: AssistantConfig):
                     except Exception:
                         created = ""
                     outbox_id = attempt.get("outbox_id") or 0
+                    if not outbox_id:
+                        # 早期记录没写 outbox_id，但 source_id 存的就是 Outbox 主键
+                        # （keyword_alert / cron 等场景）。仅限纯数字回退，避免把飞书
+                        # om_xxx 这类平台消息 ID 当主键查。
+                        source_id = str(attempt.get("source_id") or "").strip()
+                        if source_id.isdigit():
+                            outbox_id = int(source_id)
                     original = outbox.get_notification(int(outbox_id)) if outbox_id else None
                     original = original or {}
                     content = original.get("content") or ""
@@ -5566,14 +5585,6 @@ def handle_push_history(params, config: AssistantConfig):
                     }
 
                 delivery_records = [_to_record(a) for a in delivery_records]
-                # Apply same filters as outbox when delivery is used
-                if notif_type:
-                    delivery_records = [r for r in delivery_records if r.get("type") == notif_type]
-                if push_status:
-                    delivery_records = [r for r in delivery_records if r.get("push_status") == push_status]
-                if platform:
-                    # keep already filtered
-                    pass
         except Exception:
             delivery_records = []
 

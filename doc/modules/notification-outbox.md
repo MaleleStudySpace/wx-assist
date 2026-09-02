@@ -97,6 +97,22 @@ Dashboard 首页的两个卡片分别展示：
 
 AssistantPanel 的通知中心展示所有通知记录，支持类型/状态过滤和 ack/ignore 操作。
 
+### 推送记录（消息推送 → 推送记录）
+
+数据源是 `im_delivery_attempts`（逐渠道投递审计），不是 Outbox 本身 —— 一次推送扇出到 N 个渠道就有 N 行。Outbox 只负责提供「原始内容」。
+
+**关键约束：每个业务推送调用点构造 `DeliveryRequest` 时必须传 `outbox_id`。**
+`api_handlers._to_record()` 靠它回查 Outbox 拿到 `title` / `content` / 可读群名。漏传的后果是该类型的记录永远显示原始 chatroom ID 加「原始推送内容不可用」——`keyword_alert` 曾因此坏了很久（`b19678a` 只补了读取侧，写入侧 `alert.py` 一直没传）。
+
+| 机制 | 说明 |
+|------|------|
+| 读侧回退 | `outbox_id` 为 0 且 `source_id` 是纯数字时，用 `source_id` 当 Outbox 主键回查。用于恢复漏传 `outbox_id` 时期写入的历史记录，无需重推。非数字（如飞书 `om_xxx`）不回退，避免把平台消息 ID 当主键 |
+| 排除非业务类型 | `agent_reply`（Agent 双向对话回复，不是通知，正文也从未落盘）、`binding_test`、`test`、`test_multi` 在 SQL 层排除，见 `api_handlers._HIDDEN_PUSH_SOURCE_TYPES` |
+| 排除位置 | 必须下推到 SQL、在 `LIMIT` 之前生效。先取回窗口再过滤会让每页条数不足、分页与计数失真；类型/状态筛选同理（曾导致选「定时任务」明明有 12 条却显示空） |
+| 渠道健康探测例外 | `list_recent_failures()` **不**排除 `agent_reply` —— 它的失败正是渠道不可用的有效信号，排除会漏报 |
+
+`agent_reply` 没有 Outbox 行，`im_delivery_attempts` 也没有存正文的列，`agent_memory` 只存 LLM 摘要，因此其回复正文在任何地方都没有落盘。当前决定是不展示这类记录，而非补存正文。
+
 ### 外部 Agent 集成
 
 第三方脚本轮询 `GET /api/assistant/notifications/pending` 取出所有待投递通知，自行投递（邮件/钉钉/短信等），然后调用 `POST /api/assistant/notifications/{id}/ack` 标记已投递。
@@ -107,5 +123,8 @@ AssistantPanel 的通知中心展示所有通知记录，支持类型/状态过�
 |------|------|
 | Outbox 类 | `src/assistant/outbox.py` |
 | 通知 API | `src/web/server.py` |
+| 投递审计（im_delivery_attempts） | `src/im/delivery.py` |
+| 推送记录 API（含类型排除与 Outbox 回填） | `src/web/api_handlers.py` `handle_push_history` / `_to_record` |
 | 前端 AssistantPanel（通知中心） | `ui/src/components/AssistantPanel.jsx` |
+| 前端 ConfigPanel（推送记录） | `ui/src/components/ConfigPanel.jsx` `PushHistory` |
 | 前端 Dashboard（即时提醒/定时任务卡片） | `ui/src/components/Dashboard.jsx` |
