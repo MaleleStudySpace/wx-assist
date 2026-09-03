@@ -79,23 +79,29 @@ class TestConfigStore(unittest.TestCase):
         n = 20
         barrier = threading.Barrier(n)
         errors = []
+        barrier_timeouts = []
 
         def worker(i):
             try:
-                barrier.wait(timeout=10)   # 尽量制造真实竞争
+                # barrier 只是为了尽量制造真实竞争；超时不代表产品有问题
+                # （CPU 争用时线程没能同时到达），此时测试依然有效。
+                barrier.wait(timeout=60)
+            except threading.BrokenBarrierError:
+                barrier_timeouts.append(i)
+            try:
                 mutate_config(
                     lambda c: c.digest_groups[0].chats.append(
                         DigestChat(chat_id=f"c{i}@chatroom", name=f"C{i}")))
-            except Exception as e:      # pragma: no cover
-                errors.append(e)
+            except Exception as e:
+                errors.append(f"{type(e).__name__}: {e}")
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join(timeout=30)
+            t.join(timeout=60)
 
-        self.assertEqual(errors, [])
+        self.assertEqual(errors, [], "并发写入抛了异常")
         chats = self.disk_group().chats
         self.assertEqual(len(chats), n + 1, f"丢了 {n + 1 - len(chats)} 个写入")
         ids = sorted(c.chat_id for c in chats)

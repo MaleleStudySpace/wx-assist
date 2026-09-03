@@ -1512,9 +1512,8 @@ function PushRecordCard({ record }) {
 
   // ── Parse group_digest content ──
   let digestMsgCount = ''
-  if (record.type === 'group_digest') {
-    const m = (record.title || '').match(/\((\d+)条消息\)/)
-    if (m) digestMsgCount = m[1]
+  if (record.type === 'group_digest' && parsed) {
+    digestMsgCount = parsed.msg_count
   }
 
   // ── Parse oa_digest content ──
@@ -1564,7 +1563,9 @@ function PushRecordCard({ record }) {
             return <div className="space-y-1"><div className="font-medium text-text-main/90">{parsed.sender}</div><div className="bg-bg-inset rounded-lg p-2.5 border border-border-main/40 text-text-main/80 whitespace-pre-wrap">{parsed.message}</div><div className="flex flex-wrap gap-1">{(parsed.keywords || []).map((kw,i) => <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-status-warn-soft text-status-warn font-medium">{kw}</span>)}</div></div>
           }
           if (record.type === 'group_digest') {
-            return <div className="space-y-1"><div className="font-medium text-text-main/90">{parsed.group}</div><div className="bg-bg-inset rounded-lg p-2.5 border border-border-main/40 text-text-main/80 max-h-48 overflow-y-auto">{parsed.digest}</div><div className="text-text-muted">{parsed.msg_count ?? 0} 条 · 近{parsed.lookback_hours}h</div></div>
+            const chatNames = parsed.chats || []
+            const chatSummary = chatNames.length ? ` · ${chatNames.slice(0, 3).join('、')}${chatNames.length > 3 ? ` 等 ${chatNames.length} 个` : ''}` : ''
+            return <div className="space-y-1"><div className="font-medium text-text-main/90">{parsed.group}{chatSummary}{parsed.degraded ? ' · 已降级' : ''}</div><div className="bg-bg-inset rounded-lg p-2.5 border border-border-main/40 text-text-main/80 max-h-48 overflow-y-auto">{parsed.digest}</div><div className="text-text-muted">{parsed.msg_count ?? 0} 条 · 近{parsed.lookback_hours}h</div></div>
           }
           if (record.type === 'oa_digest') {
             return <div className="space-y-1"><div className="font-medium text-text-main/90">{parsed.group}</div><div className="bg-bg-inset rounded-lg p-2.5 border border-border-main/40 text-text-main/80 max-h-48 overflow-y-auto">{parsed.digest}</div><div className="text-text-muted">{parsed.articles_count ?? 0} 篇文章</div></div>

@@ -327,6 +327,9 @@ function TaskRow({ task, index }) {
   if (task.type === 'group_digest' && task.lookback) {
     detailTags.push(task.mode === '仅未读' ? `近${task.lookback}未读` : `近${task.lookback}`)
   }
+  if (task.type === 'group_digest' && task.chat_count > 0) {
+    detailTags.push(`${task.chat_count}个会话`)
+  }
   if (task.type === 'oa_digest' && task.account_count > 0) {
     detailTags.push(`${task.account_count}个公众号`)
   }

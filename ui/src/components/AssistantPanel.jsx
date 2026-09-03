@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle, Warning, Spinner, MagnifyingGlass, Bell, Clock, ChatCircle, CaretDown, CaretRight, EnvelopeOpen, Archive, Lightning, Trash, X, Plus, Play } from '@phosphor-icons/react'
-import { Toggle, SectionHeader, TagInput, API_BASE, getWsUrl } from './SharedComponents'
+import { Toggle, SectionHeader, TagInput, Input, API_BASE, getWsUrl } from './SharedComponents'
 
 const pageTransition = {
   initial: { opacity: 0, x: 12 },
@@ -334,7 +334,7 @@ export default function AssistantPanel() {
   const alertEditorRef = useRef(null)
   const digestEditorRef = useRef(null)
   const [saveFlash, setSaveFlash] = useState(null)  // 'saving' | 'saved' | 'error' | null
-  const [digestRunning, setDigestRunning] = useState('')  // chat_id of currently running digest
+  const [digestRunning, setDigestRunning] = useState('')  // group id of currently running digest
   const [notifications, setNotifications] = useState([])
   const [notificationLoading, setNotificationLoading] = useState(false)
   const [notificationError, setNotificationError] = useState('')
@@ -349,8 +349,8 @@ export default function AssistantPanel() {
   const [showDigestEditor, setShowDigestEditor] = useState(false)
   const [alertDraft, setAlertDraft] = useState({ chat_id: '', group_name: '', keywords: [], enabled: true, push_target: 'ilink' })
   const [digestDraft, setDigestDraft] = useState({
-    chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true,
-    unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '',
+    id: '', name: '', chats: [], schedule: [], cron_expr: '', lookback_hours: 6, lookback_mode: 'manual', enabled: true,
+    unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '', memory_rev: 0,
     profile: { style: '', custom_prompt: '' },
   })
   const [editorError, setEditorError] = useState('')
@@ -358,7 +358,7 @@ export default function AssistantPanel() {
   const [pushToast, setPushToast] = useState(null)  // { group_name, success, error }
   // Draft state for editing existing cards (separate from saved config)
   const [alertDrafts, setAlertDrafts] = useState({})  // { index: { ...values } }
-  const [digestDrafts, setDigestDrafts] = useState({})  // { index: { ...values } }
+  const [digestDrafts, setDigestDrafts] = useState({})  // { dgId: { ...values } }
 
   // WebSocket for digest push results
   useEffect(() => {
@@ -475,7 +475,13 @@ export default function AssistantPanel() {
       ...raw,
       notification_queue: queue,
       alert_groups: (raw.alert_groups || []).map(item => ({ chat_id: '', ...item })),
-      digest_groups: (raw.digest_groups || []).map(item => ({ chat_id: '', ...item })),
+      digest_groups: (raw.digest_groups || []).map((item, idx) => ({
+        ...item,
+        id: item.id || `local_${idx}`,
+        name: item.name ?? item.group_name ?? '',
+        chats: (item.chats || []).map(c => ({ enabled: true, ...c })),
+        memory_rev: item.memory_rev ?? 0,
+      })),
     }
   }
 
@@ -567,6 +573,18 @@ export default function AssistantPanel() {
     return groups.find(g => g.chat_id === chatId)
   }
 
+  // 一个 chat_id 只能归属一个摘要分组，picker 用它禁用已被别的分组占用的会话
+  function buildOccupied(excludeId) {
+    const map = {}
+    for (const g of (config.digest_groups || [])) {
+      if (g.id === excludeId) continue
+      for (const c of (g.chats || [])) {
+        map[c.chat_id] = g.name || g.id
+      }
+    }
+    return map
+  }
+
   function applyGroupToAlert(index, chatId) {
     const selected = findGroup(chatId)
     const next = [...(config.alert_groups || [])]
@@ -625,14 +643,14 @@ export default function AssistantPanel() {
     loadNotifications()
   }
 
-  async function handleRunDigest(chatId, groupName) {
-    if (!chatId) return
-    setDigestRunning(chatId)
+  async function handleRunDigest(groupId, groupName) {
+    if (!groupId) return
+    setDigestRunning(groupId)
     try {
       const res = await fetch(`${API_BASE}/api/assistant/digest/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, group_name: groupName }),
+        body: JSON.stringify({ group_id: groupId }),
       })
       const data = await res.json()
       if (data.ok) {
@@ -938,9 +956,11 @@ export default function AssistantPanel() {
           <div className="p-6 space-y-3">
             {/* 已有群列表 */}
             <AnimatePresence>
-              {(config.digest_groups || []).map((dg, i) => (
+              {(config.digest_groups || []).map((dg, i) => {
+                const cardKey = dg.id || `fallback_${i}`
+                return (
                 <motion.div
-                  key={i}
+                  key={cardKey}
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
@@ -950,23 +970,24 @@ export default function AssistantPanel() {
                     dg={dg}
                     index={i}
                     groups={groups}
-                    expanded={!!expandedDigests[i]}
-                    profileExpanded={!!expandedProfiles[i]}
-                    draft={digestDrafts[i] || null}
+                    expanded={!!expandedDigests[cardKey]}
+                    profileExpanded={!!expandedProfiles[cardKey]}
+                    draft={digestDrafts[cardKey] || null}
+                    occupied={buildOccupied(dg.id)}
                     defaultSystemPrompt={config.default_system_prompt}
                     stylePresets={config.style_presets || {}}
                     onToggleExpand={() => {
-                      const nextExpanded = !expandedDigests[i]
-                      setExpandedDigests(prev => ({ ...prev, [i]: nextExpanded }))
+                      const nextExpanded = !expandedDigests[cardKey]
+                      setExpandedDigests(prev => ({ ...prev, [cardKey]: nextExpanded }))
                       if (nextExpanded) {
                         // Initialize draft from current config
-                        setDigestDrafts(prev => ({ ...prev, [i]: { ...dg } }))
+                        setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...dg } }))
                       } else {
                         // Clear draft on collapse
-                        setDigestDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
+                        setDigestDrafts(prev => { const n = { ...prev }; delete n[cardKey]; return n })
                       }
                     }}
-                    onToggleProfile={() => setExpandedProfiles(prev => ({ ...prev, [i]: !prev[i] }))}
+                    onToggleProfile={() => setExpandedProfiles(prev => ({ ...prev, [cardKey]: !prev[cardKey] }))}
                     onToggleEnabled={v => {
                       // Toggle saves immediately — directly patch config, skip draft
                       const next = [...config.digest_groups]
@@ -976,46 +997,50 @@ export default function AssistantPanel() {
                     }}
                     onDelete={() => {
                       const next = config.digest_groups.filter((_, idx) => idx !== i)
+                      // id 会被后端复用（dg_NNN 按数量分配），残留条目会让新分组
+                      // 继承已删分组的草稿与展开态，所以三个 map 都要清
+                      for (const setter of [setDigestDrafts, setExpandedDigests, setExpandedProfiles]) {
+                        setter(prev => { const n = { ...prev }; delete n[cardKey]; return n })
+                      }
                       updateAndSaveNow('digest_groups', next)
                     }}
-                    onSelectGroup={chatId => {
-                      const selected = findGroup(chatId)
-                      setDigestDrafts(prev => ({ ...prev, [i]: { ...prev[i], chat_id: chatId, group_name: selected?.group_name || prev[i]?.group_name || '' } }))
+                    onSelectChats={chats => {
+                      setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...(prev[cardKey] || dg), chats } }))
                     }}
                     onScheduleChange={schedule => {
-                      setDigestDrafts(prev => ({ ...prev, [i]: { ...prev[i], schedule } }))
+                      setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...prev[cardKey], schedule } }))
                     }}
                     onCronExprChange={cron_expr => {
-                      setDigestDrafts(prev => ({ ...prev, [i]: { ...prev[i], cron_expr } }))
+                      setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...prev[cardKey], cron_expr } }))
                     }}
                     onLookbackChange={lookback_hours => {
-                      setDigestDrafts(prev => ({ ...prev, [i]: { ...prev[i], lookback_hours } }))
+                      setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...prev[cardKey], lookback_hours } }))
                     }}
                     onLookbackModeChange={mode => {
-                      setDigestDrafts(prev => ({ ...prev, [i]: { ...prev[i], lookback_mode: mode } }))
+                      setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...prev[cardKey], lookback_mode: mode } }))
                     }}
                     onProfileChange={patch => {
                       setDigestDrafts(prev => {
-                        const profile = prev[i]?.profile || {}
-                        return { ...prev, [i]: { ...prev[i], profile: { ...profile, ...patch } } }
+                        const profile = prev[cardKey]?.profile || {}
+                        return { ...prev, [cardKey]: { ...prev[cardKey], profile: { ...profile, ...patch } } }
                       })
                     }}
                     onMemoryChange={memory => {
-                      setDigestDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || dg), memory } }))
+                      setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...(prev[cardKey] || dg), memory } }))
                     }}
                     onMemoryEnabledChange={memory_enabled => {
-                      setDigestDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || dg), memory_enabled } }))
+                      setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...(prev[cardKey] || dg), memory_enabled } }))
                     }}
                     onUnreadOnlyChange={v => {
                       // Toggle updates draft only — save button persists
-                      setDigestDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || dg), unread_only: v } }))
+                      setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...(prev[cardKey] || dg), unread_only: v } }))
                     }}
                     onPushTargetChange={v => {
                       // Toggle updates draft only — save button persists
-                      setDigestDrafts(prev => ({ ...prev, [i]: { ...(prev[i] || dg), push_target: v } }))
+                      setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...(prev[cardKey] || dg), push_target: v } }))
                     }}
-                    onSave={() => {
-                      const draft = digestDrafts[i]
+                    onSave={async () => {
+                      const draft = digestDrafts[cardKey]
                       if (!draft) return
                       // Validate cron before save
                       const cronErr = validateCronExpr(draft.cron_expr || '')
@@ -1025,36 +1050,72 @@ export default function AssistantPanel() {
                         setTimeout(() => setSaveError(''), 3000)
                         return
                       }
-                      // If chat_id changed, check conflict with another digest group
-                      if (draft.chat_id && draft.chat_id !== config.digest_groups[i].chat_id) {
-                        const conflict = (config.digest_groups || []).find((g, idx) => idx !== i && g.chat_id === draft.chat_id)
-                        if (conflict) {
-                          setSaveError(`"${conflict.group_name || conflict.chat_id}" 已存在定时摘要配置`)
+                      // picker 里已 disable 被占用的会话，这里是双保险
+                      const occupiedMap = buildOccupied(dg.id)
+                      const conflict = (draft.chats || []).find(c => occupiedMap[c.chat_id])
+                      if (conflict) {
+                        setSaveError(`"${conflict.name || conflict.chat_id}" 已在分组「${occupiedMap[conflict.chat_id]}」中`)
+                        setSaveFlash('error')
+                        setTimeout(() => setSaveError(''), 3000)
+                        return
+                      }
+                      // 记忆走独立端点：批量 PUT 的 merge 一律以磁盘为准，带上 memory 会被忽略
+                      let newMemoryRev = null
+                      if ((draft.memory || '') !== (dg.memory || '')) {
+                        try {
+                          const res = await fetch(`${API_BASE}/api/assistant/digest-group-memory`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ id: dg.id, memory: draft.memory || '', memory_rev: dg.memory_rev ?? 0 }),
+                          })
+                          const d = await res.json()
+                          if (!d.ok) {
+                            if (d.memory !== undefined) {
+                              // 版本冲突：期间后台摘要写过记忆，回填最新版本并保持展开，让用户重新确认
+                              setConfig(prev => ({
+                                ...prev,
+                                digest_groups: (prev.digest_groups || []).map(g => g.id === dg.id ? { ...g, memory: d.memory, memory_rev: d.memory_rev } : g),
+                              }))
+                              setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...(prev[cardKey] || draft), memory: d.memory, memory_rev: d.memory_rev } }))
+                            }
+                            setSaveError(d.error || '记忆保存失败')
+                            setSaveFlash('error')
+                            setTimeout(() => setSaveError(''), 5000)
+                            return
+                          }
+                          newMemoryRev = d.memory_rev
+                        } catch {
+                          setSaveError('记忆保存失败')
                           setSaveFlash('error')
                           setTimeout(() => setSaveError(''), 3000)
                           return
                         }
                       }
                       const next = [...config.digest_groups]
-                      // Same as alert groups: enabled is handled independently
-                      const { enabled: _enabled, ...safeDraft } = draft || {}
+                      // enabled 由 onToggleEnabled 独立即时保存；memory/memory_rev 已单独走上面的端点
+                      const { enabled: _enabled, memory: _memory, memory_rev: _memoryRev, ...safeDraft } = draft || {}
                       next[i] = { ...next[i], ...safeDraft }
+                      if (newMemoryRev !== null) {
+                        next[i].memory = draft.memory || ''
+                        next[i].memory_rev = newMemoryRev
+                      }
                       setConfig(prev => ({ ...prev, digest_groups: next }))
                       scheduleAutoSave({ ...config, digest_groups: next }, true)
-                      setDigestDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
-                      setExpandedDigests(prev => ({ ...prev, [i]: false }))
+                      setDigestDrafts(prev => { const n = { ...prev }; delete n[cardKey]; return n })
+                      setExpandedDigests(prev => ({ ...prev, [cardKey]: false }))
                       setSaveFlash('saved')
                       setTimeout(() => setSaveFlash(null), 1500)
                     }}
                     onCancel={() => {
-                      setDigestDrafts(prev => { const n = { ...prev }; delete n[i]; return n })
-                      setExpandedDigests(prev => ({ ...prev, [i]: false }))
+                      setDigestDrafts(prev => { const n = { ...prev }; delete n[cardKey]; return n })
+                      setExpandedDigests(prev => ({ ...prev, [cardKey]: false }))
                     }}
                     digestRunning={digestRunning}
                     onRunDigest={handleRunDigest}
                   />
                 </motion.div>
-              ))}
+                )
+              })}
             </AnimatePresence>
 
             {/* 空状态 */}
@@ -1063,7 +1124,7 @@ export default function AssistantPanel() {
                 <Clock size={32} className="text-text-muted/30 mx-auto mb-3" />
                 <p className="text-sm text-text-muted">添加联系人以配置定时摘要</p>
                 <button
-                  onClick={() => { setShowDigestEditor(true); setDigestDraft({ chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true, unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '', profile: { style: '', custom_prompt: '' } }); setEditorError('') }}
+                  onClick={() => { setShowDigestEditor(true); setDigestDraft({ id: '', name: '', chats: [], schedule: [], cron_expr: '', lookback_hours: 6, lookback_mode: 'manual', enabled: true, unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '', memory_rev: 0, profile: { style: '', custom_prompt: '' } }); setEditorError('') }}
                   className="mt-4 text-sm text-brand-green-hover hover:underline cursor-pointer font-medium"
                 >+ 添加摘要群</button>
               </div>
@@ -1084,27 +1145,30 @@ export default function AssistantPanel() {
                     draft={digestDraft}
                     groups={groups}
                     error={editorError}
+                    occupied={buildOccupied('')}
                     defaultSystemPrompt={config.default_system_prompt}
                     stylePresets={config.style_presets || {}}
                     onDraftChange={setDigestDraft}
                     onSave={() => {
-                      if (!digestDraft.chat_id) { setEditorError('请先选择联系人'); return }
+                      const name = (digestDraft.name || '').trim()
+                      if (!name) { setEditorError('请填写分组名称'); return }
+                      if (!(digestDraft.chats || []).length) { setEditorError('请至少选择一个会话'); return }
                       const cron_expr = digestDraft.cron_expr || '0 9 * * *'
                       const cronErr = validateCronExpr(cron_expr)
                       if (cronErr) { setEditorError(cronErr); return }
-                      // Check duplicate chat_id in digest_groups
-                      if ((config.digest_groups || []).some(g => g.chat_id === digestDraft.chat_id)) {
-                        const name = findGroup(digestDraft.chat_id)?.group_name || digestDraft.chat_id
-                        setEditorError(`"${name}" 已存在定时摘要配置`)
+                      // picker 里已 disable 被占用的会话，这里是双保险
+                      const occupiedMap = buildOccupied('')
+                      const conflict = (digestDraft.chats || []).find(c => occupiedMap[c.chat_id])
+                      if (conflict) {
+                        setEditorError(`"${conflict.name || conflict.chat_id}" 已在分组「${occupiedMap[conflict.chat_id]}」中`)
                         return
                       }
-                      const selected = findGroup(digestDraft.chat_id)
                       const schedule = digestDraft.schedule?.length ? digestDraft.schedule : ['09:00']
                       const next = [...(config.digest_groups || []), {
                         ...digestDraft,
+                        name,
                         schedule,
                         cron_expr,
-                        group_name: selected?.group_name || digestDraft.group_name || '',
                       }]
                       updateAndSaveNow('digest_groups', next)
                       setShowDigestEditor(false)
@@ -1119,7 +1183,7 @@ export default function AssistantPanel() {
             {/* 有群时的添加按钮 */}
             {(config.digest_groups?.length > 0 || showDigestEditor) && !showDigestEditor && (
               <button
-                onClick={() => { setShowDigestEditor(true); setDigestDraft({ chat_id: '', group_name: '', schedule: [], cron_expr: '', lookback_hours: 6, enabled: true, unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '', profile: { style: '', custom_prompt: '' } }); setEditorError('') }}
+                onClick={() => { setShowDigestEditor(true); setDigestDraft({ id: '', name: '', chats: [], schedule: [], cron_expr: '', lookback_hours: 6, lookback_mode: 'manual', enabled: true, unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '', memory_rev: 0, profile: { style: '', custom_prompt: '' } }); setEditorError('') }}
                 className="w-full py-3.5 text-sm text-text-muted hover:text-brand-green border border-dashed border-border-main hover:border-brand-green/40 rounded-xl transition-all duration-200 cursor-pointer bg-bg-raised/30 hover:bg-brand-green/5"
               >
                 + 添加摘要群
@@ -1219,7 +1283,7 @@ export default function AssistantPanel() {
                     {/* Filters */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       <SearchableGroupSelect
-                        groups={groups}
+                        groups={[...groups, ...(config.digest_groups || []).map(dg => ({ chat_id: dg.id, group_name: dg.name, type: 'digest_group' }))]}
                         value={filters.chat_id}
                         onChange={chatId => setFilters(prev => ({ ...prev, chat_id: chatId }))}
                         placeholder="全部联系人"
@@ -1578,7 +1642,7 @@ function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCron
   )
 }
 
-function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectGroup, onScheduleChange, onCronExprChange, onLookbackChange, onLookbackModeChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onMemoryChange, onMemoryEnabledChange, onSave, onCancel, defaultSystemPrompt, stylePresets, digestRunning, onRunDigest }) {
+function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectChats, onScheduleChange, onCronExprChange, onLookbackChange, onLookbackModeChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onMemoryChange, onMemoryEnabledChange, onSave, onCancel, defaultSystemPrompt, stylePresets, digestRunning, onRunDigest, occupied }) {
   const bodyRef = useRef(null)
   // Use draft if available (editing), otherwise use saved values
   const values = draft || dg
@@ -1603,9 +1667,14 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
       >
         <Toggle enabled={dg.enabled} onChange={onToggleEnabled} />
         <div className="flex-1 min-w-0">
-          <span className="text-sm text-text-main font-medium truncate block">
-            {values.group_name || `摘要群 #${index + 1}`}
-          </span>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm text-text-main font-medium truncate">
+              {values.name || '未命名分组'}
+            </span>
+            <span className="text-xs px-1.5 py-0.5 rounded bg-bg-raised text-text-muted font-medium shrink-0">
+              {values.chats?.length || 0} 个会话
+            </span>
+          </div>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             {headerSchedule ? (
               <span className="text-xs px-1.5 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-mono">{headerSchedule}</span>
@@ -1625,17 +1694,17 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
         </div>
         <div className="flex items-center gap-1">
           <button
-            onClick={e => { e.stopPropagation(); onRunDigest(values.chat_id, values.group_name) }}
-            disabled={!values.chat_id || digestRunning === values.chat_id}
+            onClick={e => { e.stopPropagation(); onRunDigest(values.id, values.name) }}
+            disabled={!values.chats?.length || digestRunning === values.id}
             className={`flex items-center gap-1 text-xs font-medium transition-colors cursor-pointer px-2 py-1 rounded-lg
-              ${digestRunning === values.chat_id
+              ${digestRunning === values.id
                 ? 'text-brand-green/50 cursor-wait'
                 : 'text-brand-green hover:text-brand-green-hover hover:bg-brand-green/[0.06]'
               }`}
             title="手动生成摘要"
           >
             <Play size={13} weight="fill" />
-            {digestRunning === values.chat_id ? '生成中...' : '生成摘要'}
+            {digestRunning === values.id ? '生成中...' : '生成摘要'}
           </button>
           <DeleteButton onDelete={onDelete} />
         </div>        <div className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
@@ -1661,14 +1730,14 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
               {/* Group select */}
               <div>
                 <label className="text-xs text-text-muted block mb-1.5">选择联系人</label>
-                <SearchableGroupSelect
+                <MultiChatPicker
                   groups={groups}
-                  value={values.chat_id || ''}
-                  onChange={onSelectGroup}
-                  placeholder="搜索联系人..."
+                  value={values.chats || []}
+                  onChange={onSelectChats}
+                  occupied={occupied || {}}
                 />
-                {!values.chat_id && values.group_name && (
-                  <p className="text-xs text-status-warn mt-1">历史群名：{values.group_name}，请从下拉重新绑定</p>
+                {!(values.chats || []).length && (
+                  <p className="text-xs text-status-warn mt-1">该分组没有可用会话，请重新绑定</p>
                 )}
               </div>
               {/* Schedule config */}
@@ -1907,22 +1976,27 @@ function AlertGroupEditor({ draft, groups, error, onDraftChange, onSave, onCance
   )
 }
 
-function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCancel, defaultSystemPrompt, stylePresets }) {
+function DigestGroupEditor({ draft, groups, error, onDraftChange, onSave, onCancel, defaultSystemPrompt, stylePresets, occupied }) {
   const [profileOpen, setProfileOpen] = useState(false)
   return (
     <div className="border border-brand-green/30 rounded-xl p-4 space-y-3 bg-brand-green/[0.02]">
-      <p className="text-sm text-brand-green font-semibold mb-1">新增摘要群</p>
+      <p className="text-sm text-brand-green font-semibold mb-1">新增摘要分组</p>
       {error && <p className="text-xs text-status-error">{error}</p>}
       <div>
+        <label className="text-xs text-text-muted block mb-1.5">分组名称 <span className="text-status-error">*</span></label>
+        <Input
+          value={draft.name || ''}
+          onChange={name => onDraftChange({ ...draft, name })}
+          placeholder="给这个摘要分组起个名字"
+        />
+      </div>
+      <div>
         <label className="text-xs text-text-muted block mb-1.5">选择联系人 <span className="text-status-error">*</span></label>
-        <SearchableGroupSelect
+        <MultiChatPicker
           groups={groups}
-          value={draft.chat_id || ''}
-          onChange={chatId => {
-            const selected = groups.find(g => g.chat_id === chatId)
-            onDraftChange({ ...draft, chat_id: chatId, group_name: selected?.group_name || '' })
-          }}
-          placeholder="搜索联系人..."
+          value={draft.chats || []}
+          onChange={chats => onDraftChange({ ...draft, chats })}
+          occupied={occupied || {}}
         />
       </div>
       {/* Schedule config */}
@@ -2174,9 +2248,10 @@ function SearchableGroupSelect({ groups, value, onChange, placeholder, allowClea
     ? groups.filter(g => g.group_name.toLowerCase().includes(query.toLowerCase()) || g.chat_id.toLowerCase().includes(query.toLowerCase()))
     : groups
 
-  // 按类型分组：群聊在前，个人好友在后
-  const chatrooms = filtered.filter(g => g.type === 'chatroom' || g.chat_id.endsWith('@chatroom'))
-  const contacts = filtered.filter(g => g.type !== 'chatroom' && !g.chat_id.endsWith('@chatroom'))
+  // 按类型分组：摘要分组在前，群聊次之，个人好友在后
+  const digestGroups = filtered.filter(g => g.type === 'digest_group')
+  const chatrooms = filtered.filter(g => g.type !== 'digest_group' && (g.type === 'chatroom' || g.chat_id.endsWith('@chatroom')))
+  const contacts = filtered.filter(g => g.type !== 'digest_group' && g.type !== 'chatroom' && !g.chat_id.endsWith('@chatroom'))
 
   const displayText = open ? query : (selected ? selected.group_name : '')
 
@@ -2208,6 +2283,24 @@ function SearchableGroupSelect({ groups, value, onChange, placeholder, allowClea
             <p className="px-4 py-3 text-xs text-text-muted text-center">无匹配联系人</p>
           ) : (
             <>
+              {digestGroups.length > 0 && (
+                <>
+                  <div className="px-4 py-1.5 text-[11px] text-text-muted/60 font-semibold uppercase tracking-wider sticky top-0 bg-bg-card border-b border-border-main/30">📋 摘要分组</div>
+                  {digestGroups.map(g => (
+                    <button
+                      key={g.chat_id}
+                      type="button"
+                      className={`w-full text-left px-4 py-2.5 text-sm hover:bg-bg-raised transition-colors flex items-center gap-2 ${
+                        g.chat_id === value ? 'bg-brand-green/10 text-brand-green-hover' : 'text-text-main'
+                      }`}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => { onChange(g.chat_id); setQuery(''); setOpen(false) }}
+                    >
+                      <span className="truncate">{g.group_name}</span>
+                    </button>
+                  ))}
+                </>
+              )}
               {chatrooms.length > 0 && (
                 <>
                   <div className="px-4 py-1.5 text-[11px] text-text-muted/60 font-semibold uppercase tracking-wider sticky top-0 bg-bg-card border-b border-border-main/30">👥 群聊</div>
@@ -2242,6 +2335,120 @@ function SearchableGroupSelect({ groups, value, onChange, placeholder, allowClea
                       <span className="truncate">{g.group_name}</span>
                     </button>
                   ))}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MultiChatPicker({ groups, value = [], onChange, occupied = {} }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const ref = useRef(null)
+
+  useEffect(() => {
+    function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  const selectedIds = new Set(value.map(c => c.chat_id))
+
+  const filtered = query
+    ? groups.filter(g => g.group_name.toLowerCase().includes(query.toLowerCase()) || g.chat_id.toLowerCase().includes(query.toLowerCase()))
+    : groups
+
+  const chatrooms = filtered.filter(g => g.type === 'chatroom' || g.chat_id.endsWith('@chatroom'))
+  const contacts = filtered.filter(g => g.type !== 'chatroom' && !g.chat_id.endsWith('@chatroom'))
+
+  function toggleChat(g) {
+    if (occupied[g.chat_id]) return
+    if (selectedIds.has(g.chat_id)) {
+      onChange(value.filter(c => c.chat_id !== g.chat_id))
+    } else {
+      onChange([...value, { chat_id: g.chat_id, name: g.group_name, enabled: true }])
+    }
+  }
+
+  function renderRow(g) {
+    const checked = selectedIds.has(g.chat_id)
+    const occupiedBy = occupied[g.chat_id]
+    return (
+      <label
+        key={g.chat_id}
+        className={`w-full text-left px-4 py-2.5 text-sm transition-colors flex items-center gap-2 ${
+          occupiedBy ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-bg-raised'
+        } ${checked ? 'bg-brand-green/10' : ''}`}
+        onMouseDown={e => e.preventDefault()}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={!!occupiedBy}
+          onChange={() => toggleChat(g)}
+          className="accent-brand-green shrink-0"
+        />
+        <span className={`truncate flex-1 ${checked ? 'text-brand-green-hover font-medium' : 'text-text-main'}`}>{g.group_name}</span>
+        {occupiedBy && <span className="text-xs text-text-muted shrink-0">已在「{occupiedBy}」</span>}
+      </label>
+    )
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      {value.length > 0 && (
+        <div className="mb-2">
+          <div className="flex flex-wrap gap-1.5">
+            {value.map(c => (
+              <span
+                key={c.chat_id}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-brand-green/10 text-brand-green-hover dark:text-brand-green text-xs font-medium"
+              >
+                {c.name || c.chat_id}
+                <button
+                  type="button"
+                  onClick={() => onChange(value.filter(v => v.chat_id !== c.chat_id))}
+                  className="text-brand-green/50 hover:text-status-error transition-colors cursor-pointer"
+                >
+                  <X size={10} weight="bold" />
+                </button>
+              </span>
+            ))}
+          </div>
+          <p className="text-xs text-text-muted mt-1.5">已选 {value.length} 个会话</p>
+        </div>
+      )}
+      <div className="relative">
+        <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+        <input
+          type="text"
+          value={open ? query : ''}
+          placeholder={value.length ? '继续搜索添加会话...' : '搜索联系人...'}
+          onFocus={() => { setOpen(true); setQuery('') }}
+          onChange={e => { setQuery(e.target.value); setOpen(true) }}
+          className="w-full bg-bg-raised border border-border-main rounded-lg pl-9 pr-4 py-2 text-[14px] text-text-main placeholder:text-text-muted/65 focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
+        />
+      </div>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full bg-bg-card border border-border-main rounded-lg shadow-lg max-h-52 overflow-y-auto">
+          {filtered.length === 0 ? (
+            <p className="px-4 py-3 text-xs text-text-muted text-center">无匹配联系人</p>
+          ) : (
+            <>
+              {chatrooms.length > 0 && (
+                <>
+                  <div className="px-4 py-1.5 text-[11px] text-text-muted/60 font-semibold uppercase tracking-wider sticky top-0 bg-bg-card border-b border-border-main/30">👥 群聊</div>
+                  {chatrooms.map(renderRow)}
+                </>
+              )}
+              {contacts.length > 0 && (
+                <>
+                  <div className="px-4 py-1.5 text-[11px] text-text-muted/60 font-semibold uppercase tracking-wider sticky top-0 bg-bg-card border-b border-border-main/30">👤 好友</div>
+                  {contacts.map(renderRow)}
                 </>
               )}
             </>
