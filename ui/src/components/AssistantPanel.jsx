@@ -519,6 +519,14 @@ export default function AssistantPanel() {
     }
   }
 
+  // 错误 toast 要同时清 saveFlash 和 saveError：只清前者红色提示会永久停在
+  // 屏幕上，只清后者用户看到的永远是笼统的「保存失败」而不知道原因。
+  function flashSaveError(msg, ms = 4000) {
+    setSaveError(msg || '保存失败')
+    setSaveFlash('error')
+    setTimeout(() => { setSaveError(''); setSaveFlash(null) }, ms)
+  }
+
   async function doSave(configToSave) {
     try {
       setSaveFlash('saving')
@@ -535,14 +543,10 @@ export default function AssistantPanel() {
         setSaveFlash('saved')
         setTimeout(() => { setSaved(false); setSaveFlash(null) }, 1500)
       } else {
-        setSaveError(d.error || '保存失败')
-        setSaveFlash('error')
-        setTimeout(() => setSaveFlash(null), 2500)
+        flashSaveError(d.error, 2500)
       }
     } catch (e) {
-      setSaveError(e.message || '保存失败')
-      setSaveFlash('error')
-      setTimeout(() => setSaveFlash(null), 2500)
+      flashSaveError(e.message, 2500)
     }
   }
 
@@ -717,17 +721,17 @@ export default function AssistantPanel() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 10 }}
             transition={{ duration: 0.2 }}
-            className="fixed bottom-6 right-6 z-50"
+            className="fixed bottom-6 right-6 z-50 max-w-[26rem]"
           >
             <div className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium shadow-lg transition-all ${
               saveFlash === 'saving' ? 'bg-bg-raised text-text-muted' :
               saveFlash === 'saved' ? 'bg-brand-green/90 text-white' :
               'bg-status-error/90 text-white'
             }`}>
-              {saveFlash === 'saving' && <Spinner size={14} className="animate-spin" />}
-              {saveFlash === 'saved' && <CheckCircle size={14} weight="fill" />}
-              {saveFlash === 'error' && <Warning size={14} weight="fill" />}
-              {saveFlash === 'saving' ? '保存中...' : saveFlash === 'saved' ? '已保存' : '保存失败'}
+              {saveFlash === 'saving' && <Spinner size={14} className="animate-spin shrink-0" />}
+              {saveFlash === 'saved' && <CheckCircle size={14} weight="fill" className="shrink-0" />}
+              {saveFlash === 'error' && <Warning size={14} weight="fill" className="shrink-0" />}
+              {saveFlash === 'saving' ? '保存中...' : saveFlash === 'saved' ? '已保存' : (saveError || '保存失败')}
             </div>
           </motion.div>
         )}
@@ -746,7 +750,7 @@ export default function AssistantPanel() {
         <span className="text-text-muted">·</span>
         <span className="text-xs text-text-muted">
           {alertCount > 0 && `${alertCount} 个提醒群 · `}
-          {digestCount > 0 && `${digestCount} 个摘要群 · `}
+          {digestCount > 0 && `${digestCount} 个摘要分组 · `}
           {config.notification_queue?.enabled !== false ? '通知队列开启' : '通知队列关闭'}
         </span>
         <div className="ml-auto flex items-center gap-2 shrink-0">
@@ -1004,6 +1008,9 @@ export default function AssistantPanel() {
                       }
                       updateAndSaveNow('digest_groups', next)
                     }}
+                    onNameChange={name => {
+                      setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...(prev[cardKey] || dg), name } }))
+                    }}
                     onSelectChats={chats => {
                       setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...(prev[cardKey] || dg), chats } }))
                     }}
@@ -1042,21 +1049,22 @@ export default function AssistantPanel() {
                     onSave={async () => {
                       const draft = digestDrafts[cardKey]
                       if (!draft) return
+                      const name = (draft.name || '').trim()
+                      if (!name) {
+                        flashSaveError('请填写分组名称')
+                        return
+                      }
                       // Validate cron before save
                       const cronErr = validateCronExpr(draft.cron_expr || '')
                       if (cronErr) {
-                        setSaveError(cronErr)
-                        setSaveFlash('error')
-                        setTimeout(() => setSaveError(''), 3000)
+                        flashSaveError(cronErr)
                         return
                       }
                       // picker 里已 disable 被占用的会话，这里是双保险
                       const occupiedMap = buildOccupied(dg.id)
                       const conflict = (draft.chats || []).find(c => occupiedMap[c.chat_id])
                       if (conflict) {
-                        setSaveError(`"${conflict.name || conflict.chat_id}" 已在分组「${occupiedMap[conflict.chat_id]}」中`)
-                        setSaveFlash('error')
-                        setTimeout(() => setSaveError(''), 3000)
+                        flashSaveError(`"${conflict.name || conflict.chat_id}" 已在分组「${occupiedMap[conflict.chat_id]}」中`)
                         return
                       }
                       // 记忆走独立端点：批量 PUT 的 merge 一律以磁盘为准，带上 memory 会被忽略
@@ -1078,23 +1086,19 @@ export default function AssistantPanel() {
                               }))
                               setDigestDrafts(prev => ({ ...prev, [cardKey]: { ...(prev[cardKey] || draft), memory: d.memory, memory_rev: d.memory_rev } }))
                             }
-                            setSaveError(d.error || '记忆保存失败')
-                            setSaveFlash('error')
-                            setTimeout(() => setSaveError(''), 5000)
+                            flashSaveError(d.error || '记忆保存失败', 5000)
                             return
                           }
                           newMemoryRev = d.memory_rev
                         } catch {
-                          setSaveError('记忆保存失败')
-                          setSaveFlash('error')
-                          setTimeout(() => setSaveError(''), 3000)
+                          flashSaveError('记忆保存失败')
                           return
                         }
                       }
                       const next = [...config.digest_groups]
                       // enabled 由 onToggleEnabled 独立即时保存；memory/memory_rev 已单独走上面的端点
                       const { enabled: _enabled, memory: _memory, memory_rev: _memoryRev, ...safeDraft } = draft || {}
-                      next[i] = { ...next[i], ...safeDraft }
+                      next[i] = { ...next[i], ...safeDraft, name }
                       if (newMemoryRev !== null) {
                         next[i].memory = draft.memory || ''
                         next[i].memory_rev = newMemoryRev
@@ -1126,7 +1130,7 @@ export default function AssistantPanel() {
                 <button
                   onClick={() => { setShowDigestEditor(true); setDigestDraft({ id: '', name: '', chats: [], schedule: [], cron_expr: '', lookback_hours: 6, lookback_mode: 'manual', enabled: true, unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '', memory_rev: 0, profile: { style: '', custom_prompt: '' } }); setEditorError('') }}
                   className="mt-4 text-sm text-brand-green-hover hover:underline cursor-pointer font-medium"
-                >+ 添加摘要群</button>
+                >+ 添加摘要分组</button>
               </div>
             )}
 
@@ -1186,7 +1190,7 @@ export default function AssistantPanel() {
                 onClick={() => { setShowDigestEditor(true); setDigestDraft({ id: '', name: '', chats: [], schedule: [], cron_expr: '', lookback_hours: 6, lookback_mode: 'manual', enabled: true, unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '', memory_rev: 0, profile: { style: '', custom_prompt: '' } }); setEditorError('') }}
                 className="w-full py-3.5 text-sm text-text-muted hover:text-brand-green border border-dashed border-border-main hover:border-brand-green/40 rounded-xl transition-all duration-200 cursor-pointer bg-bg-raised/30 hover:bg-brand-green/5"
               >
-                + 添加摘要群
+                + 添加摘要分组
               </button>
             )}
           </div>
@@ -1642,7 +1646,7 @@ function ScheduleConfig({ schedule = [], cronExpr = '', onScheduleChange, onCron
   )
 }
 
-function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onSelectChats, onScheduleChange, onCronExprChange, onLookbackChange, onLookbackModeChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onMemoryChange, onMemoryEnabledChange, onSave, onCancel, defaultSystemPrompt, stylePresets, digestRunning, onRunDigest, occupied }) {
+function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, onToggleExpand, onToggleProfile, onToggleEnabled, onDelete, onNameChange, onSelectChats, onScheduleChange, onCronExprChange, onLookbackChange, onLookbackModeChange, onProfileChange, onUnreadOnlyChange, onPushTargetChange, onMemoryChange, onMemoryEnabledChange, onSave, onCancel, defaultSystemPrompt, stylePresets, digestRunning, onRunDigest, occupied }) {
   const bodyRef = useRef(null)
   // Use draft if available (editing), otherwise use saved values
   const values = draft || dg
@@ -1727,6 +1731,15 @@ function DigestGroupCard({ dg, index, groups, expanded, profileExpanded, draft, 
             }}
           >
             <div ref={bodyRef} className="px-4 pb-4 space-y-4 border-t border-border-main/50 pt-4 mx-4">
+              {/* Group name */}
+              <div>
+                <label className="text-xs text-text-muted block mb-1.5">分组名称 <span className="text-status-error">*</span></label>
+                <Input
+                  value={values.name || ''}
+                  onChange={onNameChange}
+                  placeholder="给这个摘要分组起个名字"
+                />
+              </div>
               {/* Group select */}
               <div>
                 <label className="text-xs text-text-muted block mb-1.5">选择联系人</label>
@@ -2399,7 +2412,7 @@ function MultiChatPicker({ groups, value = [], onChange, occupied = {} }) {
   }
 
   return (
-    <div ref={ref} className="relative">
+    <div>
       {value.length > 0 && (
         <div className="mb-2">
           <div className="flex flex-wrap gap-1.5">
@@ -2422,7 +2435,9 @@ function MultiChatPicker({ groups, value = [], onChange, occupied = {} }) {
           <p className="text-xs text-text-muted mt-1.5">已选 {value.length} 个会话</p>
         </div>
       )}
-      <div className="relative">
+      {/* ref 只包搜索框和下拉。包到外层的话，chips 那一条也算「框内」，
+          点「选择联系人」标签下方就永远收不回下拉 */}
+      <div ref={ref} className="relative">
         <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
         <input
           type="text"
@@ -2432,29 +2447,29 @@ function MultiChatPicker({ groups, value = [], onChange, occupied = {} }) {
           onChange={e => { setQuery(e.target.value); setOpen(true) }}
           className="w-full bg-bg-raised border border-border-main rounded-lg pl-9 pr-4 py-2 text-[14px] text-text-main placeholder:text-text-muted/65 focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all"
         />
+        {open && (
+          <div className="absolute top-full left-0 z-50 mt-1 w-full bg-bg-card border border-border-main rounded-lg shadow-lg max-h-52 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <p className="px-4 py-3 text-xs text-text-muted text-center">无匹配联系人</p>
+            ) : (
+              <>
+                {chatrooms.length > 0 && (
+                  <>
+                    <div className="px-4 py-1.5 text-[11px] text-text-muted/60 font-semibold uppercase tracking-wider sticky top-0 bg-bg-card border-b border-border-main/30">👥 群聊</div>
+                    {chatrooms.map(renderRow)}
+                  </>
+                )}
+                {contacts.length > 0 && (
+                  <>
+                    <div className="px-4 py-1.5 text-[11px] text-text-muted/60 font-semibold uppercase tracking-wider sticky top-0 bg-bg-card border-b border-border-main/30">👤 好友</div>
+                    {contacts.map(renderRow)}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
-      {open && (
-        <div className="absolute z-50 mt-1 w-full bg-bg-card border border-border-main rounded-lg shadow-lg max-h-52 overflow-y-auto">
-          {filtered.length === 0 ? (
-            <p className="px-4 py-3 text-xs text-text-muted text-center">无匹配联系人</p>
-          ) : (
-            <>
-              {chatrooms.length > 0 && (
-                <>
-                  <div className="px-4 py-1.5 text-[11px] text-text-muted/60 font-semibold uppercase tracking-wider sticky top-0 bg-bg-card border-b border-border-main/30">👥 群聊</div>
-                  {chatrooms.map(renderRow)}
-                </>
-              )}
-              {contacts.length > 0 && (
-                <>
-                  <div className="px-4 py-1.5 text-[11px] text-text-muted/60 font-semibold uppercase tracking-wider sticky top-0 bg-bg-card border-b border-border-main/30">👤 好友</div>
-                  {contacts.map(renderRow)}
-                </>
-              )}
-            </>
-          )}
-        </div>
-      )}
     </div>
   )
 }
