@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Newspaper, MagnifyingGlass, Clock, Plus, Trash, Pencil, FileText, Play, Folder, X, Export, Globe, ArrowsClockwise, Sparkle, Info, CaretDown, CaretUp, NotePencil, CodeBlock, FilmStrip, ChartBar, NewspaperClipping, CaretDown as ChevronDown, CaretUp as ChevronUp, Bell, ToggleLeft } from '@phosphor-icons/react'
-import { Toggle, Input, API_BASE, getWsUrl } from './SharedComponents'
+import { Toggle, Input, API_BASE, getWsUrl, SectionHeader } from './SharedComponents'
+import { cronToLabel } from '../utils/cron'
 
 function PushTargetSelect({ value, onChange }) {
   let selected = []
@@ -49,21 +50,25 @@ function validateCronExpr(cronExpr) {
 /** 从 cron_expr 估算智能回溯小时数 */
 function estimateAutoLookback(cronExpr) {
   if (!cronExpr) return 24
-  const parts = cronExpr.trim().split(/\s+/)
-  if (parts.length < 2) return 24
-  const hourPart = parts[1]
+  // 必须逐行取小时再合并：整串 split(/\s+/) 会把 `0 9 * * *\n0 20 * * *`
+  // 拆成 10 段、只读到第一行的 9，算出 25h 而不是真实的 12h 间隔。
+  const lines = cronExpr.trim().split('\n').map(l => l.trim()).filter(Boolean)
   const hours = new Set()
-  for (const segment of hourPart.split(',')) {
-    const h = segment.trim()
-    if (h.startsWith('*/')) {
-      const step = parseInt(h.slice(2), 10)
-      if (step > 0) { for (let hh = 0; hh < 24; hh += step) hours.add(hh) }
-    } else if (h.includes('-') && !h.startsWith('-')) {
-      const [lo, hi] = h.split('-', 2).map(Number)
-      if (!isNaN(lo) && !isNaN(hi)) { for (let hh = lo; hh <= hi; hh++) hours.add(hh) }
-    } else {
-      const n = parseInt(h, 10)
-      if (!isNaN(n)) hours.add(n)
+  for (const line of lines) {
+    const parts = line.split(/\s+/)
+    if (parts.length < 2) continue
+    for (const segment of parts[1].split(',')) {
+      const h = segment.trim()
+      if (h.startsWith('*/')) {
+        const step = parseInt(h.slice(2), 10)
+        if (step > 0) { for (let hh = 0; hh < 24; hh += step) hours.add(hh) }
+      } else if (h.includes('-') && !h.startsWith('-')) {
+        const [lo, hi] = h.split('-', 2).map(Number)
+        if (!isNaN(lo) && !isNaN(hi)) { for (let hh = lo; hh <= hi; hh++) hours.add(hh) }
+      } else {
+        const n = parseInt(h, 10)
+        if (!isNaN(n)) hours.add(n)
+      }
     }
   }
   if (hours.size >= 2) {
@@ -133,12 +138,11 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
       return { username: gh, nickname: acc ? acc.nickname : gh }
     })
 
-  const scheduleLabel = (() => {
-    const cron = group.cron_expr || ''
-    if (!cron) return '手动触发'
-    const preset = CRON_PRESETS.find(p => p.cron === cron)
-    return preset ? preset.label : cron
-  })()
+  // CRON_PRESETS 只做编辑器的快捷按钮；显示一律走共享的 cronToLabel，
+  // 否则自定义 cron（编辑器里有裸输入框）就只能原样打印表达式。
+  const scheduleLabel = (group.cron_expr || '').trim()
+    ? cronToLabel(group.cron_expr)
+    : '手动触发'
 
   const templateInfo = TEMPLATES.find(t => t.value === (group.digest_template || 'default'))
 
@@ -1493,15 +1497,6 @@ export default function OATab() {
           <div className="w-1.5 h-4.5 rounded-full shadow-sm" style={{ backgroundColor: '#F59E0B' }} />
           <h3 className="text-sm font-semibold tracking-tight text-text-main">公众号</h3>
           <Newspaper size={16} className="text-text-muted" />
-          <div className="ml-auto">
-            <button
-              onClick={() => { setEditingGroup(null); setShowEditor(true) }}
-              className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold bg-brand-green-hover text-white hover:bg-brand-green-hover transition-colors cursor-pointer"
-            >
-              <Plus size={14} />
-              新建分组
-            </button>
-          </div>
         </div>
         <p className="text-sm text-text-muted leading-relaxed pl-4">将公众号按主题分组，AI 定时生成摘要 · 数据来源于本地微信数据库</p>
       </div>
@@ -1691,23 +1686,21 @@ export default function OATab() {
       </div>
 
       {/* ── OA Monitor: 公众号即时提醒 ──────────────────────────────── */}
-      <div className="mb-5">
-        <div className="flex items-center justify-between mb-2.5">
-          <div className="flex items-center gap-2">
-            <Bell size={14} className="text-amber-500/80" />
-            <p className="text-sm text-text-muted font-medium">
-              即时提醒 ({monitorGroups.length})
-            </p>
-          </div>
-          {monitorGroups.length > 0 && (
+      <section className="mb-5">
+        <SectionHeader
+          title={`即时提醒 (${monitorGroups.length})`}
+          accent="#f59e0b"
+          icon={Bell}
+          subtitle="公众号发新文章时立刻提醒"
+          action={monitorGroups.length > 0 ? (
             <button
               onClick={() => { setEditingMonitor(null); setShowMonitorEditor(true) }}
               className="text-xs text-amber-500 hover:underline cursor-pointer flex items-center gap-1"
             >
               <Plus size={10} /> 新建
             </button>
-          )}
-        </div>
+          ) : null}
+        />
 
         {/* Monitor editor */}
         <AnimatePresence>
@@ -1760,86 +1753,89 @@ export default function OATab() {
             ))}
           </div>
         )}
-      </div>
+      </section>
 
-      {/* Group Editor */}
-      <AnimatePresence>
-        {showEditor && (
-          <motion.div
-            key={editingGroup?.id || 'new'}
-            ref={editorRef}
-            initial={{ opacity: 0, y: -12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -12 }}
-            className="mb-6"
-          >
-            <GroupEditor
-              group={editingGroup}
-              accounts={accounts}
-              onSave={handleSaveGroup}
-              onCancel={() => { setShowEditor(false); setEditingGroup(null) }}
-              onViewAccount={handleViewAccount}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Groups */}
-      <div className="mb-2">
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-text-muted font-medium">
-            AI 摘要 ({groups.length})
-          </p>
-          {groups.length > 0 && (
+      {/* ── 公众号分组摘要 ─────────────────────────────────────────── */}
+      <section className="mb-2">
+        <SectionHeader
+          title={`公众号分组摘要 (${groups.length})`}
+          accent="var(--status-warn)"
+          icon={Sparkle}
+          subtitle="按分组定时生成公众号文章摘要并推送"
+          action={
             <button
               onClick={() => { setEditingGroup(null); setShowEditor(true) }}
-              className="text-xs text-brand-green hover:underline cursor-pointer flex items-center gap-1"
+              className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold bg-brand-green-hover text-white hover:bg-brand-green-hover transition-colors cursor-pointer"
             >
-              <Plus size={10} /> 新建
+              <Plus size={14} />
+              新建分组
             </button>
-          )}
-        </div>
-      </div>
+          }
+        />
 
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="w-6 h-6 border-2 border-brand-green/30 border-t-brand-green rounded-full animate-spin" />
-        </div>
-      ) : groups.length === 0 ? (
-        <div className="text-center py-12 border border-dashed border-border-main rounded-xl bg-bg-raised/30">
-          <Sparkle size={32} className="mx-auto mb-3 text-brand-green/30" />
-          <p className="text-sm text-text-muted">还没有摘要任务</p>
-          <div className="mt-3 space-y-1.5 text-sm text-text-muted max-w-xs mx-auto">
-            <p><span className="text-brand-green/80">1.</span> 新建分组，给关注的公众号分类（如"科技资讯"）</p>
-            <p><span className="text-brand-green/80">2.</span> 选择摘要模板和执行时间</p>
-            <p><span className="text-brand-green/80">3.</span> AI 按时生成该分组所有公众号的内容摘要</p>
+        {/* Group Editor —— 属于本区。原先它夹在「即时提醒」和摘要标题之间，
+            展开时看不出是哪个区的编辑器 */}
+        <AnimatePresence>
+          {showEditor && (
+            <motion.div
+              key={editingGroup?.id || 'new'}
+              ref={editorRef}
+              initial={{ opacity: 0, y: -12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              className="mb-6"
+            >
+              <GroupEditor
+                group={editingGroup}
+                accounts={accounts}
+                onSave={handleSaveGroup}
+                onCancel={() => { setShowEditor(false); setEditingGroup(null) }}
+                onViewAccount={handleViewAccount}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="w-6 h-6 border-2 border-brand-green/30 border-t-brand-green rounded-full animate-spin" />
           </div>
-          <button
-            onClick={() => { setEditingGroup(null); setShowEditor(true) }}
-            className="mt-4 px-5 py-2 rounded-full text-xs font-semibold bg-brand-green-hover text-white
-              hover:bg-brand-green-hover transition-colors cursor-pointer"
-          >
-            <Plus size={12} className="inline mr-1 -mt-0.5" />
-            创建第一个分组
-          </button>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {groups.map(group => (
-            <GroupCard
-              key={group.id}
-              group={group}
-              accounts={accounts}
-              onEdit={(g) => { setEditingGroup(g); setShowEditor(true) }}
-              onDelete={handleDeleteGroup}
-              onRunDigest={handleRunDigest}
-              digestRunning={digestRunning}
-              lastDigest={lastDigest}
-              onViewAccount={handleViewAccount}
-            />
-          ))}
-        </div>
-      )}
+        ) : groups.length === 0 ? (
+          <div className="text-center py-12 border border-dashed border-border-main rounded-xl bg-bg-raised/30">
+            <Sparkle size={32} className="mx-auto mb-3 text-brand-green/30" />
+            <p className="text-sm text-text-muted">还没有摘要任务</p>
+            <div className="mt-3 space-y-1.5 text-sm text-text-muted max-w-xs mx-auto">
+              <p><span className="text-brand-green/80">1.</span> 新建分组，给关注的公众号分类（如"科技资讯"）</p>
+              <p><span className="text-brand-green/80">2.</span> 选择摘要模板和执行时间</p>
+              <p><span className="text-brand-green/80">3.</span> AI 按时生成该分组所有公众号的内容摘要</p>
+            </div>
+            <button
+              onClick={() => { setEditingGroup(null); setShowEditor(true) }}
+              className="mt-4 px-5 py-2 rounded-full text-xs font-semibold bg-brand-green-hover text-white
+                hover:bg-brand-green-hover transition-colors cursor-pointer"
+            >
+              <Plus size={12} className="inline mr-1 -mt-0.5" />
+              创建第一个分组
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {groups.map(group => (
+              <GroupCard
+                key={group.id}
+                group={group}
+                accounts={accounts}
+                onEdit={(g) => { setEditingGroup(g); setShowEditor(true) }}
+                onDelete={handleDeleteGroup}
+                onRunDigest={handleRunDigest}
+                digestRunning={digestRunning}
+                lastDigest={lastDigest}
+                onViewAccount={handleViewAccount}
+              />
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* ── 公众号缓存全文 设置区 ── */}
       <div className="relative mt-8 mb-2 p-4 rounded-xl overflow-visible border border-brand-green/35 bg-gradient-to-b from-brand-green/[0.06] to-brand-green/[0.02] shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
