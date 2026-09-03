@@ -5217,23 +5217,105 @@ def handle_scheduled_tasks_overview(params, config: AssistantConfig):
     }
 
 
+_WEEKDAY_CN = ["日", "一", "二", "三", "四", "五", "六"]
+
+
+def _expand_dow(dow: str):
+    """`1,4` / `1-5` / `0` → 排序去重的星期数字列表；表达不了返回 None。"""
+    out = set()
+    for seg in dow.split(","):
+        seg = seg.strip()
+        if not seg:
+            return None
+        if "-" in seg:
+            lo_s, _, hi_s = seg.partition("-")
+            if not (lo_s.isdigit() and hi_s.isdigit()):
+                return None
+            lo, hi = int(lo_s), int(hi_s)
+            if lo > hi or lo < 0 or hi > 6:
+                return None
+            out.update(range(lo, hi + 1))
+        elif seg.isdigit() and int(seg) <= 6:
+            out.add(int(seg))
+        else:
+            return None
+    return sorted(out)
+
+
+def _is_int_list(field: str) -> bool:
+    """`9` / `9,18` 这类"单个整数或整数列表"。步进与范围不算。"""
+    return bool(field) and all(seg.strip().isdigit() for seg in field.split(","))
+
+
+def _cron_to_label(cron_expr: str) -> str:
+    """多行 cron → 中文标签，与前端 `ui/src/utils/cron.js` 的 cronToLabel 同口径。
+
+    口径必须一致：同一个分组在公众号页和运行状态页要显示成同一句话，
+    否则用户会以为是两个不同的任务。
+
+    只认"每行一个触发点、分/时是单个整数、日/月是 *、周是 * / 范围 / 列表"
+    这一形态；其余（分钟级步进、小时范围、指定日期）一律原样返回表达式，
+    不猜 —— 猜出来的"每天 09:00"比裸 cron 更危险，因为它看着是权威的。
+    """
+    lines = [ln.strip() for ln in cron_expr.strip().split("\n") if ln.strip()]
+    if not lines:
+        return cron_expr
+
+    times: list = []
+    weekdays: set = set()
+    freq = None                      # "daily" | "weekday" | "custom"
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 5:
+            return cron_expr
+        minute, hour, day, month, dow = parts
+        if not (_is_int_list(minute) and _is_int_list(hour)):
+            return cron_expr
+        if day != "*" or month != "*":
+            return cron_expr
+        mins = [int(x) for x in minute.split(",")]
+        hours = [int(x) for x in hour.split(",")]
+        if any(m > 59 for m in mins) or any(h > 23 for h in hours):
+            return cron_expr
+        # 逗号列表按 cron 语义展开成所有组合（与前端 parseCronExpr 一致）
+        for h in hours:
+            for m in mins:
+                times.append(f"{h:02d}:{m:02d}")
+
+        if dow == "*":
+            line_freq, line_days = "daily", set()
+        else:
+            expanded = _expand_dow(dow)
+            if expanded is None:
+                return cron_expr
+            if expanded == [1, 2, 3, 4, 5]:
+                line_freq, line_days = "weekday", set(expanded)
+            else:
+                line_freq, line_days = "custom", set(expanded)
+
+        # 星期跨行**合并**：`0 9 * * 1` + `0 9 * * 4` 是"周一和周四"，
+        # 只留最后一行会静默丢掉周一。
+        weekdays |= line_days
+        if freq is None:
+            freq = line_freq
+        elif freq != line_freq:
+            freq = "custom"
+
+    time_label = " · ".join(sorted(set(times)))
+    if freq == "daily":
+        return f"每天 {time_label}"
+    if freq == "weekday":
+        return f"工作日 {time_label}"
+    if weekdays:
+        days = " ".join("周" + _WEEKDAY_CN[d] for d in sorted(weekdays))
+        return f"{days} {time_label}"
+    return cron_expr
+
+
 def _format_schedule(schedule: list, cron_expr: str) -> str:
     """Format schedule list or cron expression to human-readable string."""
-    if cron_expr:
-        # Parse common cron patterns
-        parts = cron_expr.strip().split()
-        if len(parts) == 5:
-            minute, hour, day, month, dow = parts
-            # Simple patterns
-            if day == "*" and month == "*" and dow == "*":
-                times = hour.split(",")
-                times = [f"{h.zfill(2)}:{minute.zfill(2)}" for h in times]
-                return f"每天 {'、'.join(times)}"
-            if dow == "1-5":
-                times = hour.split(",")
-                times = [f"{h.zfill(2)}:{minute.zfill(2)}" for h in times]
-                return f"工作日 {'、'.join(times)}"
-        return cron_expr
+    if cron_expr and cron_expr.strip():
+        return _cron_to_label(cron_expr)
 
     if schedule:
         formatted = [s if ":" in s else f"{s}:00" for s in schedule]

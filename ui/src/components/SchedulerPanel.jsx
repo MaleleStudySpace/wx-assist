@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Clock, Play, Trash, Plus, Pencil, Pause, Eye, EyeSlash, X, CaretDown, CaretUp, ChatCircleText, Spinner, ArrowsClockwise } from '@phosphor-icons/react'
 import { Toggle, Input, API_BASE } from './SharedComponents'
-import { CRON_PRESETS, validateCronExpr, getNextTriggers, formatLocalTime } from '../utils/cron'
+import { CRON_PRESETS, validateCronExpr, getNextTriggers, formatLocalTime, cronToLabel } from '../utils/cron'
 import SkillLibrary from './SkillLibrary'
 
 // ── Status helpers ─────────────────────────────────────────────────
@@ -60,7 +60,7 @@ function TaskCard({ task, skills, onToggle, onDelete, onRunNow, onEdit, onCopy, 
             {skill && <span className="ml-1">· {skill.description?.slice(0, 40)}</span>}
             <span className="ml-1">·</span>
             <code className="font-mono text-sm text-text-secondary">
-              {task.cron?.replace(/\n/g, ' / ')}
+              {cronToLabel(task.cron)}
             </code>
           </p>
         </div>

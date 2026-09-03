@@ -2,6 +2,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Stop, Key, Spinner, CheckCircle, XCircle, ArrowsClockwise, WarningOctagon, Clock, ChatCircle, Newspaper, Database, WechatLogo, Brain, Robot, Cube, Lightning, ArrowRight, PaperPlaneTilt, Bell } from '@phosphor-icons/react'
 import { API_BASE } from './SharedComponents'
+import { cronToLabel } from '../utils/cron'
 
 const spring = { type: 'spring', stiffness: 100, damping: 20 }
 const easeOut = [0.16, 1, 0.3, 1]
@@ -271,7 +272,7 @@ function CronTasksCard() {
                   <code className="text-[10px] font-mono text-text-muted bg-bg-raised px-1 py-px rounded">{task.skill}</code>
                 </div>
                 <div className="text-[11px] text-text-muted mt-0.5">
-                  <code className="font-mono">{task.cron?.replace(/\n/g, ' / ')}</code>
+                  <code className="font-mono">{cronToLabel(task.cron)}</code>
                   {task.last_run && <> · 上次 {task.last_run.slice(11, 16)}</>}
                 </div>
               </div>

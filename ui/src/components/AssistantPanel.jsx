@@ -2,6 +2,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle, Warning, Spinner, MagnifyingGlass, Bell, Clock, ChatCircle, CaretDown, CaretRight, EnvelopeOpen, Archive, Lightning, Trash, X, Plus, Play } from '@phosphor-icons/react'
 import { Toggle, SectionHeader, TagInput, Input, API_BASE, getWsUrl } from './SharedComponents'
+import { WEEKDAY_LABELS, parseCronExpr, cronToLabel } from '../utils/cron'
 
 const pageTransition = {
   initial: { opacity: 0, x: 12 },
@@ -33,9 +34,11 @@ function PushTargetSelect({ value, onChange, enabledPlatforms = ['ilink'] }) {
 }
 
 
-const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六']
-
 // ── Cron helpers ─────────────────────────────────────────────────────
+// WEEKDAY_LABELS / parseCronExpr / cronToLabel 已移到 utils/cron.js ——
+// OATab、Dashboard、SchedulerPanel 必须用同一套标签口径。
+// 下面两个刻意留在本文件：validateCronExpr 是**受限版**（要求日/月必须是 *），
+// 与 utils/cron.js 里那个接受完整语法的同名函数语义不同，不能混用。
 
 function buildCronExpr(times, freqMode, weekdays) {
   const parsed = times.map(t => {
@@ -55,71 +58,6 @@ function buildCronExpr(times, freqMode, weekdays) {
   // Store one cron line per selected time. This avoids ambiguous compact forms
   // and prevents accidental concatenation when users edit schedule repeatedly.
   return parsed.map(p => `${p.minute} ${p.hour} * * ${dowField}`).join('\n')
-}
-
-function parseCronExpr(cronExpr) {
-  if (!cronExpr) return { freqMode: 'daily', times: ['09:00'], weekdays: [1,2,3,4,5] }
-
-  // Support multi-line cron: parse each line and merge results
-  const lines = cronExpr.trim().split(/\n/).map(l => l.trim()).filter(Boolean)
-  let allTimes = []
-  let allWeekdays = []
-  // Start as null; set from first line, downgrade if lines conflict
-  let detectedFreq = null
-
-  for (const line of lines) {
-    const fields = line.split(/\s+/)
-    if (fields.length !== 5) continue
-
-    const [min, hour, , , dow] = fields
-    const hours = hour === '*' ? [9] : hour.split(',').map(Number).filter(n => !isNaN(n))
-    const mins = min === '*' ? [0] : min.split(',').map(Number).filter(n => !isNaN(n))
-
-    // For single-line cron with comma-separated hours/minutes,
-    // generate all combinations (this is how cron works)
-    for (const h of hours) {
-      for (const m of mins) {
-        allTimes.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
-      }
-    }
-
-    // Detect frequency from dow field
-    let lineFreq
-    if (dow === '*') {
-      lineFreq = 'daily'
-    } else if (dow === '1-5' || _isWeekdayList(dow)) {
-      lineFreq = 'weekday'
-      allWeekdays = [1, 2, 3, 4, 5]
-    } else {
-      lineFreq = 'custom'
-      allWeekdays = dow.split(',').map(Number).filter(n => !isNaN(n))
-    }
-
-    // Merge: if all lines agree, keep that freq; any conflict → custom
-    if (detectedFreq === null) {
-      detectedFreq = lineFreq
-    } else if (detectedFreq !== lineFreq) {
-      detectedFreq = 'custom'
-    }
-  }
-
-  // Default if nothing parsed
-  if (detectedFreq === null) detectedFreq = 'daily'
-
-  // Deduplicate and sort times
-  allTimes = [...new Set(allTimes)].sort()
-
-  if (!allTimes.length) allTimes = ['09:00']
-  if (!allWeekdays.length && detectedFreq === 'custom') allWeekdays = [1, 2, 3, 4, 5]
-
-  return { freqMode: detectedFreq, times: allTimes, weekdays: allWeekdays }
-}
-
-/** Check if a dow field represents weekdays (1-5), regardless of format. */
-function _isWeekdayList(dow) {
-  if (!dow || dow === '*') return false
-  const nums = dow.split(',').map(Number).filter(n => !isNaN(n))
-  return nums.length === 5 && nums.every(n => n >= 1 && n <= 5) && new Set(nums).size === 5
 }
 
 /**
@@ -151,20 +89,6 @@ function validateCronExpr(cronExpr) {
   }
   return ''
 }
-
-function cronToLabel(cronExpr) {
-  if (!cronExpr) return ''
-  const p = parseCronExpr(cronExpr)
-  const timeLabel = p.times.join(' · ') || '9:00'
-  if (p.freqMode === 'daily') return `每天 ${timeLabel}`
-  if (p.freqMode === 'weekday') return `工作日 ${timeLabel}`
-  if (p.freqMode === 'custom' && p.weekdays.length) {
-    const days = p.weekdays.map(d => '周' + WEEKDAY_LABELS[d]).join(' ')
-    return `${days} ${timeLabel}`
-  }
-  return cronExpr
-}
-
 
 /** 从 schedule 或 cron_expr 推导智能 lookback 值（前端计算，无上限） */
 function estimateGroupLookback(schedule, cronExpr) {
@@ -951,10 +875,10 @@ export default function AssistantPanel() {
           </div>
         )}
         <SectionHeader
-          title="定时群摘要"
+          title="定时分组摘要"
           accent="var(--status-warn)"
           icon={Clock}
-          subtitle="定时生成群聊摘要"
+          subtitle="一个分组打包多个会话，到点一次性生成按会话分段的摘要"
         />
         <div className={`bg-bg-card rounded-2xl border border-border-main shadow-sm overflow-hidden transition-opacity duration-300 ${!assistantOn ? 'opacity-40' : ''}`}>
           <div className="p-6 space-y-3">
@@ -1126,7 +1050,7 @@ export default function AssistantPanel() {
             {!config.digest_groups?.length && !showDigestEditor && (
               <div className="py-10 text-center">
                 <Clock size={32} className="text-text-muted/30 mx-auto mb-3" />
-                <p className="text-sm text-text-muted">添加联系人以配置定时摘要</p>
+                <p className="text-sm text-text-muted">新建一个摘要分组，把要一起摘要的会话挑进去</p>
                 <button
                   onClick={() => { setShowDigestEditor(true); setDigestDraft({ id: '', name: '', chats: [], schedule: [], cron_expr: '', lookback_hours: 6, lookback_mode: 'manual', enabled: true, unread_only: false, push_target: 'ilink', memory_enabled: true, memory: '', memory_rev: 0, profile: { style: '', custom_prompt: '' } }); setEditorError('') }}
                   className="mt-4 text-sm text-brand-green-hover hover:underline cursor-pointer font-medium"
