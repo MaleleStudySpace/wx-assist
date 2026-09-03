@@ -275,6 +275,9 @@ class MessageStore:
                            limit: int = 500) -> list[dict]:
         """Fetch messages from a chat in a time window.
 
+        When the window holds more than `limit` messages the OLDEST ones are
+        dropped, so a busy chat still yields its most recent activity.
+
         Args:
             chat_id: The chatroom ID.
             since_ts: Start of window (inclusive), Unix seconds.
@@ -287,13 +290,23 @@ class MessageStore:
         if until_ts is None:
             until_ts = int(time.time())
 
+        # Inner query takes the newest `limit` rows (uses idx_msg_chat_time,
+        # which is keyed on (chat_id, timestamp DESC)); outer query restores
+        # ascending order so callers can rely on chronological input.
+        # message_id is an MD5 text key — only a deterministic tie-break for
+        # messages sharing a timestamp, not a business ordering.
         rows = self.conn.execute(
             """SELECT message_id, chat_id, sender_id, sender_name,
                       content, msg_type, timestamp
-               FROM messages
-               WHERE chat_id = ? AND timestamp BETWEEN ? AND ?
-               ORDER BY timestamp ASC
-               LIMIT ?""",
+               FROM (
+                   SELECT message_id, chat_id, sender_id, sender_name,
+                          content, msg_type, timestamp
+                   FROM messages
+                   WHERE chat_id = ? AND timestamp BETWEEN ? AND ?
+                   ORDER BY timestamp DESC, message_id DESC
+                   LIMIT ?
+               )
+               ORDER BY timestamp ASC, message_id ASC""",
             (chat_id, since_ts, until_ts, limit),
         ).fetchall()
         return [dict(row) for row in rows]

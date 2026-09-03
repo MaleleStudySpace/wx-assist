@@ -18,7 +18,7 @@ DigestScheduler daemon 线程（60s 轮询）
     │  MIN_TRIGGER_GAP_SEC 去重
     ▼
 _generate_digest(dg)
-    1. 拉取回溯窗口内消息（limit=500）
+    1. 拉取回溯窗口内消息（limit=500，超出时丢弃**最旧**的、返回仍按时间升序）
     2. unread_only? → 切片到未读部分
     3. filter_messages(raw) → 过滤噪音 + 媒体占位
     4. 构建 system_prompt + user_prompt → AI 调用
@@ -84,11 +84,19 @@ _generate_digest(dg)
 
 ## 消息过滤
 
-`filter_messages()` 处理两类问题：
+`filter_messages()` 处理四类问题：
 
 1. **噪音过滤**：系统消息（入群/退群/改群名）、纯表情、极短消息、常见无意义回复（"收到"/"好的"/"ok" 等）。
 2. **媒体占位**：图片/语音/视频/贴纸/应用消息等非文本类型，原始内容替换为结构化占位符（`{{ image }}` / `{{ voice }}` 等），让 LLM 知道上下文而不接触原始载荷。
-3. **标识符清洗**：消息文本中的 `wxid_xxx` / `gh_xxx` 等内部标识符在进入 prompt 前被剥离，保证摘要只展示昵称。
+3. **伪装成文本的 XML**（`_clean_xml_content`）：WCDB 把群接龙、引用回复、名片、图片、表情、语音、视频都存成 `msg_type=1`，content 是完整 XML 载荷。只按 `msg_type` 判断的 `MEDIA_RAW_TYPES` 完全漏掉这些，原始 XML 会直接进 prompt（实测单条最长 **17,015** 字符）。因此改为**按 XML 根元素结构分类**：
+   - 有 `<title>` → `{{app: 标题}}`（接龙/引用/卡片分享，取外层 title 而非 `<refermsg>` 里被引用的文本）
+   - `<pushmail>` 的 `<subject>` → `{{mail: 主题}}`（这是真实文本，不能丢）
+   - `<img>` / `<emoji>` / `<videomsg>` / `<voicemsg>` / `<location>` → 复用 `MEDIA_PLACEHOLDERS` 的对应标签，避免 LLM 看到两套词汇
+   - 名片（`<msg bigheadimgurl=...>`）→ `{{ contact_card }}`
+   - 其余无法识别 → `{{app_message}}`
+
+   `XML_MIN_LEN = 60` + 必须以 `<` 开头 + 起始标签白名单三重判定，保证 `"<3 你"`、`"a<b"` 这类普通短文本不被误伤。生产库 72h 实测：4793 条长消息中 **2632 条（55%）**是这类 XML，共 7,265,605 字符，折叠后剩 **45,659**（-99.4%），其中仅 38 条落到无信息的 `{{app_message}}`。
+4. **标识符清洗**：消息文本中的 `wxid_xxx` / `gh_xxx` 等内部标识符在进入 prompt 前被剥离，保证摘要只展示昵称。
 
 > 这些处理同时服务于群摘要与关键词提醒（共用 `_strip_ids`），保证 LLM 输入与匹配/展示一致。
 
