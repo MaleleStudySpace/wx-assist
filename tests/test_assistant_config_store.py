@@ -23,7 +23,10 @@ from src.assistant.config import (
     DigestGroup,
     MEMORY_MAX_CHARS,
     cas_digest_group_memory,
+    group_memory_budget,
+    memory_char_budget,
     mutate_config,
+    truncate_memory,
     update_digest_group_memory,
 )
 
@@ -152,8 +155,22 @@ class TestConfigStore(unittest.TestCase):
         self.assertEqual(g.name, "用户改的新名字", "用户的改动也不能被覆盖")
 
     def test_memory_truncated_to_limit(self):
-        update_digest_group_memory("dg_001", "长" * (MEMORY_MAX_CHARS + 500))
-        self.assertEqual(len(self.disk_group().memory), MEMORY_MAX_CHARS)
+        budget = group_memory_budget(self.disk_group())
+        self.assertEqual(budget, MEMORY_MAX_CHARS, "单会话分组的额度就是基准值")
+        update_digest_group_memory("dg_001", "长" * (budget + 500))
+        self.assertEqual(len(self.disk_group().memory), budget)
+
+    def test_memory_budget_scales_with_chat_count(self):
+        """一份记忆服务全组：会话越多额度越大，否则多会话组必然整段丢会话。"""
+        def _add(cfg):
+            cfg.digest_groups[0].chats.extend(
+                DigestChat(chat_id=f"c{i}@chatroom", name=f"会话{i}")
+                for i in range(4))
+        mutate_config(_add)
+        self.assertEqual(len(self.disk_group().chats), 5)
+        update_digest_group_memory("dg_001", "长" * 5000)
+        self.assertEqual(len(self.disk_group().memory), memory_char_budget(5))
+        self.assertGreater(memory_char_budget(5), MEMORY_MAX_CHARS)
 
     def test_memory_rev_increments_each_write(self):
         self.assertEqual(self.disk_group().memory_rev, 0)
@@ -302,6 +319,68 @@ class TestSchedulerFreshReload(unittest.TestCase):
         self.sched._run_digest_in_pool("dg_001", task_id=7)
         self.assertEqual(seen["memory"], "磁盘上的记忆")
         self.assertEqual(seen["name"], "测试组")
+
+
+class TestMemoryBudgetAndTruncation(unittest.TestCase):
+    """记忆额度与截断的纯函数部分。"""
+
+    def test_budget_scales_then_caps(self):
+        self.assertEqual(memory_char_budget(1), 2000)
+        self.assertEqual(memory_char_budget(2), 2300)
+        self.assertEqual(memory_char_budget(5), 3200)
+        self.assertEqual(memory_char_budget(8), 4000, "封顶")
+        self.assertEqual(memory_char_budget(50), 4000)
+        self.assertEqual(memory_char_budget(0), 2000, "0 按 1 处理")
+
+    def test_group_budget_counts_only_summarizable_chats(self):
+        """口径必须与 scheduler 拼 prompt 时的会话列表一致。
+
+        两边不一致的话，prompt 里承诺的字数和落盘时的截断位置就是两个数，
+        LLM 按要求写满却被切掉一块。
+        """
+        g = DigestGroup(id="x", name="n", chats=[
+            DigestChat(chat_id="a@chatroom", name="a", enabled=True),
+            DigestChat(chat_id="b@chatroom", name="b", enabled=False),
+            DigestChat(chat_id="", name="没绑上"),
+            DigestChat(chat_id="c@chatroom", name="c", enabled=True),
+        ])
+        self.assertEqual(group_memory_budget(g), memory_char_budget(2))
+
+    def test_noop_when_under_budget(self):
+        self.assertEqual(truncate_memory("短记忆", 2000), "短记忆")
+        self.assertEqual(truncate_memory(None, 2000), "")
+        self.assertEqual(truncate_memory("", 2000), "")
+
+    def test_drops_incomplete_chat_block(self):
+        """盲切 [:budget] 的后果在生产数据里能看到：dg_003 的记忆正好停在
+        "\\n\\n#### 4."，留下一个只有标题没有内容的残块。"""
+        text = ("### 甲\n" + "a" * 800
+                + "\n### 乙\n" + "b" * 800
+                + "\n### 丙\n" + "c" * 800)
+        self.assertEqual(len(text), 2420)
+        out = truncate_memory(text, 2000)
+        self.assertIn("### 甲", out)
+        self.assertIn("### 乙", out)
+        self.assertNotIn("### 丙", out, "写不完的那块要整块丢掉，别留半个标题")
+        self.assertTrue(out.endswith("b" * 50))
+        self.assertEqual(len(out), 1613)
+
+    def test_falls_back_to_blank_line(self):
+        text = ("段落一 " + "a" * 900 + "\n\n"
+                + "段落二 " + "b" * 900 + "\n\n"
+                + "段落三 " + "c" * 900)
+        out = truncate_memory(text, 2000)
+        self.assertIn("段落二", out)
+        self.assertNotIn("段落三", out)
+        self.assertEqual(len(out), 1810)
+
+    def test_hard_cuts_when_no_usable_boundary(self):
+        self.assertEqual(len(truncate_memory("长" * 3000, 2000)), 2000)
+
+    def test_ignores_boundary_near_start(self):
+        """边界太靠前说明这份记忆没有分块结构，宁可硬切也别丢掉九成内容。"""
+        text = "### 甲\n短\n\n" + "b" * 3000
+        self.assertEqual(len(truncate_memory(text, 2000)), 2000)
 
 
 if __name__ == "__main__":

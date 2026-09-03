@@ -53,7 +53,7 @@ _generate_digest(dg)
 | `lookback_mode` | str | "manual" | `"auto"`=前端按 cron 间隔智能推算 / `"manual"`=用 lookback_hours |
 | `enabled` | bool | True | 分组主开关 |
 | `profile` | GroupProfile? | None | 群档案（输出风格配置），组级共用 |
-| `memory` | str | "" | **组级单一**累积摘要记忆（≤2000 字） |
+| `memory` | str | "" | **组级单一**累积摘要记忆，按 `### 会话名` 分块；字数上限随会话数放大（见「记忆更新」） |
 | `memory_rev` | int | 0 | 记忆版本号，后台每次写入 +1，手工编辑走 CAS |
 | `memory_enabled` | bool | True | 记忆开关：关闭后摘要不再更新记忆 |
 | `unread_only` | bool | False | 仅摘要未读消息（按会话各自切尾部） |
@@ -97,30 +97,43 @@ _generate_digest(dg)
 
 ## Prompt 架构
 
-### system_prompt 决策
+### system_prompt = 风格层 + 结构层
 
 ```
-有 custom_prompt?
-  YES → system_prompt = custom_prompt（完全替代默认）
-  NO  → system_prompt = DIGEST_SYSTEM_PROMPT
-        + style 预设（行动项优先 / 完整复盘 / 极简速览）追加
+风格层（可被 custom_prompt 完全替代）
+  有 custom_prompt? → 用 custom_prompt
+  否则              → DIGEST_SYSTEM_PROMPT + style 预设（行动项优先 / 完整复盘 / 极简速览）
+
+结构层（按 plan.mode 追加，custom_prompt 覆盖不掉）
+  single   → SINGLE_HEADING_CONTRACT   第一行 `## 会话名`，会话内只用 ### 或 -
+  packed   → PACKED_OUTPUT_CONTRACT    N 个会话各一段，禁止跨会话合并/总览
+  per_chat → PER_CHAT_NO_HEADING_HINT  禁止任何 # 标题，外层 concat_sections 自己加会话名
 ```
 
-- **custom_prompt 完全替代**默认 system prompt：用户获得对该群的完全控制权，仅影响该群。
-- **style 预设追加**到默认 prompt 之后，是轻量风格调整。
+- **风格层可替代**：用户对摘要写法有完全控制权，仅影响该分组。
+- **结构层不可替代**：标题层级是外层切分与归属的依据，被 custom_prompt 覆盖掉就没法把正文按会话拆开。
+
+`DIGEST_SYSTEM_PROMPT` 本身也按分组口径重写：明说"一个分组里可能 1 个也可能多个互不相干的会话"、钉死标题层级（会话 `##`、会话内话题 `###` 或 `-`）、并警告近期记忆是全组共用的、不要张冠李戴。
+
+**为什么要钉层级**：旧默认 prompt 写的是"按话题分类，每个话题用 `##` 二级标题"，与打包契约要求的 `## 会话名` 直接冲突。实测 6 个会话走降级路径时模型选了前者，正文炸出 **24 个 h2**，`## 攒单群` 后面跟着 `## 淘宝攒单新规`、`## 攒单策略讨论`，与 `concat_sections` 加的会话名同级 —— 读的人分不清哪个话题属于哪个群。
 
 ### user_prompt 结构（`build_digest_prompt()`）
 
 ```
-## 近期记忆
+## 本次摘要的会话
+{会话名}
+
+## 近期记忆（分组「{组名}」共用，可能含其他会话的事，只在与「{会话名}」相关时引用）
 {memory 或 "（暂无历史记忆）"}
 
-## 最近 N 条消息
+## 「{会话名}」最近 N 条消息
 [HH:MM] 昵称: 内容
 ...
 ```
 
-只提供上下文，指令全部在 system_prompt 侧。
+打包路径用 `build_packed_prompt()`，开头是 `## 本次摘要的分组\n{组名}（N 个会话）`，记忆段同样标注"本分组共用"，消息按 `=== [i] 会话名 (条数) ===` 分节。
+
+只提供上下文，指令全部在 system_prompt 侧。**会话名必须出现在 user prompt 里**：single 与 per_chat 两条路径都只给一个会话的消息、却给整组的记忆，不点名会话，模型无从判断记忆里哪些内容与当前会话有关。
 
 ## 消息过滤
 
@@ -207,11 +220,46 @@ MiniMax-M2.7-highspeed，`max_tokens=4096`：
 
 三点值得记下来：① 默认预算下 6 个最忙群打包只用 1 次调用、离上限还很远（85,809 字符 ≈ 36K 真实 token，上限约 250K），**正常运营基本不会触发降级**；② 降级路径并发 3，6 次调用总耗时 21.2s 而不是 6×25s；③ 输出契约生效，6 群打包时模型给每群约 183 字，没有互相串味也没有漏群。
 
+提示词分层修好后用同样口径复测（攒单群 1041 条 / 杨爽的金主们 999 条 / 冲凉中介群 432 条，近 25h）：
+
+| 路径 | 调用 | 耗时 | 正文 h2 | 记忆 h3 |
+|------|------|------|---------|---------|
+| packed（1410 条） | 1 | 32.4s | **3 个**，正好等于会话数、顺序一致 | `分组共性 / 攒单群 / 杨爽的金主们 / 冲凉中介群`，836 字（额度 2600） |
+| per_chat（kill switch，dropped 1306） | 3 | 12.7s | **3 个**（改造前同形态是会话数的 4 倍） | — |
+
+降级路径的正文改用 `-` 列表分点（模型不再自己出 `##`），`## 会话名` 全部由 `concat_sections` 加。另外注意到一个不对称：打包受"每会话 ≤200 字"约束（3 会话 613 字），降级不受约束（3 会话 1277 字），**降级反而更详细** —— 因为每次调用只盯一个会话。这不是 bug，但调优输出长度时要记得两条路径的口径不同。
+
 ## 记忆更新
 
-每次摘要后（`memory_enabled` 为真时）调用 `generate_memory_update_prompt()`，让 AI 在旧记忆基础上写一段 ≤2000 字的新记忆，记录核心要点、近期趋势、群氛围。下次摘要作为"近期记忆"注入 prompt，形成跨次记忆累积。
+每次摘要后（`memory_enabled` 为真时）调用 `generate_memory_update_prompt()`，让 AI 在旧记忆基础上写一份新记忆，下次摘要作为"近期记忆"注入 prompt，形成跨次记忆累积。
 
 **一个分组一份记忆**（组级单一记忆）：打包摘要天然只产出一份结果，对应一份记忆。旧数据迁移时每个旧会话成为一个单会话分组，记忆 1:1 带过去。
+
+### 按会话分块
+
+一份记忆服务组内所有会话，下一轮又作为共用上下文喂回**每一个**会话，所以必须能看出哪句话是哪个会话的：
+
+- 每块以 `### 会话名` 开头，禁止把 A 会话的事写进 B 会话
+- 本次没有新内容的会话保留上一版要点并标「（无新增）」，不整块删掉
+- 无法归属到具体会话的旧内容（早期按单群口吻写的）归入开头的 `### 分组共性`
+
+**为什么必须这样**：改造前提示词是"用第一人称写…群聊氛围和活跃度"，生产上 dg_001「聚沙成塔」配了 5 个会话，记忆却通篇是"我发现**我们这个群**呈现出脉冲式活跃模式"、零会话归属；而这份记忆会作为共用上下文喂给「妈妈和宝贝们」「长期回收各类购物卡券2群」等另外 4 个会话。加上 `### 分组共性` 这一去处后，旧的单群口吻记忆会在下一轮被自然重排，不需要数据迁移。
+
+### 字数上限随会话数放大
+
+```python
+memory_char_budget(n) = min(2000 + 300 * (n - 1), 4000)
+```
+
+`group_memory_budget(group)` 按**真正会被摘要**的会话数（`enabled` 且 `chat_id` 非空）算，scheduler 拼 prompt 时用同一个函数 —— 两边口径不一致的话，prompt 里承诺的字数和落盘时的截断位置就是两个数。
+
+封顶 4000 是因为 `memory_tokens` 直接从打包预算的 `available` 里扣，记忆越长越早触发降级。
+
+**2000 是按单群定的、而且已经不够**：dg_003 只有 1 个会话，记忆就正好顶在 2000 字符，尾部停在 `\n\n#### 4.` —— 一个只有标题没有内容的残块。
+
+### 截断按块边界回退
+
+`truncate_memory(text, budget)` 不再盲切 `[:budget]`：优先退到最后一个 `### ` 块的开头（整块丢掉写不完的那段），其次退到最后一个空行；边界太靠前（不足 budget 一半）说明这份记忆没有分块结构，才硬切。
 
 ### 写入路径：必须走 `update_digest_group_memory(group_id, memory)`
 
@@ -227,7 +275,7 @@ MiniMax-M2.7-highspeed，`max_tokens=4096`：
 修复分三层，缺一不可：
 
 1. **`mutate_config(mutator)`** —— 唯一合法的"改配置"入口：锁内从磁盘**重读** → 应用 mutator → 落盘 → 返回落盘那份对象。写入基底永远是磁盘最新值，从根上消除丢更新（模块级 `_CONFIG_LOCK = threading.RLock()` 只防文件撕裂，防不了丢更新）。
-2. **`update_digest_group_memory(group_id, memory)`** —— 后台写记忆的窄接口，**按 id 定位**而不是按调用方手里的对象引用；顺带把 2000 字上限从 scheduler 收拢到这里（`MEMORY_MAX_CHARS`），并让 `memory_rev += 1`。
+2. **`update_digest_group_memory(group_id, memory)`** —— 后台写记忆的窄接口，**按 id 定位**而不是按调用方手里的对象引用；字数上限也收拢到这里（`truncate_memory(memory, group_memory_budget(g))`，在 mutator 内算，因为额度取决于锁内重读到的会话列表），并让 `memory_rev += 1`。
 3. **`_run_digest_in_pool(group_id, ...)` + `_load_group_fresh()`** —— 提交线程池时传 id 而不是对象，运行时从磁盘重读。"捕获旧对象"这个根因被**物理消除**，不是靠锁遮住的。分组在排队期间被删除时直接 `fail_task('分组已被删除')`。
 
 WebUI 批量 `PUT /api/assistant/config` 用 `merge_digest_groups()` 合并，其中**已存在分组的 `memory` / `memory_rev` 一律以磁盘为准** —— 浏览器手里的 config 可能是几分钟前 GET 的，不豁免就会把后台刚写的记忆回滚成旧值。
@@ -289,21 +337,27 @@ style 预设是轻量调整（行动项优先 / 完整复盘 / 极简速览）�
 
 第 4 条"每会话 ≤200 字"是硬性的延迟护栏：实测延迟由输出长度决定（固定 ~18s + ~14ms/字），6 会话 × 200 字 ≈ 35s，在 180s 超时内余量充足；不限长时输出 2900 字就会撞旧的 60s。
 
-`single` 模式（组内只有一个有内容的会话）**不追加契约、不加分节标记**，prompt 与改造前逐字节一致。
-
 ### 7. 一个分组一个 task_center 任务
 
 一次触发 = 一条 Outbox 记录 = 一个 task = 一个可重推单元。降级成逐会话只是内部实现细节，用户视角始终是"这个分组的一次摘要"。
 
 拆成 N 个 task 会破坏两处既有机制：重推正文的三级兜底（`outbox_id` → 时间窗匹配 → `task.result`）依赖"一个 task 一份完整正文"；推送三态（`delivery.aggregate_status`）是按一次 `send_text` 聚合的，天然对应"一组一次推送"。组内进度用 `update_task(progress=...)` 表达（`正在获取消息 (2/6)` → `超出预算，改为逐会话摘要 (3/6)` → `推送中`）。
 
+### 8. single 模式也要点名会话（放弃了"与改造前逐字节一致"）
+
+分组改造当天曾刻意保证：`single` 模式（组内只有一个有内容的会话）不追加任何契约、prompt 与改造前逐字节一致，好让迁移后的单会话分组零行为变化。**这条保证现在故意放弃了。**
+
+`plan_digest` 判定 single 用的是**有消息的会话数**，不是分组大小。生产上 dg_001「聚沙成塔」配了 5 个会话，最新一条 Outbox 却是 `digest_mode=single, chats=["509助力"]` —— 只有那一个会话有新消息。旧行为下这次摘要正文里没有任何会话名，接着被写进**全组共用**的记忆，下一轮又当上下文喂给另外 4 个会话。
+
+所以 single 现在也追加 `SINGLE_HEADING_CONTRACT`（第一行 `## 会话名`），user prompt 也带上 `## 本次摘要的会话`。代价是单会话分组的推送正文多一行标题 —— 换来的是记忆可归属。
+
 ## 代码位置
 
 | 组件 | 文件 |
 |------|------|
-| DigestScheduler（编排：`_collect_chat_units` / `_render_digest` / `_render_packed` / `_render_per_chat` / `_publish_outbox` / `_push_and_finish`） | `src/assistant/scheduler.py` |
-| DigestGroup / DigestChat / GroupProfile / 迁移与校验 / `mutate_config` / 记忆窄接口 | `src/assistant/config.py` |
-| 过滤 + XML 清洗 + prompt 构建 + 记忆更新 + 预算降级（`plan_digest` / `trim_oldest` / `build_packed_prompt` / `concat_sections` / `digest_token_budget`） | `src/assistant/digest.py` |
+| DigestScheduler（编排：`_collect_chat_units` / `_render_digest` / `_render_once` / `_render_per_chat` / `_digest_system_prompt` / `_update_group_memory` / `_publish_outbox` / `_push_and_finish`） | `src/assistant/scheduler.py` |
+| DigestGroup / DigestChat / GroupProfile / 迁移与校验 / `mutate_config` / 记忆窄接口 / 记忆额度与截断（`memory_char_budget` / `group_memory_budget` / `truncate_memory`） | `src/assistant/config.py` |
+| 过滤 + XML 清洗 + prompt 构建（`build_digest_prompt` / `build_packed_prompt` / `generate_memory_update_prompt`）+ 三个结构契约（`SINGLE_HEADING_CONTRACT` / `PACKED_OUTPUT_CONTRACT` / `PER_CHAT_NO_HEADING_HINT`）+ 预算降级（`plan_digest` / `trim_oldest` / `concat_sections` / `digest_token_budget`） | `src/assistant/digest.py` |
 | LLM 异常（`LLMContextOverflowError` 触发降级） | `src/summarize/errors.py` |
 | Outbox | `src/assistant/outbox.py` |
 | 推送与三态聚合 | `src/im/delivery.py` |

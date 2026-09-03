@@ -13,15 +13,17 @@ from src.utils.cron import cron_matches
 from .config import (
     AssistantConfig,
     DigestGroup,
-    MEMORY_MAX_CHARS,
     OAGroup,
+    group_memory_budget,
     load_assistant_config,
+    truncate_memory,
     update_digest_group_memory,
 )
 from .digest import (
     DIGEST_SYSTEM_PROMPT,
     PACKED_OUTPUT_CONTRACT,
     PER_CHAT_NO_HEADING_HINT,
+    SINGLE_HEADING_CONTRACT,
     STYLE_PRESETS,
     ChatUnit,
     build_digest_prompt,
@@ -675,8 +677,9 @@ class DigestScheduler:
     def _render_once(self, dg: DigestGroup, plan, task_id) -> str:
         """一次 LLM 调用覆盖整组（single 与 packed 共用）。
 
-        single 模式下 prompt 与 system prompt 都与改造前逐字节一致 ——
-        迁移后线上分组都是单会话，升级当天零行为变化。
+        single 模式也点名会话：分组可能配了 5 个会话而本轮只有 1 个有新消息，
+        不点名的话摘要正文无法归属，写进组记忆后就成了"我们群如何如何"，
+        而这份记忆下一轮会作为共用上下文喂给全部会话。
         """
         active = [u for u in plan.units if u.messages]
         packed = plan.mode == "packed"
@@ -684,11 +687,11 @@ class DigestScheduler:
         self._broadcast_task_update(task_id, 'group_digest', 'running',
                                     'AI 生成摘要中', dg.name)
 
-        system_prompt = self._digest_system_prompt(dg, packed=packed)
+        system_prompt = self._digest_system_prompt(dg, plan.mode)
         if packed:
             prompt = build_packed_prompt(dg, plan.units)
         else:
-            prompt = build_digest_prompt(dg, active[0].messages)
+            prompt = build_digest_prompt(dg, active[0].messages, active[0].name)
         logger.info("[DIGEST] Step 3/6: '%s' mode=%s system_len=%d user_len=%d",
                     dg.name, plan.mode, len(system_prompt), len(prompt))
 
@@ -712,7 +715,7 @@ class DigestScheduler:
         单块失败降级），唯一区别是 reduce 阶段零 LLM 调用。
         """
         active = [u for u in plan.units if u.messages]
-        system_prompt = self._digest_system_prompt(dg, packed=False) + PER_CHAT_NO_HEADING_HINT
+        system_prompt = self._digest_system_prompt(dg, "per_chat")
 
         results = {}
         with ThreadPoolExecutor(max_workers=DIGEST_PER_CHAT_WORKERS) as pool:
@@ -748,7 +751,7 @@ class DigestScheduler:
 
     def _summarize_one_chat(self, dg: DigestGroup, unit, system_prompt: str) -> str:
         """单会话摘要单元。失败时抛异常，由 _render_per_chat 记为该会话的错误。"""
-        prompt = build_digest_prompt(dg, unit.messages)
+        prompt = build_digest_prompt(dg, unit.messages, unit.name)
         extra = {
             "group_id": dg.id,
             "group_name": dg.name,
@@ -761,8 +764,12 @@ class DigestScheduler:
         }
         return self._call_digest_llm(dg, system_prompt, prompt, extra, reraise=True)
 
-    def _digest_system_prompt(self, dg: DigestGroup, packed: bool) -> str:
-        """custom_prompt 完全替代默认指令；style 预设追加；打包时再追加输出契约。"""
+    def _digest_system_prompt(self, dg: DigestGroup, mode: str) -> str:
+        """custom_prompt 完全替代默认指令；style 预设追加；结构约束按 mode 追加。
+
+        Args:
+            mode: "single" / "packed" / "per_chat"，即 plan.mode。
+        """
         if dg.profile and dg.profile.custom_prompt:
             system_prompt = dg.profile.custom_prompt
         else:
@@ -770,10 +777,15 @@ class DigestScheduler:
             style = dg.profile.style if dg.profile else ""
             if style and style in STYLE_PRESETS:
                 system_prompt += STYLE_PRESETS[style]
-        if packed:
-            # 输出契约是**结构约束**而不是风格指令，所以即使 custom_prompt
-            # 完全替代了摘要指令也必须追加，否则多个会话会被混写成一篇。
+        # 标题层级是**结构约束**而不是风格指令，所以即使 custom_prompt 完全
+        # 替代了摘要指令也必须追加，否则外层没法按会话切分、记忆也无法归属。
+        if mode == "packed":
             system_prompt += PACKED_OUTPUT_CONTRACT
+        elif mode == "per_chat":
+            # 外层 concat_sections 自己加 ## 会话名，模型一个标题都不要出
+            system_prompt += PER_CHAT_NO_HEADING_HINT
+        else:
+            system_prompt += SINGLE_HEADING_CONTRACT
         return system_prompt
 
     def _call_digest_llm(self, dg: DigestGroup, system_prompt: str, prompt: str,
@@ -857,9 +869,17 @@ class DigestScheduler:
             logger.debug("[DIGEST] Step 4/6: 记忆更新已跳过 for '%s' (memory_enabled=false)",
                          dg.name)
             return
-        mem_system_prompt = "你是一个群聊记忆助手，负责记录群聊摘要要点。用中文，≤2000字。"
+        # 会话列表口径必须与 config.group_memory_budget 一致：prompt 里承诺的
+        # 字数和落盘时的截断位置得是同一个数，否则 LLM 按要求写满却被切掉一块。
+        chat_names = [c.name or c.chat_id for c in dg.chats
+                      if c.enabled and c.chat_id]
+        budget = group_memory_budget(dg)
+        mem_system_prompt = ("你是一个分组聊天记忆助手，负责按会话记录一个摘要分组内"
+                             "各个会话的要点。用中文，按 `### 会话名` 分块，"
+                             f"不要把一个会话的事写进另一个会话，全文不超过 {budget} 字。")
         mem_start = time.monotonic()
-        mem_prompt = generate_memory_update_prompt(dg.memory, digest_text)
+        mem_prompt = generate_memory_update_prompt(dg.memory, digest_text,
+                                                   chat_names, budget)
         try:
             new_memory = self._summarizer._call_chat_api(
                 mem_system_prompt, [{"role": "user", "content": mem_prompt}])
@@ -876,7 +896,8 @@ class DigestScheduler:
             if new_memory:
                 # 按 id 写回磁盘，不改内存对象再整份覆盖写配置（见 config.mutate_config）
                 rev = update_digest_group_memory(dg.id, new_memory)
-                dg.memory = new_memory[:MEMORY_MAX_CHARS]
+                # 与落盘同一套截断口径，否则 dg.memory 和磁盘长期不一致
+                dg.memory = truncate_memory(new_memory, budget)
                 dg.memory_rev = rev
                 logger.info("[DIGEST] Step 4/6: 记忆已更新 for '%s' (%d chars, rev=%d)",
                             dg.name, len(dg.memory), rev)

@@ -243,7 +243,8 @@ class TestBuildPackedPrompt(unittest.TestCase):
     def test_has_ordered_section_markers(self):
         units = [unit("甲", 3), unit("乙", 2), unit("丙", 1)]
         p = build_packed_prompt(self._dg(), units)
-        self.assertIn("## 近期记忆（本分组共用）", p)
+        self.assertIn("## 本次摘要的分组\n测试组（3 个会话）", p)
+        self.assertIn("## 近期记忆（本分组共用，可能含其他会话的事，只与对应会话相关时才引用）", p)
         self.assertIn("组级共享记忆", p)
         self.assertIn("## 待摘要的 3 个会话", p)
         self.assertLess(p.index("=== [1] 甲 (3 条) ==="), p.index("=== [2] 乙 (2 条) ==="))

@@ -165,10 +165,11 @@ class TestDigestFiltering(unittest.TestCase):
             {"sender_name": "B", "content": "什么消息", "timestamp": 1700000100},
         ]
         prompt = build_digest_prompt(dg, msgs)
-        # 结构：近期记忆 + 最近消息（群信息段已移除）
+        # 结构：会话名 + 近期记忆 + 最近消息（群信息段已移除）
+        self.assertIn("## 本次摘要的会话\n测试群", prompt)
         self.assertIn("## 近期记忆", prompt)
         self.assertIn("上次聊了部署方案", prompt)
-        self.assertIn("## 最近 2 条消息", prompt)
+        self.assertIn("## 「测试群」最近 2 条消息", prompt)
         self.assertIn("好消息", prompt)
         self.assertIn("什么消息", prompt)
         # 已删除字段不应出现在 prompt 中
@@ -176,11 +177,38 @@ class TestDigestFiltering(unittest.TestCase):
         self.assertNotIn("关注点", prompt)
         self.assertNotIn("忽略内容", prompt)
 
+    def test_build_digest_prompt_names_chat_not_group(self):
+        """会话名与分组名不同时必须点会话名。
+
+        一个分组配多个会话、本轮只有其中一个有新消息时，记忆是全组共用的；
+        只写分组名的话，LLM 会把别的会话的历史当成这个会话的。
+        """
+        dg = DigestGroup(id="dg_001", name="羊毛组", memory="组里在聊淘宝新规")
+        prompt = build_digest_prompt(dg, [{"sender_name": "A", "content": "hi",
+                                           "timestamp": 1700000000}], "攒单群")
+        self.assertIn("## 本次摘要的会话\n攒单群", prompt)
+        self.assertIn("## 「攒单群」最近 1 条消息", prompt)
+        self.assertIn("分组「羊毛组」共用", prompt)
+        self.assertIn("只在与「攒单群」相关时引用", prompt)
+
     def test_memory_update_prompt(self):
         prompt = generate_memory_update_prompt("旧记忆", "新摘要内容")
         self.assertIn("旧记忆", prompt)
         self.assertIn("新摘要内容", prompt)
         self.assertIn("2000", prompt)
+
+    def test_memory_update_prompt_is_group_scoped_and_per_chat(self):
+        """记忆是分组级的：必须按会话分块，额度随会话数放大。"""
+        prompt = generate_memory_update_prompt(
+            "旧记忆", "## 甲\n要点A\n\n## 乙\n要点B",
+            chat_names=["甲", "乙", "丙"], budget=2600)
+        self.assertIn("本分组包含 3 个会话：甲、乙、丙", prompt)
+        self.assertIn("### 会话名", prompt)
+        self.assertIn("禁止把 A 会话的内容写进 B 会话", prompt)
+        self.assertIn("不超过 2600 字", prompt)
+        # 早期按单群口吻写的旧记忆要有去处，否则会被硬塞进某个会话
+        self.assertIn("### 分组共性", prompt)
+        self.assertNotIn("第一人称", prompt)
 
 
 if __name__ == "__main__":

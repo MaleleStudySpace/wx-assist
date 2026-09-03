@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .config import AssistantConfig, DigestGroup
+from .config import AssistantConfig, DigestGroup, memory_char_budget
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +32,23 @@ SYSTEM_KEYWORDS = (
 # This is the DEFAULT system prompt for the scheduled digest feature.
 # When custom_prompt is set in GroupProfile, it COMPLETELY REPLACES this prompt.
 DIGEST_SYSTEM_PROMPT = """\
-你是一个微信群聊定时摘要助手，负责定期为用户生成群聊摘要。
+你是一个微信聊天定时摘要助手，为用户配置的「摘要分组」生成摘要。
+一个分组里可能只有 1 个会话，也可能有多个互不相干的群聊/私聊；本次要摘要哪几个会话，用户消息里会明确列出。
 
 ## 核心任务
-根据提供的近期记忆和最新消息，生成一份结构化摘要。
+根据提供的近期记忆和最新消息，**逐个会话**生成结构化摘要。
+
+## 标题层级（严格遵守）
+- 每个会话的段落第一行是 `## 会话名`，会话名照抄用户消息里给出的名字。
+- 会话内部的话题用 `###` 三级标题或 `-` 列表，**不要再用 `##`**——否则分不清话题属于哪个会话。
+- 只有一个会话时也要写 `## 会话名`。
 
 ## 输出要求
 - 用中文，简洁自然，像给同事转述一样。
-- 按话题分类，每个话题用 ## 二级标题。
-- 突出可行动的信息：待办事项、决定、截止时间、联系方式。
+- 突出可行动的信息：待办事项、决定、截止时间、联系方式、价格/费率等数字。
 - 忽略闲聊、表情、无实质内容的消息。
-- 近期记忆是历史摘要的浓缩，用于保持话题连贯；如与最新消息冲突，以最新消息为准。
-- 如果没有实质性内容，一句话说清楚即可。
+- 近期记忆是**整个分组共用**的历史浓缩，里面可能混着其他会话的事：只在与当前会话明确相关时才引用，不要张冠李戴；与最新消息冲突时以最新消息为准。
+- 某个会话没有实质内容时，一句话说清楚即可，不要硬编，也不要借别的会话的内容来凑。
 - 不要输出 wxid_xxx——始终用消息里的昵称。"""
 
 # ── Style preset instructions (appended to DIGEST_SYSTEM_PROMPT) ──
@@ -239,13 +244,17 @@ def filter_messages(messages: list[dict], ignore_keywords: Optional[list[str]] =
     return result
 
 
-def build_digest_prompt(group_cfg: DigestGroup, messages: list[dict]) -> str:
+def build_digest_prompt(group_cfg: DigestGroup, messages: list[dict],
+                        chat_name: str = "") -> str:
     """Build the user prompt for AI digest generation.
 
-    Provides CONTEXT only (profile + memory + messages).
+    Provides CONTEXT only (chat identity + shared memory + messages).
     Instructions belong in the system prompt (DIGEST_SYSTEM_PROMPT or custom_prompt).
+
+    chat_name 必须给：组内多个会话共用一份记忆，不点名当前会话，
+    LLM 会把别的会话的历史当成这个会话的，摘要也就无法归属。
     """
-    profile = group_cfg.profile
+    name = chat_name or group_cfg.name
     memory = group_cfg.memory or "（暂无历史记忆）"
 
     # Format messages with wxid stripped + media placeholder
@@ -262,29 +271,47 @@ def build_digest_prompt(group_cfg: DigestGroup, messages: list[dict]) -> str:
 
     messages_text = "\n".join(msg_lines)
 
-    logger.info("[DIGEST-PROMPT] Building digest prompt: profile=%s, memory_len=%d, messages=%d",
-                 bool(profile), len(memory), len(messages))
+    logger.info("[DIGEST-PROMPT] chat=%s group=%s memory_len=%d messages=%d",
+                 name, group_cfg.name, len(memory), len(messages))
 
-    return f"""## 近期记忆
+    return f"""## 本次摘要的会话
+{name}
+
+## 近期记忆（分组「{group_cfg.name}」共用，可能含其他会话的事，只在与「{name}」相关时引用）
 {memory}
 
-## 最近 {len(messages)} 条消息
+## 「{name}」最近 {len(messages)} 条消息
 {messages_text}"""
 
 
-def generate_memory_update_prompt(previous_memory: str, digest_text: str) -> str:
-    """Build the prompt for AI to update the group's digest memory."""
+def generate_memory_update_prompt(previous_memory: str, digest_text: str,
+                                  chat_names: list = None,
+                                  budget: int = None) -> str:
+    """Build the prompt for AI to update the group's digest memory.
+
+    记忆是**分组级**的：一份记忆服务组内所有会话，下一轮又会作为共用上下文
+    喂回每个会话。不按会话分块，LLM 就会写成"我们群如何如何"的单群口吻，
+    事实串了也查不出来是哪个会话的。
+    """
     prev = previous_memory if previous_memory else "（暂无）"
+    names = [str(n) for n in (chat_names or []) if n]
+    if budget is None:
+        budget = memory_char_budget(len(names))
+    scope = (f"本分组包含 {len(names)} 个会话：{'、'.join(names)}。"
+             if names else "本分组包含的会话见下方摘要里的 `##` 小标题。")
     return f"""## 之前的摘要记忆
 {prev}
 
 ## 本次摘要
 {digest_text}
 
-请用第一人称写一段 2000 字以内的"摘要记忆"，记录:
-- 本次摘要的核心要点
-- 近期重要事件/趋势变化
-- 群聊氛围和活跃度
+{scope}
+请更新这个**分组**的摘要记忆，全文不超过 {budget} 字，要求：
+- 按会话分块，每块以 `### 会话名` 开头（会话名照抄），只写这个会话自己的事，禁止把 A 会话的内容写进 B 会话。
+- 每块记录：核心要点、近期重要事件与趋势变化、活跃度与氛围。
+- 本次没有新内容的会话，保留上一版里它的要点并标注「（无新增）」，不要整块删掉。
+- 之前的记忆里若有无法归属到具体会话的内容（早期按单群口吻写的），归入开头的 `### 分组共性` 一块。
+- 超出字数时优先保留最近的事件和未完结的事，删掉已经过期的细节；不要写到一半截断。
 直接输出记忆文本，不要 JSON 包装。"""
 
 
@@ -317,14 +344,24 @@ PACKED_OUTPUT_CONTRACT = """
 用户消息里给出 N 个会话，每个会话以 `=== [序号] 会话名 (条数) ===` 分隔。
 你必须：
 1. 按输入顺序，为每一个会话输出一个独立段落，段落第一行是 `## 会话名`（会话名原样照抄）。
-2. 禁止跨会话合并话题，禁止写总览/综述/开场白/结尾总结。
-3. 禁止遗漏任何一个会话；某会话没有实质内容时，输出 `## 会话名` 加一行 `（无实质内容）`。
-4. 每个会话的摘要控制在 200 字以内。"""
+2. 会话内部只用 `###` 或 `-`，**禁止再用 `##`**——否则分不清话题属于哪个会话。
+3. 禁止跨会话合并话题，禁止写总览/综述/开场白/结尾总结。
+4. 禁止遗漏任何一个会话；某会话没有实质内容时，输出 `## 会话名` 加一行 `（无实质内容）`。
+5. 每个会话的摘要控制在 200 字以内。"""
 
 PER_CHAT_NO_HEADING_HINT = """
 
 ## 输出格式
-不要输出会话名标题、不要输出开场白，直接输出摘要正文。"""
+本次只给你一个会话，外层会自动补上 `## 会话名`。
+禁止输出任何 `#`/`##`/`###` 标题、禁止输出开场白，直接输出摘要正文；需要分点时用 `-` 列表。"""
+
+# single 模式（组内只有 1 个会话有新消息）同样必须点名会话：否则摘要正文
+# 无法归属，写进组记忆后就分不清是哪个会话的事，而这份记忆下一轮会喂给全组。
+SINGLE_HEADING_CONTRACT = """
+
+## 输出格式（结构约束，必须遵守）
+第一行是 `## 会话名`（照抄用户消息里「本次摘要的会话」给出的名字）。
+会话内部只用 `###` 或 `-`，禁止再用 `##`。"""
 
 
 @dataclass
@@ -495,7 +532,10 @@ def build_packed_prompt(group_cfg: DigestGroup, units: list) -> str:
             f"=== [{i}] {u.name} ({len(u.messages)} 条{suffix}) ===\n"
             f"{_format_msg_lines(u.messages)}"
         )
-    return f"""## 近期记忆（本分组共用）
+    return f"""## 本次摘要的分组
+{group_cfg.name}（{len(active)} 个会话）
+
+## 近期记忆（本分组共用，可能含其他会话的事，只与对应会话相关时才引用）
 {memory}
 
 ## 待摘要的 {len(active)} 个会话

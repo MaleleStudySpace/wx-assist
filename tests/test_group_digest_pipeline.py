@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import src.assistant.config as config_mod
 from src.assistant import scheduler as sched_mod
 from src.assistant.config import (
-    AssistantConfig, DigestChat, DigestGroup, GroupProfile,
+    AssistantConfig, DigestChat, DigestGroup, GroupProfile, memory_char_budget,
 )
 from src.assistant.scheduler import DigestScheduler
 from src.summarize.errors import LLMContextOverflowError
@@ -41,6 +41,7 @@ class FakeSummarizer:
         self.overflow_when_packed = overflow_when_packed
         self.digest_calls = []      # [{"system","user","timeout"}]
         self.memory_calls = []
+        self.memory_system_calls = []
 
     def _call_digest_api(self, system_prompt, messages, timeout=None):
         prompt = messages[0]["content"]
@@ -60,6 +61,7 @@ class FakeSummarizer:
 
     def _call_chat_api(self, system_prompt, messages):
         self.memory_calls.append(messages[0]["content"])
+        self.memory_system_calls.append(system_prompt)
         return "浓缩后的新记忆"
 
     @property
@@ -167,8 +169,8 @@ def big_chats(names=("a", "b", "c"), n_msgs=15, content_len=300):
     }
 
 
-class TestSingleChatUnchanged(PipelineBase):
-    """迁移后线上 3 个分组都是单会话 → 升级当天必须零行为变化。"""
+class TestSingleChatPath(PipelineBase):
+    """组内只有 1 个会话有消息 → single 模式：一次调用，不加分节标记。"""
 
     def test_one_llm_call_and_no_packed_markers(self):
         g = make_group(["a@chatroom"])
@@ -183,13 +185,25 @@ class TestSingleChatUnchanged(PipelineBase):
         self.assertFalse(outbox.last_content["degraded"])
         tc.complete_task.assert_called_once()
 
-    def test_prompt_matches_legacy_builder_byte_for_byte(self):
+    def test_single_prompt_names_the_chat(self):
+        """single 也必须点名会话 —— 这里曾经保证"与改造前逐字节一致"，现在故意放弃。
+
+        分组可能配了 5 个会话而本轮只有 1 个有新消息：生产上 dg_001「聚沙成塔」
+        就是这样，outbox 记着 digest_mode=single、chats=["509助力"]，正文里
+        没有任何会话名。这份无法归属的正文接着被写进**全组共用**的记忆，
+        下一轮又当上下文喂给另外 4 个会话。
+        """
         from src.assistant.digest import build_digest_prompt
         g = make_group(["a@chatroom"], memory="历史记忆内容")
         _, summ, _, _, _ = self.run_digest(g, THREE_CHATS)
         disk_group = config_mod.load_assistant_config().digest_groups[0]
-        expected = build_digest_prompt(disk_group, THREE_CHATS["a@chatroom"])
-        self.assertEqual(summ.digest_calls[0]["user"], expected)
+        expected = build_digest_prompt(disk_group, THREE_CHATS["a@chatroom"], "a")
+        call = summ.digest_calls[0]
+        self.assertEqual(call["user"], expected)
+        self.assertIn("## 本次摘要的会话\na\n", call["user"])
+        self.assertIn("分组「测试分组」共用", call["user"])
+        # 标题层级是结构约束，single 模式同样要追加
+        self.assertIn("## 输出格式（结构约束，必须遵守）", call["system"])
 
     def test_only_that_chats_messages_are_fetched(self):
         g = make_group(["a@chatroom"])
@@ -298,13 +312,22 @@ class TestDegradedPath(PipelineBase):
         for call in summ.digest_calls:
             self.assertNotIn("=== [", call["user"])
 
-    def test_per_chat_prompt_has_no_heading_instruction(self):
+    def test_per_chat_prompt_forbids_all_headings_and_names_its_chat(self):
         g = make_group(["a@chatroom", "b@chatroom"])
         with self.tiny_budget():
             _, summ, _, _, _ = self.run_digest(g, big_chats(("a", "b")))
+        named = set()
         for call in summ.digest_calls:
-            self.assertIn("不要输出会话名标题", call["system"])
+            # 外层 concat_sections 自己加 ## 会话名；模型再出 ## 就与它同级，
+            # 实测 6 会话炸出 24 个 h2，读的人分不清话题属于哪个群
+            self.assertIn("禁止输出任何 `#`/`##`/`###` 标题", call["system"])
             self.assertNotIn("多会话打包输出契约", call["system"])
+            # 每次调用只给一个会话，但记忆是全组共用的 → 必须点名当前会话
+            self.assertIn("## 本次摘要的会话", call["user"])
+            for n in ("a", "b"):
+                if f"## 本次摘要的会话\n{n}\n" in call["user"]:
+                    named.add(n)
+        self.assertEqual(named, {"a", "b"}, "两个会话各自都要被点名")
 
     def test_display_marks_degraded(self):
         g = make_group(["a@chatroom", "b@chatroom"])
@@ -536,6 +559,57 @@ class TestMemoryIntegration(PipelineBase):
         sched._generate_digest(g, task_id=TASK_ID)
         tc.complete_task.assert_called_once()
         self.assertIn("默认摘要正文", outbox.last_content["digest"])
+
+    def test_memory_prompt_is_group_scoped_and_per_chat(self):
+        """记忆是分组级的：必须列出全部会话、按会话分块、额度随会话数放大。
+
+        旧提示词是"用第一人称写…群聊氛围和活跃度"，生产上 dg_001 配了 5 个
+        会话，记忆却通篇"我们群…脉冲式活跃模式"、零会话归属；而这份记忆
+        下一轮会作为共用上下文喂回全部 5 个会话。
+        """
+        g = make_group(["a@chatroom", "b@chatroom", "c@chatroom"],
+                       memory_enabled=True, memory="旧记忆")
+        _, summ, _, _, _ = self.run_digest(g, THREE_CHATS)
+        budget = memory_char_budget(3)
+        prompt = summ.memory_calls[0]
+        self.assertIn("本分组包含 3 个会话：a、b、c", prompt)
+        self.assertIn("### 会话名", prompt)
+        self.assertIn("禁止把 A 会话的内容写进 B 会话", prompt)
+        self.assertIn(f"不超过 {budget} 字", prompt)
+        system_prompt = summ.memory_system_calls[0]
+        self.assertIn("分组聊天记忆助手", system_prompt)
+        self.assertIn(f"不超过 {budget} 字", system_prompt)
+        self.assertNotIn("你是一个群聊记忆助手", system_prompt)
+        self.assertNotIn("第一人称", prompt)
+
+    def test_memory_mirror_matches_disk_after_truncation(self):
+        """dg.memory 与磁盘必须逐字相同 —— 两边共用同一套 budget 与截断。
+
+        _generate_digest 里 dg = self._load_group_fresh(dg) 会重新绑定名字，
+        所以调用方手里那个对象不是被更新的那个，得把 scheduler 实际用的
+        实例抓出来比。
+        """
+        g = make_group(["a@chatroom", "b@chatroom"], memory_enabled=True)
+        sched, summ, _, _, _ = self.build(g, THREE_CHATS)
+        raw = "### a\n" + "甲" * 3000 + "\n### b\n" + "乙" * 3000
+        summ._call_chat_api = lambda s, m: raw
+
+        seen = {}
+        orig = sched._update_group_memory
+
+        def spy(dg_used, text):
+            orig(dg_used, text)
+            seen["dg"] = dg_used
+
+        sched._update_group_memory = spy
+        sched._generate_digest(g, task_id=TASK_ID)
+
+        disk = config_mod.load_assistant_config().digest_groups[0]
+        self.assertLessEqual(len(disk.memory), memory_char_budget(2))
+        self.assertLess(len(disk.memory), len(raw), "确实发生了截断，否则这个用例是空跑")
+        self.assertEqual(seen["dg"].memory, disk.memory,
+                         "内存镜像与磁盘不一致 → 下一次读 dg.memory 的就是旧值")
+        self.assertEqual(seen["dg"].memory_rev, disk.memory_rev)
 
 
 class TestPushThreeState(PipelineBase):

@@ -571,7 +571,50 @@ def _dict_to_config(data: dict) -> AssistantConfig:
     return cfg
 
 
+# 组记忆是**一份记忆服务组内所有会话**，所以额度按会话数放大：单会话 2000 字
+# （实测 dg_003 只有一个会话就已经写满并被截断），每多一个会话 +300，封顶 4000
+# —— 再长会挤占打包 token 预算，memory_tokens 是直接从 available 里扣的。
 MEMORY_MAX_CHARS = 2000
+MEMORY_PER_EXTRA_CHAT_CHARS = 300
+MEMORY_CEIL_CHARS = 4000
+
+
+def memory_char_budget(n_chats: int) -> int:
+    """n 个会话共用一份记忆时的字数上限。"""
+    n = max(1, int(n_chats or 1))
+    return min(MEMORY_MAX_CHARS + MEMORY_PER_EXTRA_CHAT_CHARS * (n - 1),
+               MEMORY_CEIL_CHARS)
+
+
+def group_memory_budget(group: DigestGroup) -> int:
+    """按分组里**真正会被摘要**的会话数算额度。
+
+    落盘（本模块两个写入口）和内存镜像（scheduler._update_group_memory）
+    必须共用这个口径，否则两边截断位置不同，dg.memory 与磁盘长期不一致。
+    """
+    n = sum(1 for c in (group.chats or [])
+            if getattr(c, "enabled", True) and getattr(c, "chat_id", ""))
+    return memory_char_budget(n)
+
+
+def truncate_memory(text: str, budget: int) -> str:
+    """按块边界截断记忆，不切在句中和 markdown 结构里。
+
+    盲切 [:budget] 的后果在生产数据里能看到：dg_003 的记忆正好停在
+    "\\n\\n#### 4."，留下一个只有标题没有内容的残块。这里优先退到最后一个
+    `### 会话名` 块的开头（整块丢掉写不完的那段），其次退到最后一个空行；
+    边界太靠前（不足一半）说明这份记忆没有分块结构，那只能硬切。
+    """
+    text = text or ""
+    if len(text) <= budget:
+        return text
+    head = text[:budget]
+    for marker in ("\n### ", "\n\n"):
+        cut = head.rfind(marker)
+        if cut > budget // 2:
+            return head[:cut].rstrip()
+    return head.rstrip()
+
 
 # 配置是整份 JSON 全量覆盖写，而 WebUI HTTP 线程（max_workers=20）、
 # scheduler 线程池（max_workers=3）、agent 工具（router 线程）都会写它，
@@ -654,13 +697,13 @@ def update_digest_group_memory(group_id: str, memory: str) -> int:
     Raises:
         KeyError: 分组不存在（可能刚被用户删掉）。
     """
-    text = (memory or "")[:MEMORY_MAX_CHARS]
     new_rev = {}
 
     def _mutate(cfg: AssistantConfig) -> None:
         for g in cfg.digest_groups:
             if g.id == group_id:
-                g.memory = text
+                # 额度取决于组内会话数，必须在锁内重读到最新分组之后才算
+                g.memory = truncate_memory(memory, group_memory_budget(g))
                 g.memory_rev += 1
                 new_rev["rev"] = g.memory_rev
                 return
@@ -679,7 +722,6 @@ def cas_digest_group_memory(group_id: str, memory: str,
         ok=False 且 rev>=0 表示期间被后台摘要改过，调用方应把 memory 回填给用户；
         ok=False 且 rev==-1 表示分组不存在。
     """
-    text = (memory or "")[:MEMORY_MAX_CHARS]
     with _CONFIG_LOCK:
         cfg = _load_unlocked()
         for g in cfg.digest_groups:
@@ -688,7 +730,7 @@ def cas_digest_group_memory(group_id: str, memory: str,
                     logger.warning("记忆 CAS 冲突：group=%s expect_rev=%s disk_rev=%s",
                                    group_id, expect_rev, g.memory_rev)
                     return False, g.memory_rev, g.memory
-                g.memory = text
+                g.memory = truncate_memory(memory, group_memory_budget(g))
                 g.memory_rev += 1
                 _save_unlocked(cfg)
                 return True, g.memory_rev, g.memory
