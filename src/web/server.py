@@ -1369,7 +1369,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
     def do_PUT(self):
         put_path = self.path.split("?")[0] if "?" in self.path else self.path
-        if self.path == "/api/assistant/config" or (
+        if self.path in ("/api/assistant/config", "/api/assistant/digest-group-memory") or (
             put_path.startswith("/api/oa/groups/") and len(put_path.split("/")) == 5
         ) or (
             put_path.startswith("/api/scheduler/tasks/") and len(put_path.split("/")) == 5
@@ -1711,10 +1711,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
             try:
                 config = json.loads(body)
                 if "rag_enabled" in config:
-                    from src.assistant.config import load_assistant_config, save_assistant_config
-                    rag_config = load_assistant_config()
-                    rag_config.rag_enabled = bool(config["rag_enabled"])
-                    save_assistant_config(rag_config)
+                    from src.assistant.config import mutate_config
+
+                    def _apply_rag(cfg):
+                        cfg.rag_enabled = bool(config["rag_enabled"])
+
+                    rag_config = mutate_config(_apply_rag)
                     update_status(rag_enabled=rag_config.rag_enabled)
                 env_path = _find_or_create_env()
                 if env_path.exists():
@@ -2752,14 +2754,14 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 # 保存公众号全文缓存开关（Onboarding 第 4 步开关滑动即时热更新）
                 if data.get("oa_full_text_fetch") is not None:
                     try:
-                        from src.assistant.config import (
-                            load_assistant_config, save_assistant_config, _dict_to_config,
-                        )
-                        _cfg = load_assistant_config()
-                        _cfg.oa_full_text_fetch = _dict_to_config(
-                            {"oa_full_text_fetch": data["oa_full_text_fetch"]}
-                        ).oa_full_text_fetch
-                        save_assistant_config(_cfg)
+                        from src.assistant.config import _dict_to_config, mutate_config
+
+                        def _apply_ftf(cfg):
+                            cfg.oa_full_text_fetch = _dict_to_config(
+                                {"oa_full_text_fetch": data["oa_full_text_fetch"]}
+                            ).oa_full_text_fetch
+
+                        _cfg = mutate_config(_apply_ftf)
                         if _content_cache is not None:
                             _content_cache.set_full_text_config(
                                 _cfg.oa_full_text_fetch.enabled,
@@ -2923,80 +2925,131 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     body = json.loads(self.rfile.read(length)) if length > 0 else {}
                 except Exception:
                     body = {}
-                from src.assistant.config import _dict_to_config, save_assistant_config, load_assistant_config
-                try:
-                    existing = load_assistant_config()
-                    # Merge: update fields from body
+                from src.assistant.config import (
+                    _dict_to_config, merge_digest_groups, mutate_config,
+                    validate_digest_groups,
+                )
+                from src.utils.cron import validate_daily_cron
+
+                def _apply(cfg):
+                    """在 mutate_config 的锁内执行，写入基底是磁盘最新值。
+
+                    校验失败直接 raise：落盘不会发生，外层 except 把消息原样
+                    返回前端（既有响应格式 {"ok": False, "error": ...}）。
+                    """
                     if "assistant_enabled" in body:
-                        existing.assistant_enabled = bool(body["assistant_enabled"])
+                        cfg.assistant_enabled = bool(body["assistant_enabled"])
                     if "rag_enabled" in body:
-                        existing.rag_enabled = bool(body["rag_enabled"])
-                        update_status(rag_enabled=existing.rag_enabled)
+                        cfg.rag_enabled = bool(body["rag_enabled"])
                     if "alert_groups" in body:
-                        existing.alert_groups = _dict_to_config({"alert_groups": body["alert_groups"]}).alert_groups
+                        cfg.alert_groups = _dict_to_config({"alert_groups": body["alert_groups"]}).alert_groups
                     if "oa_monitor_groups" in body:
-                        existing.oa_monitor_groups = _dict_to_config({"oa_monitor_groups": body["oa_monitor_groups"]}).oa_monitor_groups
+                        cfg.oa_monitor_groups = _dict_to_config({"oa_monitor_groups": body["oa_monitor_groups"]}).oa_monitor_groups
                     if "digest_groups" in body:
-                        # Validate cron expressions before saving
-                        from src.utils.cron import validate_daily_cron
                         for dg_data in body["digest_groups"]:
-                            cron_err = validate_daily_cron(dg_data.get("cron_expr", ""), f"{dg_data.get('group_name','')}")
+                            cron_err = validate_daily_cron(
+                                dg_data.get("cron_expr", ""),
+                                str(dg_data.get("name") or dg_data.get("group_name") or ""))
                             if cron_err:
-                                self.send_json({"ok": False, "error": cron_err})
-                                return
-                        existing.digest_groups = _dict_to_config({"digest_groups": body["digest_groups"]}).digest_groups
+                                raise ValueError(cron_err)
+                        # 整批校验（组名非空 / 至少一个会话 / 会话跨组不重复），只调一次
+                        verr = validate_digest_groups(body["digest_groups"])
+                        if verr:
+                            raise ValueError(verr)
+                        incoming = _dict_to_config({"digest_groups": body["digest_groups"]}).digest_groups
+                        # memory / memory_rev 一律以磁盘为准：浏览器手里的 config
+                        # 可能是几分钟前 GET 的，其间后台摘要已经写过记忆。
+                        cfg.digest_groups = merge_digest_groups(cfg.digest_groups, incoming)
                     if "notify_channels" in body:
-                        existing.notification_queue.enabled = any(
+                        cfg.notification_queue.enabled = any(
                             ch.get("enabled", True) for ch in body["notify_channels"]
                         )
                     if "notification_queue" in body:
                         q = body.get("notification_queue") or {}
                         if "enabled" in q:
-                            existing.notification_queue.enabled = bool(q["enabled"])
+                            cfg.notification_queue.enabled = bool(q["enabled"])
                         if "retention_hours" in q:
-                            existing.notification_queue.retention_hours = int(q["retention_hours"])
+                            cfg.notification_queue.retention_hours = int(q["retention_hours"])
                     if "outbox_retention_hours" in body:
-                        existing.notification_queue.retention_hours = int(body["outbox_retention_hours"])
+                        cfg.notification_queue.retention_hours = int(body["outbox_retention_hours"])
                     if "oa_full_text_fetch" in body:
                         # 公众号全文缓存开关（enabled + ignore_gh_ids），只影响全文抓取线程
-                        existing.oa_full_text_fetch = _dict_to_config(
+                        cfg.oa_full_text_fetch = _dict_to_config(
                             {"oa_full_text_fetch": body["oa_full_text_fetch"]}
                         ).oa_full_text_fetch
-                    save_assistant_config(existing)
-                    # Hot-reload the full-text fetch switch into ContentCache
-                    try:
-                        if _content_cache is not None:
-                            _content_cache.set_full_text_config(
-                                existing.oa_full_text_fetch.enabled,
-                                existing.oa_full_text_fetch.ignore_gh_ids,
-                            )
-                    except Exception as _e:
-                        logger.warning("Failed to hot-reload full-text fetch config: %s", _e)
-                    # Hot-reload the running scheduler with the new config
-                    if _assistant_scheduler is not None:
-                        try:
-                            _assistant_scheduler.update_config(existing)
-                        except Exception as e:
-                            logger.warning("Failed to hot-reload scheduler config: %s", e)
-                    # Hot-reload the alert engine with the new config
-                    if _assistant_alert is not None:
-                        try:
-                            _assistant_alert.update_config(existing)
-                        except Exception as e:
-                            logger.warning("Failed to hot-reload alert config: %s", e)
-                    # Hot-reload the OA monitor with the new config
-                    if _oa_monitor is not None:
-                        try:
-                            _oa_monitor.update_config(existing)
-                        except Exception as e:
-                            logger.warning("Failed to hot-reload OA monitor config: %s", e)
-                    self.send_json({"ok": True})
+
+                try:
+                    existing = mutate_config(_apply)
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)})
+                    return
+
+                # ── 落盘成功后才做副作用，避免校验失败时状态已被改 ──
+                if "rag_enabled" in body:
+                    update_status(rag_enabled=existing.rag_enabled)
+                # Hot-reload the full-text fetch switch into ContentCache
+                try:
+                    if _content_cache is not None:
+                        _content_cache.set_full_text_config(
+                            existing.oa_full_text_fetch.enabled,
+                            existing.oa_full_text_fetch.ignore_gh_ids,
+                        )
+                except Exception as _e:
+                    logger.warning("Failed to hot-reload full-text fetch config: %s", _e)
+                # Hot-reload the running engines with the saved config object
+                for _engine, _label in ((_assistant_scheduler, "scheduler"),
+                                        (_assistant_alert, "alert"),
+                                        (_oa_monitor, "OA monitor")):
+                    if _engine is not None:
+                        try:
+                            _engine.update_config(existing)
+                        except Exception as e:
+                            logger.warning("Failed to hot-reload %s config: %s", _label, e)
+                self.send_json({"ok": True})
             else:
                 from src.assistant.config import load_assistant_config, _config_to_dict
                 cfg = load_assistant_config()
                 self.send_json({"ok": True, "config": _config_to_dict(cfg)})
+            return
+
+        # ── API: Assistant — 分组摘要记忆（乐观并发写入）─────────────────
+        # 必须独立于批量 config PUT：后者的 merge_digest_groups 刻意让 memory
+        # 以磁盘为准（防止浏览器里的过期副本把后台刚写的记忆回滚掉），
+        # 所以手工编辑记忆只能走这个带 memory_rev 的 CAS 端点。
+        if self.path == "/api/assistant/digest-group-memory":
+            if self.command != "PUT":
+                self.send_json({"ok": False, "error": "该端点只接受 PUT"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length)) if length > 0 else {}
+            except Exception:
+                body = {}
+            gid = str(body.get("id") or "")
+            if not gid:
+                self.send_json({"ok": False, "error": "缺少分组 id"})
+                return
+            try:
+                expect_rev = int(body.get("memory_rev") or 0)
+            except (TypeError, ValueError):
+                expect_rev = 0
+            from src.assistant.config import cas_digest_group_memory
+            ok, disk_rev, disk_memory = cas_digest_group_memory(
+                gid, str(body.get("memory") or ""), expect_rev)
+            if disk_rev < 0:
+                self.send_json({"ok": False, "error": "分组不存在"})
+                return
+            if not ok:
+                # 期间后台摘要更新过记忆 → 回传磁盘最新值让前端回填
+                self.send_json({
+                    "ok": False,
+                    "error": "记忆已被后台摘要更新，已为你载入最新版本",
+                    "memory": disk_memory,
+                    "memory_rev": disk_rev,
+                })
+                return
+            # 无需热更新 scheduler：_generate_digest 每次运行都从磁盘重读分组
+            self.send_json({"ok": True, "memory_rev": disk_rev})
             return
 
         # ── API: Assistant — notifications list ─────────────────────────
@@ -3235,10 +3288,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 body = json.loads(self.rfile.read(length)) if length > 0 else {}
             except Exception:
                 body = {}
-            chat_id = body.get("chat_id", "")
-            group_name = body.get("group_name", "")
-            if not chat_id and not group_name:
-                self.send_json({"ok": False, "error": "缺少 chat_id 或 group_name"})
+            group_id = str(body.get("group_id") or "")
+            chat_id = str(body.get("chat_id") or "")
+            group_name = str(body.get("group_name") or "")
+            if not group_id and not chat_id and not group_name:
+                self.send_json({"ok": False, "error": "缺少 group_id"})
                 return
 
             # Validate AI is configured
@@ -3260,18 +3314,27 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "调度器未就绪"})
                 return
 
-            # Find matching digest group by chat_id or group_name
+            # 主键是 group_id；chat_id / group_name 是旧前端的兼容路径
             dg = None
             for _dg in scheduler._config.digest_groups:
-                if _dg.chat_id == chat_id or (_dg.group_name and _dg.group_name.lower() == group_name.lower()):
+                if group_id and _dg.id == group_id:
+                    dg = _dg
+                    break
+                if chat_id and any(c.chat_id == chat_id for c in _dg.chats):
+                    dg = _dg
+                    break
+                if group_name and _dg.name and _dg.name.lower() == group_name.lower():
                     dg = _dg
                     break
             if not dg:
-                # Create a temporary DigestGroup with defaults
-                from src.assistant.config import DigestGroup
+                # 临时分组：id 留空，_generate_digest 里的 _load_group_fresh
+                # 对空 id 会原样返回，不会去磁盘找一个不存在的组。
+                from src.assistant.config import DigestChat, DigestGroup
                 dg = DigestGroup(
-                    chat_id=chat_id,
-                    group_name=group_name or chat_id,
+                    id="",
+                    name=group_name or chat_id,
+                    chats=([DigestChat(chat_id=chat_id, name=group_name or chat_id)]
+                           if chat_id else []),
                     lookback_hours=6,
                     enabled=True,
                     schedule=[],
@@ -3284,7 +3347,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 tc = _task_center
                 if tc:
                     _tid = tc.create_task('group_digest', 'manual',
-                                          chat_id or group_name, dg.group_name)
+                                          dg.id or chat_id or group_name, dg.name)
             except Exception:
                 logger.warning("[TASK] create_task failed for group digest manual trigger")
 
@@ -3299,12 +3362,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             tc.update_task(_tid, status='running', progress='正在获取消息')
                             broadcast_event("task_update", {"task_id": _tid, "task_type": "group_digest",
                                                              "status": "running", "progress": "正在获取消息",
-                                                             "group_name": dg.group_name})
+                                                             "group_name": dg.name})
                     except Exception:
                         pass
                     scheduler._generate_digest(dg, task_id=_tid)
                 except Exception as e:
-                    logger.exception("[GROUP-DIGEST] Background digest failed for '%s'", dg.group_name)
+                    logger.exception("[GROUP-DIGEST] Background digest failed for '%s'", dg.name)
                     try:
                         tc = _task_center
                         if tc and _tid:
@@ -3312,7 +3375,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             from src.web.api_handlers import broadcast_event
                             broadcast_event("task_update", {"task_id": _tid, "task_type": "group_digest",
                                                              "status": "failed", "error": str(e),
-                                                             "group_name": dg.group_name})
+                                                             "group_name": dg.name})
                     except Exception:
                         pass
 
@@ -3320,7 +3383,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             t.start()
 
             self.send_json({"ok": True, "status": "started", "task_id": _tid,
-                            "group_name": dg.group_name})
+                            "group_name": dg.name})
             return
 
         # ── API: Image/Video proxy (download + decrypt from CDN) ─────────────────

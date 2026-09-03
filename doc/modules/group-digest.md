@@ -31,19 +31,50 @@ _generate_digest(dg)
 
 ### DigestGroup（`src/assistant/config.py`）
 
+一条 `DigestGroup` = **一个分组**（不再是"一个会话"），与 `OAGroup` 同构。
+
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `chat_id` | str | "" | 群会话 ID |
-| `group_name` | str | "" | 群显示名（选择群时自动填充） |
-| `schedule` | list[str] | [] | HH:MM 触发时间列表（与 cron_expr 互斥，cron 优先） |
+| `id` | str | "" | 分组唯一 id，`dg_001` 式，由 `_next_digest_group_id` 分配 |
+| `name` | str | "" | 分组显示名 |
+| `chats` | list[DigestChat] | [] | 组内会话；**一个会话只能属于一个分组** |
+| `schedule` | list[str] | [] | HH:MM 触发时间列表（遗留字段，与 cron_expr 互斥，cron 优先） |
 | `cron_expr` | str | "" | 5 字段 cron 表达式（多行，每行一个触发时间） |
 | `lookback_hours` | int | 6 | 回溯窗口（3/6/12/24） |
-| `enabled` | bool | True | 主开关 |
-| `profile` | GroupProfile? | None | 群档案（输出风格配置） |
-| `memory` | str | "" | 累积摘要记忆（AI 自动更新，前端可编辑，≤2000 字） |
-| `memory_enabled` | bool | True | 群记忆开关：关闭后摘要不再更新记忆 |
-| `unread_only` | bool | False | 仅摘要未读消息 |
-| `push_target` | str | "" | "ilink"=推到微信，""=仅入队 |
+| `lookback_mode` | str | "manual" | `"auto"`=前端按 cron 间隔智能推算 / `"manual"`=用 lookback_hours |
+| `enabled` | bool | True | 分组主开关 |
+| `profile` | GroupProfile? | None | 群档案（输出风格配置），组级共用 |
+| `memory` | str | "" | **组级单一**累积摘要记忆（≤2000 字） |
+| `memory_rev` | int | 0 | 记忆版本号，后台每次写入 +1，手工编辑走 CAS |
+| `memory_enabled` | bool | True | 记忆开关：关闭后摘要不再更新记忆 |
+| `unread_only` | bool | False | 仅摘要未读消息（按会话各自切尾部） |
+| `push_target` | str | "" | "ilink"=推到微信，""=仅入队（遗留开关，实际推所有已绑定渠道） |
+
+> `lookback_mode` 此前只存在于前端（`AssistantPanel.jsx` 的智能回溯按钮一直在发这个字段），
+> 后端 `DigestGroup` 没有它，所以"智能回溯"选了也从来没被持久化过 —— 现已补上。
+
+### DigestChat（嵌套）
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `chat_id` | str | "" | 会话 ID，必填、全配置内唯一 |
+| `name` | str | "" | 保存时的显示名快照，用作摘要分段标题与推送展示 |
+| `enabled` | bool | True | 会话级开关：分组开着但这个会话本轮不摘要 |
+
+### 旧数据迁移（`_parse_digest_groups`）
+
+旧的"一个会话一条配置"（`chat_id` + `group_name`）在加载时 1:1 迁移成单会话分组：
+
+- 自动分配 `dg_NNN` 形式的 `id`，`name` 取旧 `group_name`
+- `chats` = 单个 `DigestChat(chat_id=旧 chat_id, name=旧 group_name)`
+- `memory` **逐字符原样带过去**（线上 3 条累计 4408 字符，是 LLM 逐次累积、无法重新生成的数据）
+- `memory_rev` 从 0 起
+- `chat_id` 为空的旧组（agent 工具建的）→ `chats=[]` + warning 提示去网页端重新绑定
+- 跨组重复的 `chat_id` 保留第一个
+
+迁移是**纯函数且幂等**，`_config_to_dict → _dict_to_config` 往返为恒等映射；且**绝不抛异常**
+（脏值走 `_safe_int` / `str(x or "")` 回落默认），因为 `load_assistant_config` 的 except 分支
+会用默认配置覆盖整份文件。落盘后不再输出 `chat_id` / `group_name` 顶层键。
 
 ### GroupProfile（嵌套）
 
@@ -102,7 +133,42 @@ _generate_digest(dg)
 
 ## 记忆更新
 
-每次摘要后（`memory_enabled` 为真时）调用 `generate_memory_update_prompt()`，让 AI 在旧记忆基础上写一段 ≤2000 字的新记忆，记录核心要点、近期趋势、群氛围。更新后立即 `save_assistant_config()` 持久化，下次摘要作为"近期记忆"注入 prompt，形成跨次记忆累积。
+每次摘要后（`memory_enabled` 为真时）调用 `generate_memory_update_prompt()`，让 AI 在旧记忆基础上写一段 ≤2000 字的新记忆，记录核心要点、近期趋势、群氛围。下次摘要作为"近期记忆"注入 prompt，形成跨次记忆累积。
+
+**一个分组一份记忆**（组级单一记忆）：打包摘要天然只产出一份结果，对应一份记忆。旧数据迁移时每个旧会话成为一个单会话分组，记忆 1:1 带过去。
+
+### 写入路径：必须走 `update_digest_group_memory(group_id, memory)`
+
+配置是**整份 JSON 全量覆盖写**，而写它的线程有三类：WebUI HTTP 线程池（`max_workers=20`）、scheduler 线程池（`max_workers=3`）、agent 工具所在的 router 消息线程。`save_assistant_config` 本身是 tmp + `os.replace` 原子写，但 **read-modify-write 不是原子的**，且各线程持有的是**不同的内存副本**。
+
+原来的写法 `dg.memory = new[:2000]; save_assistant_config(self._config)` 有两条实测的丢数据路径：
+
+| 方向 | 场景 | 后果 |
+|------|------|------|
+| 丢记忆 | WebUI 保存配置 → `update_config` 把 `self._config` 换成新对象 B；而正在跑的 `_generate_digest(dg)` 里的 `dg` 还属于旧对象 A（提交线程池时就传进去了） | 记忆写在 A 上、落盘的是 B → **这次 LLM 生成的记忆静默消失** |
+| 丢用户改动 | 摘要线程在 WebUI 保存**之前**读的 config、**之后**写盘 | 直接覆盖掉用户刚改的配置 |
+
+修复分三层，缺一不可：
+
+1. **`mutate_config(mutator)`** —— 唯一合法的"改配置"入口：锁内从磁盘**重读** → 应用 mutator → 落盘 → 返回落盘那份对象。写入基底永远是磁盘最新值，从根上消除丢更新（模块级 `_CONFIG_LOCK = threading.RLock()` 只防文件撕裂，防不了丢更新）。
+2. **`update_digest_group_memory(group_id, memory)`** —— 后台写记忆的窄接口，**按 id 定位**而不是按调用方手里的对象引用；顺带把 2000 字上限从 scheduler 收拢到这里（`MEMORY_MAX_CHARS`），并让 `memory_rev += 1`。
+3. **`_run_digest_in_pool(group_id, ...)` + `_load_group_fresh()`** —— 提交线程池时传 id 而不是对象，运行时从磁盘重读。"捕获旧对象"这个根因被**物理消除**，不是靠锁遮住的。分组在排队期间被删除时直接 `fail_task('分组已被删除')`。
+
+WebUI 批量 `PUT /api/assistant/config` 用 `merge_digest_groups()` 合并，其中**已存在分组的 `memory` / `memory_rev` 一律以磁盘为准** —— 浏览器手里的 config 可能是几分钟前 GET 的，不豁免就会把后台刚写的记忆回滚成旧值。
+
+### 手工编辑记忆
+
+走独立端点 `PUT /api/assistant/digest-group-memory`，body `{id, memory, memory_rev}`，由 `cas_digest_group_memory()` 做乐观并发：
+
+- `memory_rev` 匹配 → 写入，返回新的 `memory_rev`
+- 不匹配（期间后台摘要写过）→ 返回 `{ok: false, error: "记忆已被后台摘要更新，已为你载入最新版本", memory, memory_rev}`，前端把磁盘最新值回填 textarea
+- `memory_rev == -1` → 分组不存在
+
+不能走批量 config PUT，因为那条路刻意让 memory 以磁盘为准。
+
+### 解析失败的保护
+
+`load_assistant_config` 解析失败时，**先把坏文件 rename 成 `.corrupt-<时间戳>` 再写默认配置**。原来直接用默认配置覆盖磁盘 —— 一次 `JSONDecodeError` 就永久抹掉整份配置，包括上面那 4408 字符不可再生的记忆。
 
 群记忆可在前端群档案中查看和编辑（关闭 `memory_enabled` 则摘要不再更新记忆，清空即重置）。
 

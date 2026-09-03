@@ -18,7 +18,6 @@ from ..utils.op_logger import op_log, op_log_error
 from src.assistant.config import (
     AssistantConfig,
     load_assistant_config,
-    save_assistant_config,
 )
 from src.assistant.oa_digest import OADigestService
 from src.assistant.oa_groups import OAGroupManager
@@ -5181,12 +5180,14 @@ def handle_scheduled_tasks_overview(params, config: AssistantConfig):
         tasks.append({
             "type": "group_digest",
             "type_label": "群聊摘要",
-            "name": dg.group_name or dg.chat_id,
+            "name": dg.name or dg.id,
             "schedule": schedule_label,
             "lookback": f"{dg.lookback_hours}h",
             "mode": mode_label,
             "push": push_label,
             "enabled": dg.enabled,
+            # 与 OA 条目的 account_count 对称，前端据此显示"N个会话"
+            "chat_count": sum(1 for c in dg.chats if c.enabled and c.chat_id),
         })
 
     # 公众号摘要

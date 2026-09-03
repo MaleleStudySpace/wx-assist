@@ -91,11 +91,37 @@ _execute_and_push(job)
 | 触发对象 | 任意 skill（script / ai） | 群聊摘要 `digest_groups` / 公众号摘要 `oa_groups` |
 | 任务类型 | `cron` | `group_digest` / `oa_digest` |
 | 配置存储 | `data/cron_jobs.json` | `data/assistant_config.json` |
-| 防重触 | 内存（重启即失） | 持久化 + 启动 3h 追赶机制 |
+| 防重触 | 内存（重启即失） | 持久化到 `data/scheduler_state.json` + 启动 3h 追赶机制 |
 | 配置热更新 | 读盘 reload | `update_config()` 支持 |
 | 静默语义 | `[SILENT]` 完全静默（不推送不记录） | 摘要"无新内容"仍写 Outbox（记录但不推送） |
 
 两者都由 bot 启动时创建并 `start()`，并行运行。前端「定时任务」面板管理 CronScheduler 的任务；Dashboard 的 `/api/scheduled-tasks` 把两者配置合并成只读概览。
+
+### DigestScheduler 的 `last_triggered` key 体系
+
+| 任务 | key |
+|------|-----|
+| 群聊摘要分组 | `dg:{DigestGroup.id}` |
+| 公众号摘要分组 | `oa:{OAGroup.id}` |
+
+群摘要的 key 曾经是 `dg.chat_id or dg.group_name`。分组模型改造后换成 `dg:{id}`，
+`_migrate_state_keys()` 在 `DigestScheduler.__init__` 里（`start()` 之前）自动迁移旧 key
+并清理所有非 `dg:` / `oa:` 前缀的残留项。
+
+**为什么必须迁移**：旧 key 全部失配 → `_catch_up_missed_crons` 认为每个组"从没触发过" →
+在 3 小时窗口内把匹配过的 cron 全部补触发一轮（线上 3 个组 = 升级后立刻收到 3 条重复摘要推送）。
+迁移要点：
+
+- 多个旧 key 命中同一组时取 **`max(stamps)`**（最近一次），拿更早的时间戳会误判成"错过了"
+- 迁移后**立即 `_save_state`**，不等 `_tick` 末尾 —— 进程若在追赶之后、`_tick` 之前崩溃，
+  下次启动读到的仍是旧 key，会再补触发一轮
+- 幂等：`dg:{id}` 已存在时直接短路
+
+`update_config()` 里对 state 中**首次出现**的组 `setdefault(f"dg:{id}", now)`：热更新时
+"state 里没有的组"就是用户刚在网页端新建的，不打时间戳会被紧接着的 `_tick` 当成
+"错过了一次"而立刻补触发。这个 `setdefault` **刻意只放在 `update_config`、不放在 `__init__`** ——
+放在 `__init__` 会让 `_catch_up_missed_crons` 永久失效，而它的存在意义正是补上重启期间错过的 cron
+（`update_config` 的调用方只有 agent 工具、OA 分组 CRUD 和 WebUI PUT，启动路径不经过它）。
 
 ## 后端 API
 

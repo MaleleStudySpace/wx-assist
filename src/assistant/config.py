@@ -3,6 +3,8 @@
 import json
 import logging
 import os
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -58,15 +60,31 @@ class GroupProfile:
 
 
 @dataclass
+class DigestChat:
+    """分组内的一个会话（群聊或好友）。"""
+    chat_id: str = ""       # 必填，全配置内唯一 —— 一个会话只能属于一个分组
+    name: str = ""          # 保存时的显示名快照，用于摘要分段标题与推送展示
+    enabled: bool = True    # 会话级开关：分组开着但这个会话本轮不摘要
+
+
+@dataclass
 class DigestGroup:
-    chat_id: str = ""
-    group_name: str = ""
-    schedule: list[str] = field(default_factory=list)  # ["12:00", "18:00"]
-    cron_expr: str = ""                                  # 高阶: cron 表达式 (5字段), 与 schedule 互斥
+    """定时群摘要的一个**分组**：一次调度、组内所有会话打包成一次摘要。
+
+    与 OAGroup 同构（id / name / 成员列表 / cron / push_target）。
+    旧的"一个会话一条配置"数据由 `_parse_digest_groups` 迁移成单会话分组。
+    """
+    id: str = ""                                          # 唯一 id: "dg_001"
+    name: str = ""                                        # 分组显示名
+    chats: list[DigestChat] = field(default_factory=list)  # 组内会话
+    schedule: list[str] = field(default_factory=list)      # ["12:00", "18:00"]
+    cron_expr: str = ""                                    # 高阶: cron 表达式 (5字段), 与 schedule 互斥
     lookback_hours: int = 6
+    lookback_mode: str = "manual"                          # "auto" | "manual"（前端智能回溯）
     enabled: bool = True
     profile: Optional[GroupProfile] = None
-    memory: str = ""
+    memory: str = ""            # 组级单一记忆（打包摘要天然只产出一份）
+    memory_rev: int = 0         # 乐观并发版本号，后台写入时 +1
     memory_enabled: bool = True  # 群记忆开关: 关闭后摘要不再更新记忆
     unread_only: bool = False   # 仅摘要未读消息
     push_target: str = ""       # 推送目标: "ilink" = 推到微信, "" = 不推送
@@ -191,26 +209,28 @@ def _config_to_dict(cfg: AssistantConfig) -> dict:
             "dnd_end": omg.dnd_end,
         })
     for dg in cfg.digest_groups:
-        item = {
-            "chat_id": dg.chat_id,
-            "group_name": dg.group_name,
+        result["digest_groups"].append({
+            "id": dg.id,
+            "name": dg.name,
+            "chats": [
+                {"chat_id": c.chat_id, "name": c.name, "enabled": c.enabled}
+                for c in dg.chats
+            ],
             "schedule": dg.schedule,
             "cron_expr": dg.cron_expr,
             "lookback_hours": dg.lookback_hours,
+            "lookback_mode": dg.lookback_mode,
             "enabled": dg.enabled,
             "memory": dg.memory,
+            "memory_rev": dg.memory_rev,
             "memory_enabled": dg.memory_enabled,
             "unread_only": dg.unread_only,
             "push_target": dg.push_target,
-        }
-        if dg.profile:
-            item["profile"] = {
-                "style": dg.profile.style,
-                "custom_prompt": dg.profile.custom_prompt,
-            }
-        else:
-            item["profile"] = None
-        result["digest_groups"].append(item)
+            "profile": (
+                {"style": dg.profile.style, "custom_prompt": dg.profile.custom_prompt}
+                if dg.profile else None
+            ),
+        })
     for oa in cfg.oa_groups:
         result["oa_groups"].append({
             "id": oa.id,
@@ -304,6 +324,168 @@ def _migrate_oa_schedule_to_cron(schedule: list[str]) -> str:
     return "\n".join(cron_lines)
 
 
+def _safe_int(value, default: int) -> int:
+    """不抛异常的 int() —— 脏配置不能让 _parse_digest_groups 失败。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _next_digest_group_id(used: set) -> str:
+    """生成 dg_001 式唯一 id（写法对齐 OAGroupManager.create_group）。"""
+    n = len(used) + 1
+    gid = f"dg_{n:03d}"
+    while gid in used:
+        n += 1
+        gid = f"dg_{n:03d}"
+    return gid
+
+
+def _parse_digest_groups(raw_list) -> list:
+    """解析 digest_groups，并把旧的"一会话一条"shape 迁移成单会话分组。
+
+    纯函数、幂等、**不抛异常**：`load_assistant_config` 的 except 分支会用默认
+    配置覆盖整份文件，所以这里任何一次抛错都可能永久抹掉不可再生的组记忆
+    （线上 3 条配置累计 4408 字符 LLM 产物）。脏数据只 warning + 回落默认值。
+    """
+    if not isinstance(raw_list, list):
+        return []
+
+    groups = []
+    used_ids: set = set()
+    used_chats: dict = {}          # chat_id -> 组名，用于跨组去重
+
+    for item in raw_list:
+        if not isinstance(item, dict):
+            continue
+
+        gid = str(item.get("id") or "").strip()
+        if not gid:
+            gid = _next_digest_group_id(used_ids)
+        used_ids.add(gid)
+
+        gname = str(item.get("name") or item.get("group_name") or "").strip() or gid
+
+        raw_chats = item.get("chats")
+        if isinstance(raw_chats, list):
+            chats = []
+            for c in raw_chats:
+                if not isinstance(c, dict):
+                    continue
+                cid = str(c.get("chat_id") or "").strip()
+                if not cid:
+                    continue
+                if cid in used_chats:
+                    logger.warning("会话 %s 同时出现在分组「%s」和「%s」，保留前者",
+                                   cid, used_chats[cid], gname)
+                    continue
+                used_chats[cid] = gname
+                chats.append(DigestChat(
+                    chat_id=cid,
+                    name=str(c.get("name") or ""),
+                    enabled=bool(c.get("enabled", True)),
+                ))
+        else:
+            # ── 旧 shape：chat_id / group_name → 单会话分组 ──
+            legacy_cid = str(item.get("chat_id") or "").strip()
+            if legacy_cid and legacy_cid not in used_chats:
+                used_chats[legacy_cid] = gname
+                chats = [DigestChat(chat_id=legacy_cid, name=gname, enabled=True)]
+            elif legacy_cid:
+                logger.warning("迁移：会话 %s 已被分组「%s」占用，「%s」的会话置空",
+                               legacy_cid, used_chats[legacy_cid], gname)
+                chats = []
+            else:
+                # agent 工具建的旧组只有 group_name、chat_id 恒空
+                # （scheduler._resolve_chat_id 是死路，这类组从来没跑出过摘要）
+                logger.warning("摘要分组「%s」没有可用会话（chat_id 为空），"
+                               "请在网页端重新绑定", gname)
+                chats = []
+
+        p_data = item.get("profile")
+        profile = None
+        if isinstance(p_data, dict):
+            # 旧数据可能带 summary/focus/ignore/purpose/description — 静默丢弃，
+            # 只保留 style / custom_prompt。
+            profile = GroupProfile(
+                style=str(p_data.get("style") or ""),
+                custom_prompt=str(p_data.get("custom_prompt") or ""),
+            )
+
+        groups.append(DigestGroup(
+            id=gid,
+            name=gname,
+            chats=chats,
+            schedule=list(item.get("schedule") or []),
+            cron_expr=str(item.get("cron_expr") or ""),
+            lookback_hours=_safe_int(item.get("lookback_hours"), 6),
+            lookback_mode=str(item.get("lookback_mode") or "manual"),
+            enabled=bool(item.get("enabled", True)),
+            profile=profile,
+            memory=str(item.get("memory") or ""),   # 逐字符原样带过去
+            memory_rev=_safe_int(item.get("memory_rev"), 0),
+            memory_enabled=bool(item.get("memory_enabled", True)),
+            unread_only=bool(item.get("unread_only", False)),
+            push_target=str(item.get("push_target") or ""),
+        ))
+    return groups
+
+
+def merge_digest_groups(existing: list, incoming: list) -> list:
+    """WebUI 批量 PUT 的合并规则：按 id upsert，memory / memory_rev 以磁盘为准。
+
+    浏览器手里的 config 可能是几分钟前 GET 的，其间后台摘要已经写过记忆；
+    不豁免就会把新记忆静默回滚成旧值。incoming 里没有的组视为已删除。
+    """
+    by_id = {g.id: g for g in existing if g.id}
+    used_ids = set(by_id)
+    out = []
+    for inc in incoming:
+        if inc.id and inc.id in by_id:
+            disk = by_id[inc.id]
+            inc.memory = disk.memory
+            inc.memory_rev = disk.memory_rev
+        else:
+            if not inc.id:
+                inc.id = _next_digest_group_id(used_ids)
+            inc.memory = inc.memory or ""
+            inc.memory_rev = 0
+        used_ids.add(inc.id)
+        out.append(inc)
+    return out
+
+
+def validate_digest_groups(raw_list) -> str:
+    """校验前端提交的 digest_groups。返回 "" 表示合法，非空为可直接展示的错误。"""
+    if not isinstance(raw_list, list):
+        return "摘要分组格式不正确"
+    seen: dict = {}
+    for item in raw_list:
+        if not isinstance(item, dict):
+            return "摘要分组格式不正确"
+        name = str(item.get("name") or item.get("group_name") or "").strip()
+        if not name:
+            return "摘要分组名称不能为空"
+        raw_chats = item.get("chats")
+        if isinstance(raw_chats, list):
+            ids = [str(c.get("chat_id") or "").strip()
+                   for c in raw_chats if isinstance(c, dict)]
+            ids = [i for i in ids if i]
+        elif str(item.get("chat_id") or "").strip():
+            ids = [str(item["chat_id"]).strip()]
+        else:
+            ids = []
+        if not ids:
+            return f"分组「{name}」至少要选择一个会话"
+        for cid in ids:
+            if cid in seen:
+                return (f"「{seen[cid]}」和「{name}」重复使用了同一个会话，"
+                        f"一个会话只能属于一个分组")
+            seen[cid] = name
+    return ""
+
+
 def _dict_to_config(data: dict) -> AssistantConfig:
     """Deserialize dict to AssistantConfig."""
     # --- fav_export ---
@@ -347,29 +529,7 @@ def _dict_to_config(data: dict) -> AssistantConfig:
             dnd_start=omg_data.get("dnd_start", ""),
             dnd_end=omg_data.get("dnd_end", ""),
         ))
-    for dg_data in data.get("digest_groups", []):
-        profile = None
-        p_data = dg_data.get("profile")
-        if p_data:
-            # 旧数据可能带 summary/focus/ignore/purpose/description — 静默丢弃，
-            # 只保留 style / custom_prompt。
-            profile = GroupProfile(
-                style=p_data.get("style", ""),
-                custom_prompt=p_data.get("custom_prompt", ""),
-            )
-        cfg.digest_groups.append(DigestGroup(
-            chat_id=dg_data.get("chat_id", ""),
-            group_name=dg_data.get("group_name", ""),
-            schedule=dg_data.get("schedule", []),
-            cron_expr=dg_data.get("cron_expr", ""),
-            lookback_hours=dg_data.get("lookback_hours", 6),
-            enabled=dg_data.get("enabled", True),
-            profile=profile,
-            memory=dg_data.get("memory", ""),
-            memory_enabled=dg_data.get("memory_enabled", True),
-            unread_only=dg_data.get("unread_only", False),
-            push_target=dg_data.get("push_target", ""),
-        ))
+    cfg.digest_groups = _parse_digest_groups(data.get("digest_groups") or [])
     for oa_data in data.get("oa_groups", []):
         # Data migration: convert legacy schedule list to cron_expr
         cron_expr = oa_data.get("cron_expr", "")
@@ -411,14 +571,19 @@ def _dict_to_config(data: dict) -> AssistantConfig:
     return cfg
 
 
-def load_assistant_config() -> AssistantConfig:
-    """Load assistant configuration from data/assistant_config.json.
+MEMORY_MAX_CHARS = 2000
 
-    Creates a default config file if none exists.
-    """
+# 配置是整份 JSON 全量覆盖写，而 WebUI HTTP 线程（max_workers=20）、
+# scheduler 线程池（max_workers=3）、agent 工具（router 线程）都会写它，
+# 各自持有不同的内存副本。锁只能防文件撕裂，防不了丢更新 —— 后者要靠
+# mutate_config() 的"锁内重读磁盘再改"。RLock 因为 mutator 内允许再 load。
+_CONFIG_LOCK = threading.RLock()
+
+
+def _load_unlocked() -> AssistantConfig:
     if not CONFIG_PATH.exists():
         cfg = _default_config()
-        save_assistant_config(cfg)
+        _save_unlocked(cfg)
         logger.info("Created default assistant config at %s", CONFIG_PATH)
         return cfg
 
@@ -428,16 +593,103 @@ def load_assistant_config() -> AssistantConfig:
         return _dict_to_config(data)
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
         logger.warning("Failed to parse assistant config, using defaults: %s", e)
+        # 落盘默认配置前先保住残骸：否则一次解析异常就会永久抹掉整份配置，
+        # 包括不可再生的分组摘要记忆（LLM 逐次累积的产物）。
+        try:
+            CONFIG_PATH.replace(CONFIG_PATH.with_suffix(f".corrupt-{int(time.time())}"))
+        except Exception as rename_err:
+            logger.warning("Failed to keep corrupt config aside: %s", rename_err)
         cfg = _default_config()
-        save_assistant_config(cfg)
+        _save_unlocked(cfg)
         return cfg
 
 
-def save_assistant_config(cfg: AssistantConfig) -> None:
-    """Save assistant configuration to data/assistant_config.json."""
+def _save_unlocked(cfg: AssistantConfig) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = CONFIG_PATH.with_suffix(".tmp")
     data = _config_to_dict(cfg)
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, CONFIG_PATH)
     logger.info("Assistant config saved to %s", CONFIG_PATH)
+
+
+def load_assistant_config() -> AssistantConfig:
+    """Load assistant configuration from data/assistant_config.json.
+
+    Creates a default config file if none exists.
+    """
+    with _CONFIG_LOCK:
+        return _load_unlocked()
+
+
+def save_assistant_config(cfg: AssistantConfig) -> None:
+    """Save assistant configuration to data/assistant_config.json.
+
+    整份覆盖写。如果调用方是先 load 再改再 save，请改用 `mutate_config()` ——
+    那样写入基底是磁盘最新值，不会覆盖掉期间别人（尤其是后台摘要写记忆）的改动。
+    """
+    with _CONFIG_LOCK:
+        _save_unlocked(cfg)
+
+
+def mutate_config(mutator) -> AssistantConfig:
+    """唯一合法的"改配置"入口：锁内重读磁盘 → 应用 mutator → 落盘。
+
+    Returns:
+        落盘的那份 AssistantConfig，可直接交给 scheduler.update_config()。
+    """
+    with _CONFIG_LOCK:
+        cfg = _load_unlocked()
+        mutator(cfg)
+        _save_unlocked(cfg)
+        return cfg
+
+
+def update_digest_group_memory(group_id: str, memory: str) -> int:
+    """后台摘要写组记忆的唯一入口。按 id 定位，不依赖调用方手里的对象引用。
+
+    Returns:
+        新的 memory_rev。
+
+    Raises:
+        KeyError: 分组不存在（可能刚被用户删掉）。
+    """
+    text = (memory or "")[:MEMORY_MAX_CHARS]
+    new_rev = {}
+
+    def _mutate(cfg: AssistantConfig) -> None:
+        for g in cfg.digest_groups:
+            if g.id == group_id:
+                g.memory = text
+                g.memory_rev += 1
+                new_rev["rev"] = g.memory_rev
+                return
+        raise KeyError(group_id)
+
+    mutate_config(_mutate)
+    return new_rev["rev"]
+
+
+def cas_digest_group_memory(group_id: str, memory: str,
+                            expect_rev: int) -> tuple[bool, int, str]:
+    """手工编辑记忆的乐观并发写入。
+
+    Returns:
+        (ok, 磁盘最新 memory_rev, 磁盘最新 memory)。
+        ok=False 且 rev>=0 表示期间被后台摘要改过，调用方应把 memory 回填给用户；
+        ok=False 且 rev==-1 表示分组不存在。
+    """
+    text = (memory or "")[:MEMORY_MAX_CHARS]
+    with _CONFIG_LOCK:
+        cfg = _load_unlocked()
+        for g in cfg.digest_groups:
+            if g.id == group_id:
+                if g.memory_rev != expect_rev:
+                    logger.warning("记忆 CAS 冲突：group=%s expect_rev=%s disk_rev=%s",
+                                   group_id, expect_rev, g.memory_rev)
+                    return False, g.memory_rev, g.memory
+                g.memory = text
+                g.memory_rev += 1
+                _save_unlocked(cfg)
+                return True, g.memory_rev, g.memory
+        return False, -1, ""

@@ -6,6 +6,7 @@
 也不能让 connect 超时跟着变长（否则"连不上"要等满整个超时才失败）。
 """
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -136,29 +137,40 @@ class TestSchedulerPassesDigestTimeout(unittest.TestCase):
     def setUp(self):
         import os
         import tempfile
-        from src.assistant.config import AssistantConfig, DigestGroup
+        from src.assistant.config import AssistantConfig, DigestChat, DigestGroup
+        from src.assistant import config as config_mod
         from src.assistant import scheduler as sched_mod
         self.sched_mod = sched_mod
         self.DigestGroup = DigestGroup
+        self.DigestChat = DigestChat
         self.AssistantConfig = AssistantConfig
 
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         # 否则会读写真实的 data/scheduler_state.json
         patch.object(sched_mod, "_STATE_PATH",
-                     os.path.join(tmp.name, "state.json")).start()
-        # 否则会写真实的 llm 日志库和生产 assistant_config.json
+                     os.path.join(self._tmp.name, "state.json")).start()
+        # _generate_digest 会 _load_group_fresh 从磁盘重读分组，
+        # 不隔离就会去读生产的 data/assistant_config.json
+        patch.object(config_mod, "CONFIG_PATH",
+                     Path(self._tmp.name) / "assistant_config.json").start()
+        # 否则会写真实的 llm 日志库
         patch.object(sched_mod, "log_llm_interaction", MagicMock()).start()
-        patch.object(sched_mod, "save_assistant_config", MagicMock()).start()
         # 空绑定 → 走 skipped 分支，不触碰真实推送渠道
         patch("src.im.targets.bound_push_targets", return_value=[]).start()
         self.addCleanup(patch.stopall)
 
     def test_generate_digest_passes_timeout_to_llm(self):
         import time
-        dg = self.DigestGroup(chat_id="1@chatroom", group_name="测试群",
-                              lookback_hours=6, memory_enabled=False)
+        from src.assistant import config as config_mod
+
+        dg = self.DigestGroup(
+            id="dg_001", name="测试群",
+            chats=[self.DigestChat(chat_id="1@chatroom", name="测试群")],
+            lookback_hours=6, memory_enabled=False)
         cfg = self.AssistantConfig(assistant_enabled=True, digest_groups=[dg])
+        # 落盘一份，让 _load_group_fresh 真的能从磁盘重读到这个分组
+        config_mod.save_assistant_config(cfg)
 
         summarizer = MagicMock()
         summarizer._backend_name = "fake"

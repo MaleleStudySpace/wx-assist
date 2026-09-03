@@ -209,8 +209,8 @@ def test_digest_failure_notice_records_skipped_when_no_bound_channel():
 def test_scheduled_overview_push_label_ignores_legacy_target():
     config = AssistantConfig()
     config.digest_groups = [
-        DigestGroup(group_name="自动群", push_target="", enabled=True),
-        DigestGroup(group_name="停用群", push_target="ilink", enabled=False),
+        DigestGroup(id="dg_001", name="自动群", push_target="", enabled=True),
+        DigestGroup(id="dg_002", name="停用群", push_target="ilink", enabled=False),
     ]
     config.oa_groups = [
         OAGroup(name="自动公众号", push_target="qqbot", enabled=True),

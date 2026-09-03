@@ -11,11 +11,13 @@ from datetime import datetime
 
 from src.assistant.config import (
     load_assistant_config,
-    save_assistant_config,
+    mutate_config,
     AlertGroup,
+    DigestChat,
     DigestGroup,
     OAGroup,
     OAMonitorGroup,
+    _next_digest_group_id,
 )
 from src.skill.engine import SkillNotFound
 
@@ -582,13 +584,18 @@ class ToolExecutor:
         if not groups:
             return "当前没有已配置的定时摘要群组。"
 
-        lines = [f"共 {len(groups)} 个定时摘要群组："]
+        lines = [f"共 {len(groups)} 个定时摘要分组："]
         for i, g in enumerate(groups, 1):
-            sched = ', '.join(g.schedule) if g.schedule else '未设置'
+            # cron_expr 优先：线上分组基本都是 cron-only，只看 schedule 会显示"未设置"
+            sched = g.cron_expr.replace("\n", ", ") if g.cron_expr else (
+                ", ".join(g.schedule) if g.schedule else "未设置")
+            names = [c.name or c.chat_id for c in g.chats if c.enabled]
             lines.append(
-                f"{i}. {g.group_name} — 时间: {sched}, "
+                f"{i}. {g.name}（{len(names)} 个会话）— 时间: {sched}, "
                 f"回看: {g.lookback_hours}h"
             )
+            if 0 < len(names) <= 3:
+                lines.append(f"   会话: {', '.join(names)}")
         return "\n".join(lines)
 
     # ── list_alerts ────────────────────────────────────────────────
@@ -808,42 +815,38 @@ class ToolExecutor:
         if not group_name or not keywords:
             return "请提供群聊名称和至少一个关键词"
 
-        try:
-            cfg = load_assistant_config()
-        except Exception as e:
-            logger.warning("add_alert: load config failed: %s", e)
-            return f"读取配置失败: {e}"
+        outcome: dict = {}
 
-        existing = [g for g in cfg.alert_groups
-                    if g.group_name == group_name]
-        if existing:
-            old_count = len(existing[0].keywords)
-            existing[0].keywords = list(set(existing[0].keywords + keywords))
-            new_count = len(existing[0].keywords)
-            added = new_count - old_count
-            try:
-                save_assistant_config(cfg)
-            except Exception as e:
-                return f"保存配置失败: {e}"
-            if self._alert_engine:
-                self._alert_engine.update_config(cfg)
-            return (
-                f"✅ 已更新「{group_name}」的关键词预警\n"
-                f"新增 {added} 个关键词，当前共 {new_count} 个关键词"
-            )
+        def _apply(cfg):
+            existing = [g for g in cfg.alert_groups if g.group_name == group_name]
+            if existing:
+                old_count = len(existing[0].keywords)
+                existing[0].keywords = list(set(existing[0].keywords + keywords))
+                outcome["updated"] = True
+                outcome["added"] = len(existing[0].keywords) - old_count
+                outcome["count"] = len(existing[0].keywords)
+            else:
+                cfg.alert_groups.append(AlertGroup(
+                    group_name=group_name,
+                    keywords=keywords,
+                    enabled=True,
+                ))
+                outcome["updated"] = False
 
-        cfg.alert_groups.append(AlertGroup(
-            group_name=group_name,
-            keywords=keywords,
-            enabled=True,
-        ))
         try:
-            save_assistant_config(cfg)
+            cfg = mutate_config(_apply)
         except Exception as e:
+            logger.warning("add_alert: mutate config failed: %s", e)
             return f"保存配置失败: {e}"
+
         if self._alert_engine:
             self._alert_engine.update_config(cfg)
 
+        if outcome.get("updated"):
+            return (
+                f"✅ 已更新「{group_name}」的关键词预警\n"
+                f"新增 {outcome['added']} 个关键词，当前共 {outcome['count']} 个关键词"
+            )
         return (
             f"✅ 已为「{group_name}」添加关键词预警\n"
             f"关键词: {', '.join(keywords[:10])}"
@@ -859,56 +862,69 @@ class ToolExecutor:
         if not group_name:
             return "请提供群聊名称"
         try:
-            datetime.strptime(schedule, "%H:%M")
+            dt = datetime.strptime(schedule, "%H:%M")
         except ValueError:
             return f"时间格式错误，请使用 HH:MM（如 09:00），收到: {schedule}"
 
-        try:
-            cfg = load_assistant_config()
-        except Exception as e:
-            logger.warning("add_digest: load config failed: %s", e)
-            return f"读取配置失败: {e}"
+        # 必须先解析出 chat_id：分组模型下会话是显式成员，解析不到就明确报错，
+        # 不能像以前那样建一个 chat_id 为空的组（那种组永远跑不出摘要）。
+        chat_id = self._resolve_chat_id(group_name)
+        if not chat_id:
+            return (f"未找到「{group_name}」的会话记录，无法配置定时摘要。"
+                    f"请确认群名与微信里显示的完全一致，"
+                    f"或到网页端「群聊助手 → 定时群摘要」手动选择会话。")
 
-        # Upsert: match by group_name (case-insensitive)
-        existing = [g for g in cfg.digest_groups
-                    if g.group_name.lower() == group_name.lower()]
-        if existing:
-            g = existing[0]
-            g.schedule = [schedule]
-            g.lookback_hours = lookback_hours
-            g.push_target = push_target
-            g.enabled = True
-            save_assistant_config(cfg)
-            if self._scheduler:
-                self._scheduler.update_config(cfg)
-            push_label = "自动推送到已绑定平台"
-            return (
-                f"✅ 已更新「{group_name}」的群聊定时摘要\n"
-                f"📅 时间: 每天 {schedule}\n"
-                f"⏱ 回看: 最近 {lookback_hours} 小时\n"
-                f"📮 推送: {push_label}"
-            )
+        # HH:MM → 5 字段 cron。schedule 和 cron_expr 都要写：
+        # _should_trigger 优先用 cron_expr，只写 schedule 的组永远不被 cron 触发。
+        cron_expr = f"{dt.minute} {dt.hour} * * *"
+        outcome: dict = {}
 
-        cfg.digest_groups.append(DigestGroup(
-            group_name=group_name,
-            schedule=[schedule],
-            lookback_hours=lookback_hours,
-            push_target=push_target,
-            enabled=True,
-        ))
+        def _apply(cfg):
+            owner = None
+            for g in cfg.digest_groups:
+                if any(c.chat_id == chat_id for c in g.chats):
+                    owner = g
+                    break
+            if owner is None:
+                cfg.digest_groups.append(DigestGroup(
+                    id=_next_digest_group_id({g.id for g in cfg.digest_groups}),
+                    name=group_name,
+                    chats=[DigestChat(chat_id=chat_id, name=group_name)],
+                    schedule=[schedule],
+                    cron_expr=cron_expr,
+                    lookback_hours=lookback_hours,
+                    push_target=push_target,
+                    enabled=True,
+                ))
+                outcome.update(created=True, name=group_name)
+                return
+            owner.schedule = [schedule]
+            owner.cron_expr = cron_expr
+            owner.lookback_hours = lookback_hours
+            owner.push_target = push_target
+            owner.enabled = True
+            # 用该会话所属分组的真实名字回复，别让用户以为新建了一个组
+            outcome.update(created=False, name=owner.name,
+                           chats=len(owner.chats))
+
         try:
-            save_assistant_config(cfg)
+            cfg = mutate_config(_apply)
         except Exception as e:
+            logger.warning("add_digest: mutate config failed: %s", e)
             return f"保存配置失败: {e}"
 
         if self._scheduler:
             self._scheduler.update_config(cfg)
-        push_label = "自动推送到已绑定平台"
+
+        name = outcome["name"]
+        head = (f"✅ 已为「{name}」配置群聊定时摘要"
+                if outcome["created"] else
+                f"✅ 已更新「{name}」的群聊定时摘要（该分组共 {outcome['chats']} 个会话）")
         return (
-            f"✅ 已为「{group_name}」配置群聊定时摘要\n"
+            f"{head}\n"
             f"📅 时间: 每天 {schedule}\n"
             f"⏱ 回看: 最近 {lookback_hours} 小时\n"
-            f"📮 推送: {push_label}"
+            f"📮 推送: 自动推送到已绑定平台"
         )
 
     # ── add_oa_scheduled_digest (写操作) ────────────────────────────
@@ -928,53 +944,49 @@ class ToolExecutor:
         # HH:MM → 5-field cron: "09:00" → "0 9 * * *"
         cron_expr = f"{dt.minute} {dt.hour} * * *"
 
-        try:
-            cfg = load_assistant_config()
-        except Exception as e:
-            logger.warning("add_oa_scheduled_digest: load config failed: %s", e)
-            return f"读取配置失败: {e}"
+        outcome: dict = {}
 
-        # Upsert: match by OAGroup.name (case-insensitive)
-        existing = [g for g in cfg.oa_groups
-                    if g.name.lower() == group_name.lower()]
-        if existing:
-            g = existing[0]
-            g.cron_expr = cron_expr
-            g.push_target = push_target
-            g.digest_template = template
-            g.enabled = True
-            save_assistant_config(cfg)
-            if self._scheduler:
-                self._scheduler.update_config(cfg)
-            push_label = "自动推送到已绑定平台"
+        def _apply(cfg):
+            existing = [g for g in cfg.oa_groups
+                        if g.name.lower() == group_name.lower()]
+            if existing:
+                g = existing[0]
+                g.cron_expr = cron_expr
+                g.push_target = push_target
+                g.digest_template = template
+                g.enabled = True
+                outcome["updated"] = True
+                return
+            cfg.oa_groups.append(OAGroup(
+                id=f"grp_{int(time.time())}",
+                name=group_name,
+                accounts=[],
+                cron_expr=cron_expr,
+                digest_template=template,
+                push_target=push_target,
+                lookback_hours=24,
+                lookback_mode="auto",
+                enabled=True,
+            ))
+            outcome["updated"] = False
+
+        try:
+            cfg = mutate_config(_apply)
+        except Exception as e:
+            logger.warning("add_oa_scheduled_digest: mutate config failed: %s", e)
+            return f"保存配置失败: {e}"
+
+        if self._scheduler:
+            self._scheduler.update_config(cfg)
+
+        push_label = "自动推送到已绑定平台"
+        if outcome["updated"]:
             return (
                 f"✅ 已更新「{group_name}」的公众号定时摘要\n"
                 f"📅 时间: 每天 {schedule}\n"
                 f"📮 推送: {push_label}\n"
                 f"📝 模板: {template}"
             )
-
-        # Create new OAGroup
-        new_id = f"grp_{int(time.time())}"
-        cfg.oa_groups.append(OAGroup(
-            id=new_id,
-            name=group_name,
-            accounts=[],
-            cron_expr=cron_expr,
-            digest_template=template,
-            push_target=push_target,
-            lookback_hours=24,
-            lookback_mode="auto",
-            enabled=True,
-        ))
-        try:
-            save_assistant_config(cfg)
-        except Exception as e:
-            return f"保存配置失败: {e}"
-
-        if self._scheduler:
-            self._scheduler.update_config(cfg)
-        push_label = "自动推送到已绑定平台"
         return (
             f"✅ 已为「{group_name}」配置公众号定时摘要\n"
             f"📅 时间: 每天 {schedule}\n"
@@ -1022,34 +1034,29 @@ class ToolExecutor:
         gh_id = rows[0]["gh_id"]
         display_name = rows[0]["display_name"]
 
-        try:
-            cfg = load_assistant_config()
-        except Exception as e:
-            logger.warning("add_oa_monitor: load config failed: %s", e)
-            return f"读取配置失败: {e}"
-
-        # Upsert OAMonitorGroup by name
-        existing = [g for g in cfg.oa_monitor_groups
-                    if g.name.lower() == display_name.lower()]
-        if existing:
-            g = existing[0]
-            g.enabled = True
-            g.push_target = push_target
-            if gh_id not in g.accounts:
-                g.accounts.append(gh_id)
-        else:
-            new_id = f"oam_{int(time.time())}"
-            cfg.oa_monitor_groups.append(OAMonitorGroup(
-                id=new_id,
-                name=display_name,
-                accounts=[gh_id],
-                enabled=True,
-                push_target=push_target,
-            ))
+        def _apply(cfg):
+            # Upsert OAMonitorGroup by name
+            existing = [g for g in cfg.oa_monitor_groups
+                        if g.name.lower() == display_name.lower()]
+            if existing:
+                g = existing[0]
+                g.enabled = True
+                g.push_target = push_target
+                if gh_id not in g.accounts:
+                    g.accounts.append(gh_id)
+            else:
+                cfg.oa_monitor_groups.append(OAMonitorGroup(
+                    id=f"oam_{int(time.time())}",
+                    name=display_name,
+                    accounts=[gh_id],
+                    enabled=True,
+                    push_target=push_target,
+                ))
 
         try:
-            save_assistant_config(cfg)
+            cfg = mutate_config(_apply)
         except Exception as e:
+            logger.warning("add_oa_monitor: mutate config failed: %s", e)
             return f"保存配置失败: {e}"
 
         if self._oa_monitor:
@@ -1090,7 +1097,35 @@ class ToolExecutor:
     # ── Internal helpers ──────────────────────────────────────────────
 
     def _resolve_chat_id(self, group_name: str) -> str | None:
-        """Resolve group display name to chat_id via local messages table."""
+        """Resolve a chat display name to its chat_id.
+
+        先查 `data/group_names.json`（chat_id → 显示名 的权威映射，
+        `/api/nicknames/groups` 用的就是它），再回落到 messages 表启发式。
+        原来只查 `messages.sender_name = 群名`，但 sender_name 是**发言人昵称**
+        而不是群名，基本命中不了 —— 这是 agent 群摘要工具一直失效的原因之一。
+        """
+        if not group_name:
+            return None
+        target = group_name.strip()
+
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            p = _Path("data/group_names.json")
+            if p.exists():
+                mapping = _json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(mapping, dict):
+                    for cid, name in mapping.items():
+                        if isinstance(name, str) and name.strip() == target:
+                            return cid
+                    lowered = target.lower()
+                    for cid, name in mapping.items():
+                        if isinstance(name, str) and name.strip().lower() == lowered:
+                            return cid
+        except Exception as e:
+            logger.warning("resolve_chat_id: group_names.json lookup failed for '%s': %s",
+                           group_name, e)
+
         try:
             row = self._store.conn.execute(
                 "SELECT chat_id FROM messages WHERE sender_name = ? LIMIT 1",

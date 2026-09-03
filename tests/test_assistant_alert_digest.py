@@ -5,7 +5,9 @@ import unittest
 
 from src.assistant.alert import AlertEngine
 from src.assistant.digest import filter_messages, build_digest_prompt, generate_memory_update_prompt
-from src.assistant.config import AssistantConfig, AlertGroup, DigestGroup, GroupProfile
+from src.assistant.config import (
+    AssistantConfig, AlertGroup, DigestChat, DigestGroup, GroupProfile,
+)
 from src.assistant.outbox import Outbox
 
 
@@ -148,7 +150,9 @@ class TestDigestFiltering(unittest.TestCase):
 
     def test_build_digest_prompt(self):
         dg = DigestGroup(
-            group_name="测试群",
+            id="dg_001",
+            name="测试群",
+            chats=[DigestChat(chat_id="x@chatroom", name="测试群")],
             schedule=["12:00"],
             profile=GroupProfile(
                 style="行动项优先",

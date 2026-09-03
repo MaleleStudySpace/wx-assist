@@ -10,7 +10,15 @@ from datetime import datetime
 
 from src.utils.cron import cron_matches
 
-from .config import AssistantConfig, DigestGroup, OAGroup, save_assistant_config
+from .config import (
+    AssistantConfig,
+    DigestChat,
+    DigestGroup,
+    MEMORY_MAX_CHARS,
+    OAGroup,
+    load_assistant_config,
+    update_digest_group_memory,
+)
 from .digest import filter_messages, build_digest_prompt, generate_memory_update_prompt, DIGEST_SYSTEM_PROMPT, STYLE_PRESETS
 from .outbox import Outbox
 from ..utils.llm_logger import log_llm_interaction
@@ -68,6 +76,37 @@ def _save_state(state: dict[str, float]) -> None:
         logger.warning("scheduler state save failed (may re-trigger after restart): %s", e)
 
 
+def _migrate_state_keys(state: dict, cfg: AssistantConfig) -> tuple[dict, bool]:
+    """把防重触状态的 key 从旧的 chat_id / group_name 迁移到 ``dg:{id}``。
+
+    纯函数、幂等。不迁移的后果很直接：升级后旧 key 全部失配，
+    `_catch_up_missed_crons` 会认为每个组"从没触发过"，在 3 小时窗口内把
+    匹配过的 cron 全部补触发一轮（线上 3 个组 = 升级后 3 条重复推送）。
+
+    Returns:
+        (迁移后的 state, 是否发生了改动)
+    """
+    changed = False
+    consumed: set = set()
+    for dg in cfg.digest_groups:
+        new_key = f"dg:{dg.id}"
+        if new_key in state:
+            continue                      # 已迁移过 → 幂等短路
+        legacy_keys = [c.chat_id for c in dg.chats if c.chat_id]
+        if dg.name:
+            legacy_keys.append(dg.name)
+        stamps = [state[k] for k in legacy_keys if k in state]
+        if stamps:
+            # 取最近一次：多个旧 key 命中同一组时，拿更早的时间戳会误判"错过了"
+            state[new_key] = max(stamps)
+            consumed.update(k for k in legacy_keys if k in state)
+            changed = True
+    # 清理：只保留 dg:* / oa:* 两类 key（旧 chatroom key、已删组的 key 全部丢弃）
+    for k in list(state):
+        if k in consumed or not (k.startswith("dg:") or k.startswith("oa:")):
+            del state[k]
+            changed = True
+    return state, changed
 
 
 class DigestScheduler:
@@ -97,6 +136,14 @@ class DigestScheduler:
         # Persisted to scheduler_state.json so the startup catch-up
         # mechanism can detect crons missed during downtime.
         self._last_triggered: dict[str, float] = _load_state()
+        # 迁移必须在 start() → _catch_up_missed_crons() 之前完成，否则旧 key
+        # 全部失配会让每个组都被判定为"从没触发过"而补触发一轮。
+        self._last_triggered, _migrated = _migrate_state_keys(self._last_triggered, config)
+        if _migrated:
+            # 立即落盘，不等 _tick 末尾：进程若在 catch-up 之后崩溃，
+            # 下次启动读到的仍是旧 key，会再补触发一轮。
+            _save_state(self._last_triggered)
+            logger.info("scheduler_state.json 已迁移到 dg:/oa: key 体系")
         self._tick_count = 0  # for periodic cleanup
         # Thread pool for async digest execution (scheduler triggers + manual triggers)
         self._pool = ThreadPoolExecutor(max_workers=3)
@@ -138,7 +185,7 @@ class DigestScheduler:
                 continue
             if not dg.cron_expr:
                 continue
-            last_key = dg.chat_id or dg.group_name
+            last_key = f"dg:{dg.id}"
             last_ts = self._last_triggered.get(last_key, 0)
             if last_ts >= cutoff_ts:
                 continue  # already triggered recently, no catch-up needed
@@ -146,18 +193,18 @@ class DigestScheduler:
             if self._cron_missed_in_window(dg.cron_expr, last_ts, now_ts):
                 self._last_triggered[last_key] = now_ts
                 logger.info("DigestScheduler: catch-up triggering digest for '%s' (missed cron %s)",
-                            dg.group_name, dg.cron_expr)
+                            dg.name, dg.cron_expr)
                 # Create TaskCenter task (same as normal _tick flow)
                 _tid = None
                 try:
                     if self._task_center:
                         _tid = self._task_center.create_task(
                             'group_digest', 'catchup',
-                            dg.chat_id or dg.group_name, dg.group_name)
-                        self._broadcast_task_update(_tid, 'group_digest', 'pending', '准备中', dg.group_name)
+                            dg.id, dg.name)
+                        self._broadcast_task_update(_tid, 'group_digest', 'pending', '准备中', dg.name)
                 except Exception:
-                    logger.warning("[TASK] create failed for '%s'", dg.group_name)
-                self._pool.submit(self._run_digest_in_pool, dg, _tid)
+                    logger.warning("[TASK] create failed for '%s'", dg.name)
+                self._pool.submit(self._run_digest_in_pool, dg.id, _tid)
                 any_caught_up = True
 
         # ── OA digests ──
@@ -233,6 +280,17 @@ class DigestScheduler:
         was_enabled = self._config.assistant_enabled
         self._config = new_config
 
+        # 热更新时"state 里没有的组"= 用户刚在网页端新建的 → 打上 now，
+        # 否则接下来的 _tick / start() 会把它当成"错过了一次"而立刻补触发。
+        # 刻意只在 update_config 里做、不在 __init__ 里做：__init__ 里打 now
+        # 会让 _catch_up_missed_crons 永久失效（它的意义正是补上重启期间错过的 cron）。
+        self._last_triggered, _mig = _migrate_state_keys(self._last_triggered, new_config)
+        _now_ts = time.time()
+        for dg in new_config.digest_groups:
+            self._last_triggered.setdefault(f"dg:{dg.id}", _now_ts)
+        if _mig:
+            _save_state(self._last_triggered)
+
         # If assistant was toggled off, stop the scheduler thread
         if was_enabled and not new_config.assistant_enabled:
             self.stop()
@@ -296,17 +354,17 @@ class DigestScheduler:
                 continue
             if not self._should_trigger(dg, now, now_hm):
                 logger.debug("DigestScheduler: '%s' not triggered at %s (cron=%s schedule=%s)",
-                             dg.group_name, now_hm, dg.cron_expr, dg.schedule)
+                             dg.name, now_hm, dg.cron_expr, dg.schedule)
                 continue
 
             # Prevent double-fire within MIN_TRIGGER_GAP_SEC
-            last_key = dg.chat_id or dg.group_name
+            last_key = f"dg:{dg.id}"
             last = self._last_triggered.get(last_key, 0)
             if now_ts - last < MIN_TRIGGER_GAP_SEC:
                 continue
 
             self._last_triggered[last_key] = now_ts
-            logger.info("DigestScheduler: triggering digest for '%s' at %s", dg.group_name, now_hm)
+            logger.info("DigestScheduler: triggering digest for '%s' at %s", dg.name, now_hm)
 
             # Create TaskCenter task for tracking
             _tid = None
@@ -314,18 +372,18 @@ class DigestScheduler:
                 if self._task_center:
                     _tid = self._task_center.create_task(
                         'group_digest', 'scheduler',
-                        dg.chat_id or dg.group_name, dg.group_name)
-                    self._broadcast_task_update(_tid, 'group_digest', 'pending', '准备中', dg.group_name)
+                        dg.id, dg.name)
+                    self._broadcast_task_update(_tid, 'group_digest', 'pending', '准备中', dg.name)
             except Exception:
-                logger.warning("[TASK] create failed for '%s'", dg.group_name)
+                logger.warning("[TASK] create failed for '%s'", dg.name)
 
             # Submit to thread pool for async execution
             _tid_ref = _tid  # capture for closure
             try:
-                self._pool.submit(self._run_digest_in_pool, dg, _tid_ref)
+                self._pool.submit(self._run_digest_in_pool, dg.id, _tid_ref)
             except RuntimeError as e:
                 logger.error("DigestScheduler: pool submit failed for '%s': %s — "
-                             "OA digest loop WILL still run", dg.group_name, e)
+                             "OA digest loop WILL still run", dg.name, e)
 
         # ── OA digests ──
         for oa in self._config.oa_groups:
@@ -371,18 +429,60 @@ class DigestScheduler:
         # Persist last_triggered timestamps for startup catch-up
         _save_state(self._last_triggered)
 
-    def _run_digest_in_pool(self, dg: DigestGroup, task_id: int = None) -> None:
-        """Wrapper for running group digest in thread pool with error handling."""
+    def _run_digest_in_pool(self, group_id: str, task_id: int = None) -> None:
+        """Wrapper for running group digest in thread pool with error handling.
+
+        入参是 group_id 而不是 DigestGroup 对象：任务可能在队列里等几分钟，
+        期间 WebUI 保存过配置就会让捕获的对象属于已被丢弃的旧副本。按 id 在
+        运行时重读，从物理上消除"拿着过期对象写回磁盘"这条路。
+        """
+        dg = self._load_group_fresh_by_id(group_id)
+        if dg is None:
+            logger.warning("[DIGEST] 分组 %s 已不存在，跳过本次执行", group_id)
+            if task_id:
+                try:
+                    self._task_center.fail_task(task_id, error='分组已被删除')
+                    self._broadcast_task_update(task_id, 'group_digest', 'failed', '',
+                                                group_id, error='分组已被删除')
+                except Exception:
+                    pass
+            return
         try:
             self._generate_digest(dg, task_id=task_id)
         except Exception:
-            logger.exception("Digest generation failed for '%s'", dg.group_name)
+            logger.exception("Digest generation failed for '%s'", dg.name)
             if task_id:
                 try:
                     self._task_center.fail_task(task_id, error='unhandled exception')
-                    self._broadcast_task_update(task_id, 'group_digest', 'failed', '', dg.group_name, error='unhandled exception')
+                    self._broadcast_task_update(task_id, 'group_digest', 'failed', '', dg.name, error='unhandled exception')
                 except Exception:
                     pass
+
+    def _load_group_fresh_by_id(self, group_id: str) -> DigestGroup | None:
+        """从磁盘重读配置并按 id 取分组，拿不到返回 None。"""
+        if not group_id:
+            return None
+        try:
+            for g in load_assistant_config().digest_groups:
+                if g.id == group_id:
+                    return g
+        except Exception as e:
+            logger.warning("[DIGEST] 重读配置失败（group_id=%s）: %s", group_id, e)
+        return None
+
+    def _load_group_fresh(self, dg: DigestGroup) -> DigestGroup:
+        """持久分组返回磁盘上的最新副本；临时分组（id 为空）原样返回。"""
+        if not dg.id:
+            return dg
+        return self._load_group_fresh_by_id(dg.id) or dg
+
+    @staticmethod
+    def _primary_chat(dg: DigestGroup) -> DigestChat | None:
+        """分组内第一个启用的、已绑定 chat_id 的会话。"""
+        for c in dg.chats:
+            if c.enabled and c.chat_id:
+                return c
+        return None
 
     def _run_oa_digest_in_pool(self, oa: OAGroup, task_id: int = None) -> None:
         """Wrapper for running OA digest in thread pool with error handling."""
@@ -408,44 +508,51 @@ class DigestScheduler:
                 return cron_matches(dg.cron_expr, now)
             except Exception:
                 logger.warning("Invalid cron_expr '%s' for '%s', falling back to schedule",
-                               dg.cron_expr, dg.group_name)
+                               dg.cron_expr, dg.name)
         return now_hm in dg.schedule
 
     def _generate_digest(self, dg: DigestGroup, task_id: int = None) -> None:
         """Fetch messages, filter, summarize, update memory, push to outbox."""
         start_ts = time.monotonic()
 
+        # 用磁盘上的最新副本：手动触发路径（server.py）不经过 _run_digest_in_pool，
+        # 而排队中的定时任务也可能在提交后才被 WebUI 改过配置或写过记忆。
+        dg = self._load_group_fresh(dg)
+
         # Task progress: running
         self._tc_update(task_id, status='running', progress='正在获取消息')
 
         # 1. Fetch messages within lookback window
         since_ts = int(time.time()) - dg.lookback_hours * 3600
-        chat_id = dg.chat_id or self._resolve_chat_id(dg.group_name)
-        if not chat_id:
-            logger.warning("[DIGEST] Step 1/7: cannot resolve chat_id for '%s'", dg.group_name)
+        # 分组模型：C4 阶段仍只跑第一个启用的会话，打包编排在下一步落地。
+        chat = self._primary_chat(dg)
+        if not chat:
+            logger.warning("[DIGEST] Step 1/7: 分组 '%s' 没有可用会话", dg.name)
+            self._tc_fail(task_id, error='分组没有可用会话，请在网页端重新绑定')
             return
+        chat_id = chat.chat_id
 
         raw_messages = self._store.get_messages_since(chat_id, since_ts, limit=500)
         logger.info("[DIGEST] Step 1/7: Fetched %d raw messages for '%s' (lookback=%dh)",
-                     len(raw_messages), dg.group_name, dg.lookback_hours)
+                     len(raw_messages), dg.name, dg.lookback_hours)
         if not raw_messages:
-            logger.info("Digest: no messages for '%s' in last %dh", dg.group_name, dg.lookback_hours)
+            logger.info("Digest: no messages for '%s' in last %dh", dg.name, dg.lookback_hours)
             # Task: completed with no content
             self._tc_complete(task_id, result='无新内容')
             # Still record in outbox so user sees the trigger happened
             mode_label = "未读" if dg.unread_only else f"{dg.lookback_hours}h"
             self._outbox.add(
                 notif_type="group_digest",
-                chat_id=chat_id,
-                group_name=dg.group_name,
-                title=f"📋 群聊摘要 · {dg.group_name} ({mode_label})",
+                chat_id=dg.id,
+                group_name=dg.name,
+                title=f"📋 群聊摘要 · {dg.name} ({mode_label})",
                 content=json.dumps({
-                    "group": dg.group_name,
+                    "group": dg.name,
                     "lookback_hours": dg.lookback_hours,
                     "mode": mode_label,
                     "msg_count": 0,
                     "digest": "该时间窗口内无新消息，摘要跳过。",
-                    "display": f"📋 **群聊:** {dg.group_name}\n📊 **消息数量:** 0 | ⏰ **时间范围:** 近 {dg.lookback_hours}h\n\n> 该时间窗口内无新消息，摘要跳过。",
+                    "display": f"📋 **群聊:** {dg.name}\n📊 **消息数量:** 0 | ⏰ **时间范围:** 近 {dg.lookback_hours}h\n\n> 该时间窗口内无新消息，摘要跳过。",
                 }, ensure_ascii=False),
                 priority="normal",
             )
@@ -455,17 +562,17 @@ class DigestScheduler:
         if dg.unread_only:
             unread_count = self._get_unread_count(chat_id)
             if unread_count == 0:
-                logger.info("[DIGEST] Step 2/7: unread_only mode, no unread messages for '%s', skipping", dg.group_name)
+                logger.info("[DIGEST] Step 2/7: unread_only mode, no unread messages for '%s', skipping", dg.name)
                 self._tc_complete(task_id, result='无未读消息')
                 return
             raw_messages = raw_messages[-unread_count:]
             logger.info("[DIGEST] Step 2/7: unread_only filter for '%s' — %d unread messages",
-                         dg.group_name, unread_count)
+                         dg.name, unread_count)
 
         # 3. Filter (系统消息/噪音/媒体占位符 — 不再按 profile.ignore 过滤)
         filtered = filter_messages(raw_messages)
         logger.info("[DIGEST] Step 3/7: Noise filter for '%s' — %d → %d messages",
-                     dg.group_name, len(raw_messages), len(filtered))
+                     dg.name, len(raw_messages), len(filtered))
         if not filtered:
             self._tc_complete(task_id, result='无实质内容')
             return
@@ -473,7 +580,7 @@ class DigestScheduler:
         # 4. Build prompt and summarize
         # Task progress: AI generating
         self._tc_update(task_id, progress='AI 生成摘要中')
-        self._broadcast_task_update(task_id, 'group_digest', 'running', 'AI 生成摘要中', dg.group_name)
+        self._broadcast_task_update(task_id, 'group_digest', 'running', 'AI 生成摘要中', dg.name)
         # Unified architecture: system_prompt + user_prompt
         # - custom_prompt set → COMPLETELY REPLACES default system prompt
         # - style preset → appended to default system prompt
@@ -485,7 +592,7 @@ class DigestScheduler:
         if has_custom:
             system_prompt = dg.profile.custom_prompt
             logger.info("[DIGEST] Using custom system prompt for '%s' (len=%d)",
-                        dg.group_name, len(system_prompt))
+                        dg.name, len(system_prompt))
         else:
             system_prompt = DIGEST_SYSTEM_PROMPT
             # Append style preset if configured
@@ -493,12 +600,12 @@ class DigestScheduler:
             if style and style in STYLE_PRESETS:
                 system_prompt += STYLE_PRESETS[style]
                 logger.info("[DIGEST] Using default system prompt + style '%s' for '%s'",
-                            style, dg.group_name)
+                            style, dg.name)
             else:
-                logger.info("[DIGEST] Using default system prompt for '%s'", dg.group_name)
+                logger.info("[DIGEST] Using default system prompt for '%s'", dg.name)
 
         logger.info("[DIGEST] System prompt len=%d, User prompt len=%d for '%s'",
-                    len(system_prompt), len(prompt), dg.group_name)
+                    len(system_prompt), len(prompt), dg.name)
 
         try:
             llm_start = time.monotonic()
@@ -518,7 +625,7 @@ class DigestScheduler:
                 latency_ms=llm_latency,
                 extra={
                     "group_id": chat_id,
-                    "group_name": dg.group_name,
+                    "group_name": dg.name,
                     "chat_id": chat_id,
                     "msg_count": len(filtered),
                     "unread_only": dg.unread_only,
@@ -527,7 +634,7 @@ class DigestScheduler:
                 },
             )
             logger.info("[DIGEST] Step 4/7: LLM call success for '%s' — result len=%d, preview=%s",
-                         dg.group_name, len(digest_text), digest_text[:100].replace('\n', ' '))
+                         dg.name, len(digest_text), digest_text[:100].replace('\n', ' '))
         except Exception as e:
             llm_latency = (time.monotonic() - llm_start) * 1000 if "llm_start" in locals() else 0
             log_llm_interaction(
@@ -540,13 +647,13 @@ class DigestScheduler:
                 latency_ms=llm_latency,
                 extra={
                     "group_id": chat_id,
-                    "group_name": dg.group_name,
+                    "group_name": dg.name,
                     "chat_id": chat_id,
                     "msg_count": len(filtered),
                     "error": str(e),
                 },
             )
-            logger.error("[DIGEST] Step 4/7: LLM call failed for '%s': %s", dg.group_name, e)
+            logger.error("[DIGEST] Step 4/7: LLM call failed for '%s': %s", dg.name, e)
             digest_text = f"摘要生成失败: {e}"
 
         # 5. Update memory — 仅在群记忆开关开启时更新
@@ -569,15 +676,22 @@ class DigestScheduler:
                     response=new_memory or "",
                     latency_ms=mem_latency,
                     extra={
-                        "group_id": dg.chat_id or dg.group_name,
-                        "group_name": dg.group_name,
+                        "group_id": dg.id,
+                        "group_name": dg.name,
                         "existing_memory_len": len(dg.memory or ""),
                     },
                 )
-                dg.memory = new_memory[:2000] if new_memory else dg.memory
-                save_assistant_config(self._config)
-                logger.info("[DIGEST] Step 5/7: Memory updated for '%s' (%d → %d chars)",
-                             dg.group_name, len(dg.memory or ""), len(new_memory or ""))
+                if new_memory:
+                    # 按 id 写回磁盘，而不是改内存对象再整份覆盖写配置。
+                    # 原写法在 WebUI 期间保存过配置时会静默丢掉这次记忆
+                    # （dg 属于旧 config 对象，落盘的却是新对象）。
+                    rev = update_digest_group_memory(dg.id, new_memory)
+                    dg.memory = new_memory[:MEMORY_MAX_CHARS]
+                    dg.memory_rev = rev
+                    logger.info("[DIGEST] Step 5/7: Memory updated for '%s' (%d chars, rev=%d)",
+                                dg.name, len(dg.memory), rev)
+                else:
+                    logger.warning("[DIGEST] Step 5/7: LLM 返回空记忆，保留原值 for '%s'", dg.name)
             except Exception as e:
                 mem_latency = (time.monotonic() - mem_start) * 1000 if "mem_start" in locals() else 0
                 log_llm_interaction(
@@ -589,35 +703,35 @@ class DigestScheduler:
                     response=f"[Error: {e}]",
                     latency_ms=mem_latency,
                     extra={
-                        "group_id": dg.chat_id or dg.group_name,
-                        "group_name": dg.group_name,
+                        "group_id": dg.id,
+                        "group_name": dg.name,
                         "error": str(e),
                     },
                 )
-                logger.warning("[DIGEST] Step 5/7: Memory update failed for '%s': %s", dg.group_name, e)
+                logger.warning("[DIGEST] Step 5/7: Memory update failed for '%s': %s", dg.name, e)
         else:
-            logger.debug("[DIGEST] Step 5/7: Memory update skipped for '%s' (memory_enabled=false)", dg.group_name)
+            logger.debug("[DIGEST] Step 5/7: Memory update skipped for '%s' (memory_enabled=false)", dg.name)
 
         # 6. Push to outbox
         mode_label = "未读" if dg.unread_only else f"{dg.lookback_hours}h"
-        title = f"📋 群聊摘要 · {dg.group_name} ({mode_label})"
+        title = f"📋 群聊摘要 · {dg.name} ({mode_label})"
         content = json.dumps({
-            "group": dg.group_name,
+            "group": dg.name,
             "lookback_hours": dg.lookback_hours,
             "mode": mode_label,
             "msg_count": len(filtered),
             "digest": digest_text,
-            "display": f"📋 **群聊:** {dg.group_name}\n📊 **消息:** {len(filtered)} 条 | ⏰ **时间:** 近 {dg.lookback_hours}h\n\n{digest_text}",
+            "display": f"📋 **群聊:** {dg.name}\n📊 **消息:** {len(filtered)} 条 | ⏰ **时间:** 近 {dg.lookback_hours}h\n\n{digest_text}",
         }, ensure_ascii=False)
         nid = self._outbox.add(
             notif_type="group_digest",
-            chat_id=chat_id,
-            group_name=dg.group_name,
+            chat_id=dg.id,
+            group_name=dg.name,
             title=title,
             content=content,
             priority="normal",
         )
-        logger.info("[DIGEST] Step 6/7: Outbox entry #%d created for '%s'", nid, dg.group_name)
+        logger.info("[DIGEST] Step 6/7: Outbox entry #%d created for '%s'", nid, dg.name)
         self._tc_update(task_id, outbox_id=nid)
 
         # Task progress: pushing
@@ -647,7 +761,7 @@ class DigestScheduler:
                     outbox_id=nid,
                     task_id=task_id or 0,
                     auto_route=True,
-                    conversation_key=dg.chat_id if hasattr(dg, "chat_id") else dg.group_name,
+                    conversation_key=dg.id,
                 ))
                 push_ok = result.get("success", False)
                 push_status = result.get("status") or ("success" if push_ok else "failed")
@@ -657,11 +771,11 @@ class DigestScheduler:
                     push_status, push_err,
                 )
                 self._tc_push_result(task_id, push_status, push_err)
-                logger.info("Digest IM push %s for '%s'", push_status, dg.group_name)
+                logger.info("Digest IM push %s for '%s'", push_status, dg.name)
                 try:
                     from src.web.api_handlers import broadcast_event
                     broadcast_event("digest_push_result", {
-                        "group_name": dg.group_name,
+                        "group_name": dg.name,
                         "success": push_ok,
                         "error": push_err,
                         "session_expired": "session_expired" in push_err,
@@ -669,7 +783,7 @@ class DigestScheduler:
                 except Exception:
                     pass
         except Exception as e:
-            logger.warning("Digest IM push error for '%s': %s", dg.group_name, e)
+            logger.warning("Digest IM push error for '%s': %s", dg.name, e)
             try:
                 self._outbox.update_push_result(nid, "", "failed", str(e))
             except Exception:
@@ -679,13 +793,13 @@ class DigestScheduler:
         # Task: completed or failed (if LLM error)
         if digest_text.startswith("摘要生成失败"):
             self._tc_fail(task_id, error=digest_text)
-            self._broadcast_task_update(task_id, 'group_digest', 'failed', '', dg.group_name, error=digest_text[:100])
+            self._broadcast_task_update(task_id, 'group_digest', 'failed', '', dg.name, error=digest_text[:100])
         else:
             # result 存完整摘要（不截断）——重推功能需要完整内容
             self._tc_complete(task_id, result=digest_text if filtered else '',
                               msg_count=len(filtered) if filtered else 0)
-            self._broadcast_task_update(task_id, 'group_digest', 'completed', '完成', dg.group_name)
-        logger.info("[DIGEST] Pipeline completed for '%s' in %.0fms", dg.group_name, elapsed)
+            self._broadcast_task_update(task_id, 'group_digest', 'completed', '完成', dg.name)
+        logger.info("[DIGEST] Pipeline completed for '%s' in %.0fms", dg.name, elapsed)
 
     def _get_unread_count(self, chat_id: str) -> int:
         """Get unread count for a chat from WCDB sessions."""
@@ -701,22 +815,6 @@ class DigestScheduler:
         except Exception as e:
             logger.warning("Failed to get unread count for %s: %s", chat_id, e)
         return 0
-
-    def _resolve_chat_id(self, group_name: str) -> str | None:
-        """Resolve group display name to chat_id via the store.
-
-        Returns None if resolution fails (instead of falling back to
-        group_name, which would cause invalid queries).
-        """
-        try:
-            # Try message store's group mapping
-            if hasattr(self._store, "get_chat_id_by_name"):
-                result = self._store.get_chat_id_by_name(group_name)
-                if result:
-                    return result
-        except Exception:
-            pass
-        return None
 
     def _generate_oa_digest(self, oa: OAGroup, task_id: int = None) -> None:
         """Generate OA digest for a scheduled OA group.
