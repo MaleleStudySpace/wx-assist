@@ -192,10 +192,12 @@ class TestSummarizerBaseUrl:
 
         # Stub claude_backend module so lazy import finds FakeClaudeSummarizer
         # without triggering `import anthropic` (which may not be installed).
+        # monkeypatch.setitem restores the real module at teardown — assigning
+        # to sys.modules directly leaks the stub into every later test.
         import types, sys
         cb_mod = types.ModuleType("src.summarize.claude_backend")
         cb_mod.ClaudeSummarizer = FakeClaudeSummarizer
-        sys.modules["src.summarize.claude_backend"] = cb_mod
+        monkeypatch.setitem(sys.modules, "src.summarize.claude_backend", cb_mod)
 
         config = BotConfig(
             ai_provider_type="anthropic",

@@ -15,6 +15,7 @@ from typing import Iterator, Optional
 from openai import OpenAI, RateLimitError, APIConnectionError, APIStatusError
 
 from .base import AbstractSummarizer
+from .errors import LLMContextOverflowError, LLMResponseError
 from .models import SummaryResult
 from .prompts import (
     SYSTEM_PROMPT,
@@ -192,11 +193,54 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             merged.update(extra_body)
         return merged
 
+    # new-api 系中转在上下文超限时用的业务码
+    _OVERFLOW_STATUS_CODES = frozenset({2013})
+    _OVERFLOW_KEYWORDS = ("context window", "context length", "exceeds limit",
+                          "too long", "maximum context")
+
+    def _extract_choice(self, response, *, log_tag: str):
+        """Safely return ``response.choices[0]``.
+
+        Relay gateways answer context overflow with HTTP **200** and
+        ``{"choices": null, "base_resp": {"status_code": 2013, ...}}``, so the
+        SDK raises nothing and ``response.choices[0]`` used to blow up as
+        ``TypeError: 'NoneType' object is not subscriptable`` — which then
+        reached the task center as an undiagnosable error string.
+        """
+        choices = getattr(response, "choices", None)
+        if choices:
+            return choices[0]
+
+        usage = getattr(response, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", None) if usage is not None else None
+
+        base_resp = getattr(response, "base_resp", None)
+        if base_resp is None:
+            extra = getattr(response, "__pydantic_extra__", None) or {}
+            base_resp = extra.get("base_resp")
+        if isinstance(base_resp, dict):
+            code = base_resp.get("status_code")
+            msg = str(base_resp.get("status_msg") or "")
+        else:
+            code = getattr(base_resp, "status_code", None)
+            msg = str(getattr(base_resp, "status_msg", "") or "")
+
+        detail = f"（base_resp={code}: {msg}）" if (code is not None or msg) else ""
+        text = (f"[{log_tag}] LLM 返回空 choices{detail}，model={self.model}，"
+                f"prompt_tokens={prompt_tokens if prompt_tokens is not None else '未知'}")
+        kwargs = dict(prompt_tokens=prompt_tokens, status_code=code,
+                      status_msg=msg, raw=response)
+        lowered = msg.lower()
+        if code in self._OVERFLOW_STATUS_CODES or any(k in lowered for k in self._OVERFLOW_KEYWORDS):
+            raise LLMContextOverflowError(text, **kwargs)
+        raise LLMResponseError(text, **kwargs)
+
     def _call_with_thinking_guard(self, system_prompt: str,
                                   messages: list[dict],
                                   max_tokens: int = 4096,
                                   temperature: Optional[float] = None,
-                                  log_tag: str = "CHAT-API") -> str:
+                                  log_tag: str = "CHAT-API",
+                                  timeout: float | None = None) -> str:
         """调用 chat.completions，并在 thinking 模式耗尽 token 时自动降级重试。
 
         DeepSeek 推理模型（如 DeepSeek-V4-Flash-QC）在 thinking 模式下可能把
@@ -209,8 +253,16 @@ class OpenAICompatSummarizer(AbstractSummarizer):
                  reasoning 跑完并留出 content 空间）
         两层都失败才返回空，调用方自行兜底（如 "..."）。
 
+        Args:
+            timeout: 非 None 时作为 per-request 超时（秒）覆盖 client 级的 60s，
+                三个通道都会带上。摘要这类长输出路径需要比对话更宽的窗口。
+
         Returns:
             content 字符串（可能为空，调用方自行兜底）。
+
+        Raises:
+            LLMContextOverflowError: 输入超出上下文窗口 —— 调用方应降级而不是重试。
+            LLMResponseError: 响应体不可用但原因不是超限。
         """
         api_messages = [{"role": "system", "content": system_prompt}] + messages
         params = self._merge_params(
@@ -219,10 +271,13 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         )
         if temperature is not None:
             params["temperature"] = temperature
+        if timeout:
+            params["timeout"] = self._request_timeout(timeout)
 
         response = self.client.chat.completions.create(**params)
-        content = response.choices[0].message.content
-        reasoning = getattr(response.choices[0].message, 'reasoning_content', None)
+        choice = self._extract_choice(response, log_tag=log_tag)
+        content = choice.message.content
+        reasoning = getattr(choice.message, 'reasoning_content', None)
 
         # Graceful degradation: thinking mode consumed all tokens, leaving content=null.
         if not content and reasoning:
@@ -234,15 +289,24 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             )
             # 通道 1: 禁用 thinking（官方 API 支持；中转 API 可能 400 → 捕获降级）
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    max_tokens=retry_mt,
-                    messages=api_messages,
-                    extra_body={"thinking": {"type": "disabled"}},
-                )
-                retry_content = response.choices[0].message.content
+                retry_kwargs = {
+                    "model": self.model,
+                    "max_tokens": retry_mt,
+                    "messages": api_messages,
+                    "extra_body": {"thinking": {"type": "disabled"}},
+                }
+                if timeout:
+                    retry_kwargs["timeout"] = self._request_timeout(timeout)
+                response = self.client.chat.completions.create(**retry_kwargs)
+                retry_content = self._extract_choice(
+                    response, log_tag=log_tag + "-RETRY1").message.content
                 if retry_content:
                     return retry_content
+            except LLMContextOverflowError:
+                # 输入太大，换通道只会更糟（同样的输入、更大的 max_tokens）。
+                # 必须冒泡，否则调用方拿不到降级信号，而空 content 会变成 "..."
+                # ——一个真值，会让任务被误判为成功。
+                raise
             except Exception as retry_err:
                 logger.warning(
                     "[%s] thinking-disabled retry unsupported (%s); "
@@ -257,10 +321,15 @@ class OpenAICompatSummarizer(AbstractSummarizer):
                 }
                 if temperature is not None:
                     retry_params["temperature"] = temperature
+                if timeout:
+                    retry_params["timeout"] = self._request_timeout(timeout)
                 response = self.client.chat.completions.create(**retry_params)
-                retry_content = response.choices[0].message.content
+                retry_content = self._extract_choice(
+                    response, log_tag=log_tag + "-RETRY2").message.content
                 if retry_content:
                     return retry_content
+            except LLMContextOverflowError:
+                raise
             except Exception as retry_err:
                 logger.warning("[%s] max_tokens bump retry also failed: %s", log_tag, retry_err)
 
@@ -277,10 +346,12 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         return content
 
     def _call_digest_api(self, system_prompt: str,
-                         messages: list[dict]) -> str:
+                         messages: list[dict],
+                         timeout: float | None = None) -> str:
         """Digest-specific: higher max_tokens than chat for custom_prompt path."""
         content = self._call_with_thinking_guard(
-            system_prompt, messages, max_tokens=4096, log_tag="DIGEST-API")
+            system_prompt, messages, max_tokens=4096, log_tag="DIGEST-API",
+            timeout=timeout)
         if not content:
             logger.warning("[DIGEST-API] LLM returned empty content (model=%s)", self.model)
             return "..."
@@ -289,11 +360,12 @@ class OpenAICompatSummarizer(AbstractSummarizer):
     def _call_long_api(self, system_prompt: str,
                        messages: list[dict],
                        max_tokens: int = 2000,
-                       temperature: float = 0.3) -> str:
+                       temperature: float = 0.3,
+                       timeout: float | None = None) -> str:
         """Long-form API call with configurable params for OA digest etc."""
         content = self._call_with_thinking_guard(
             system_prompt, messages, max_tokens=max_tokens,
-            temperature=temperature, log_tag="LONG-API")
+            temperature=temperature, log_tag="LONG-API", timeout=timeout)
         if not content:
             logger.warning("[LONG-API] LLM returned empty content (model=%s)", self.model)
             return "..."
@@ -358,7 +430,7 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             logger.info("[LLM] agent_chat FAILED after %.1fms", latency)
             raise
 
-        msg = response.choices[0].message
+        msg = self._extract_choice(response, log_tag="AGENT-CHAT").message
         tool_calls = (
             [{
                 "id": tc.id,
@@ -538,7 +610,7 @@ class OpenAICompatSummarizer(AbstractSummarizer):
                     {"role": "user", "content": "请输出更新后的完整记忆日记。"},
                 ],
             )
-            text = response.choices[0].message.content or ""
+            text = self._extract_choice(response, log_tag="MEMORY").message.content or ""
             # Enforce 2000-char soft cap
             if len(text) > 2000:
                 text = text[:2000]

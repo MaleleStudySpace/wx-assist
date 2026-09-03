@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -18,6 +19,13 @@ logger = logging.getLogger(__name__)
 
 CHECK_INTERVAL_SEC = 60     # Check schedule every 60 seconds
 MIN_TRIGGER_GAP_SEC = 120   # Prevent re-trigger within 2 minutes
+
+# Digest latency is driven by OUTPUT length, not input size: measured ~18s
+# fixed overhead plus ~14ms per output char, so a packed multi-chat digest
+# writing 1500 chars already needs ~40s against the client-level 60s httpx
+# timeout.  Widen it for this path only, via a per-request timeout — chat and
+# memory-update calls keep the 60s default.
+DIGEST_LLM_TIMEOUT_SEC = float(os.getenv("DIGEST_LLM_TIMEOUT_SEC", "180"))
 
 # ── Startup catch-up ──────────────────────────────────────────────────
 # When the scheduler starts (after bot restart), check if any cron was
@@ -497,6 +505,7 @@ class DigestScheduler:
             digest_text = self._summarizer._call_digest_api(
                 system_prompt,
                 [{"role": "user", "content": prompt}],
+                timeout=DIGEST_LLM_TIMEOUT_SEC,
             ) or "摘要生成失败"
             llm_latency = (time.monotonic() - llm_start) * 1000
             log_llm_interaction(

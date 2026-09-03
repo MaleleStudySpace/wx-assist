@@ -11,6 +11,7 @@ from typing import Iterator
 import anthropic
 
 from .base import AbstractSummarizer
+from .errors import LLMResponseError
 from .models import SummaryResult
 from .prompts import (
     SYSTEM_PROMPT,
@@ -61,6 +62,23 @@ class ClaudeSummarizer(AbstractSummarizer):
 
     # ── Conversational chat API call (called by base class) ─────
 
+    def _extract_text(self, response, *, log_tag: str) -> str:
+        """Safely pull text out of an Anthropic response.
+
+        ``response.content`` can be an empty list, which made ``content[0]``
+        raise a bare IndexError carrying no diagnostic context.
+        """
+        blocks = getattr(response, "content", None)
+        if not blocks:
+            usage = getattr(response, "usage", None)
+            input_tokens = getattr(usage, "input_tokens", None) if usage is not None else None
+            raise LLMResponseError(
+                f"[{log_tag}] LLM 返回空 content，model={self.model}，"
+                f"input_tokens={input_tokens if input_tokens is not None else '未知'}",
+                prompt_tokens=input_tokens, raw=response,
+            )
+        return blocks[0].text or ""
+
     def _call_chat_api(self, system_prompt: str,
                         messages: list[dict]) -> str:
         """Claude-specific: uses client.messages.create() with system param."""
@@ -70,32 +88,42 @@ class ClaudeSummarizer(AbstractSummarizer):
             system=system_prompt,
             messages=messages,
         )
-        return response.content[0].text or "..."
+        return self._extract_text(response, log_tag="CHAT-API") or "..."
 
     def _call_digest_api(self, system_prompt: str,
-                         messages: list[dict]) -> str:
+                         messages: list[dict],
+                         timeout: float | None = None) -> str:
         """Digest-specific: higher max_tokens than chat for custom_prompt path."""
+        kwargs = {}
+        if timeout:
+            kwargs["timeout"] = self._request_timeout(timeout)
         response = self.client.messages.create(
             model=self.model,
             max_tokens=4096,
             system=system_prompt,
             messages=messages,
+            **kwargs,
         )
-        return response.content[0].text or "..."
+        return self._extract_text(response, log_tag="DIGEST-API") or "..."
 
     def _call_long_api(self, system_prompt: str,
                        messages: list[dict],
                        max_tokens: int = 2000,
-                       temperature: float = 0.3) -> str:
+                       temperature: float = 0.3,
+                       timeout: float | None = None) -> str:
         """Long-form API call with configurable params for OA digest etc."""
+        kwargs = {}
+        if timeout:
+            kwargs["timeout"] = self._request_timeout(timeout)
         response = self.client.messages.create(
             model=self.model,
             max_tokens=max_tokens,
             temperature=temperature,
             system=system_prompt,
             messages=messages,
+            **kwargs,
         )
-        return response.content[0].text or "..."
+        return self._extract_text(response, log_tag="LONG-API") or "..."
 
     def _call_chat_api_stream(self, system_prompt: str,
                                messages: list[dict],

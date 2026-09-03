@@ -167,6 +167,39 @@ SSE event stream:
 1. `[LLM] <call_type> | <backend>/<model> | <latency> | OK/FAILED | resp: <前80字>`
 2. `[LLM-DETAIL] JSON 详情`：完整 prompt、响应、延迟、token 数（API key 已脱敏）
 
+## LLM 异常体系（`src/summarize/errors.py`）
+
+中转 API（new-api 系）在**上下文超限**时返回 HTTP **200** + `{"choices": null, "base_resp": {"status_code": 2013, "status_msg": "invalid params, context window exceeds limit"}}`。因为状态码是 200，OpenAI SDK 不抛任何 HTTP 错误，`response.choices[0]` 直接炸成 `TypeError: 'NoneType' object is not subscriptable`，最终变成"摘要生成失败: 'NoneType' object is not subscriptable"推到任务中心 —— 用户完全看不出是超限。
+
+```
+LLMError(RuntimeError)
+└── LLMResponseError            响应体不可用（choices 为 null / content 为空）
+    └── LLMContextOverflowError 输入超出上下文窗口 → 调用方应降级，不是重试
+```
+
+- **基类选 `RuntimeError` 而非 `Exception`**：既有的 `except RuntimeError` 兜底（`consolidate_memory`、`AbstractSummarizer.chat`）继续生效。
+- `LLMResponseError` 带 `prompt_tokens` / `status_code` / `status_msg` / `raw`。**超限时 `usage.prompt_tokens` 仍然返回**，是判断"超了多少"的唯一依据，必须带进错误串。
+- `OpenAICompatSummarizer._extract_choice()` 与 `ClaudeSummarizer._extract_text()` 是统一取值入口，替代裸的 `response.choices[0]` / `response.content[0]`。
+- **超限不能被 thinking guard 的宽泛 `except Exception` 吞掉**：两个降级通道都在 `except Exception` 之前单独 `except LLMContextOverflowError: raise`。换通道不可能改善超限（输入相同、`max_tokens` 反而更大），而吞掉它会退化成空 content → `"..."`（真值）→ 任务被误判为成功、正文是一串点。
+- `retry_exceptions` 不含 `LLMError`，超限不会被 backoff 无意义重试 3 次。
+
+真实 provider 实测（MiniMax-M2.7-highspeed）：738,882 字符 → 4.1s 抛 `LLMContextOverflowError`，`prompt_tokens=279826`、`status_code=2013`，错误串为 `[DIGEST-API] LLM 返回空 choices（base_resp=2013: invalid params, context window exceeds limit），model=...，prompt_tokens=279826`。
+
+## Per-request 超时
+
+client 级 httpx 超时是 `Timeout(60.0, connect=10.0)`（构造时写死，AI 对话路径依赖它快速失败）。但摘要延迟由**输出长度**决定而非输入长度 —— 实测固定开销约 18s，之后约 14ms/字；6 个会话打包、输出 1542 字时耗时 40.6s，已逼近 60s。
+
+因此摘要路径用 openai SDK 支持的 per-request `timeout=` 单独放宽，**不改全局 client**：
+
+| 接口 | timeout 形参 | 说明 |
+|------|-------------|------|
+| `_call_digest_api` | ✅ | 群摘要；scheduler 传 `DIGEST_LLM_TIMEOUT_SEC`（env，默认 180） |
+| `_call_long_api` | ✅ | 公众号摘要等长文本 |
+| `_call_chat_api` | ❌ | 对话与记忆更新，输出短，保持 client 级 60s |
+| `_call_chat_api_stream` | ❌ | 流式的 read timeout 是相邻 chunk 间隔，语义本就不同 |
+
+`AbstractSummarizer._request_timeout(seconds)` 返回 `httpx.Timeout(seconds, connect=10.0)` —— **必须传 `httpx.Timeout` 实例而不是 float**，否则 connect 超时也会跟着变成 180s，"连不上"要等满 3 分钟才失败。thinking guard 的三个通道（主 / thinking-disabled / max_tokens 加倍）都会带上该 timeout。
+
 ## 关键设计决策
 
 ### 1. Map-Reduce 摘要

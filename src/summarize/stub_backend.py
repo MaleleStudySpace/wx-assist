@@ -45,7 +45,7 @@ class StubSummarizer(AbstractSummarizer):
     def _call_chat_api(self, system_prompt, messages):
         raise RuntimeError("AI 未配置，无法调用聊天接口")
 
-    def _call_digest_api(self, system_prompt, messages):
+    def _call_digest_api(self, system_prompt, messages, timeout=None):
         raise RuntimeError("AI 未配置，无法调用摘要接口")
 
     def _call_long_api(self, system_prompt, messages, **kwargs):

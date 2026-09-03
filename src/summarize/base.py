@@ -173,13 +173,28 @@ class AbstractSummarizer(ABC):
         """
         ...
 
+    @staticmethod
+    def _request_timeout(seconds: float):
+        """Per-request timeout widening read/write/pool but keeping connect at 10s.
+
+        Passing a bare float to the SDK would also stretch the connect timeout,
+        making "host unreachable" take the full duration to fail.
+        """
+        import httpx
+        return httpx.Timeout(float(seconds), connect=10.0)
+
     @abstractmethod
     def _call_digest_api(self, system_prompt: str,
-                         messages: list[dict]) -> str:
+                         messages: list[dict],
+                         timeout: float | None = None) -> str:
         """Execute digest API call with higher max_tokens than chat.
 
         Used for custom_prompt digest generation where output needs
         to be much longer than a brief chat reply.
+
+        Args:
+            timeout: 非 None 时作为 per-request 超时（秒）覆盖 client 级默认值。
+                摘要输出长、耗时由输出长度决定，需要比对话更宽的窗口。
         """
         ...
 
@@ -187,7 +202,8 @@ class AbstractSummarizer(ABC):
     def _call_long_api(self, system_prompt: str,
                        messages: list[dict],
                        max_tokens: int = 2000,
-                       temperature: float = 0.3) -> str:
+                       temperature: float = 0.3,
+                       timeout: float | None = None) -> str:
         """Execute a long-form API call with configurable params.
 
         Used for OA digest and other non-chat, non-summary LLM calls
