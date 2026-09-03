@@ -17,7 +17,7 @@ AI_PROVIDER_BASE_URL + AI_PROVIDER_API_KEY 都设置
     │   Step 3: POST /v1/messages → Anthropic 兼容
     │
     ├─ 检测为 Anthropic → ClaudeSummarizer
-    └─ 检测为 OpenAI 兼容 → DeepSeekSummarizer
+    └─ 检测为 OpenAI 兼容 → OpenAICompatSummarizer
 ```
 
 ### 优先级 2：Legacy 路径
@@ -36,18 +36,16 @@ create_summarizer(config) → 工厂函数
     ▼
 AbstractSummarizer 子类
     │
-    ├─ summarize(messages) → SummaryResult（结构化摘要）
-    │   ├─ direct：一次调用，max_tokens=8192
-    │   ├─ map-reduce：chunk × N → merge
-    │   └─ multi-level：chunk → batch merge → final merge
+    ├─ chat(message, context_messages, ...) → str（通用文本生成入口）
     │
     ├─ agent_chat(system, messages, tools) → (content, tool_calls, reasoning)
     │   Agent 的 ReAct 循环调用；OpenAI 兼容实现提取 reasoning_content
     │   （thinking 模式产物，必须保留在对话历史中，否则上游 API 报错）
     │
-    ├─ _call_chat_api(system, messages) → str（单次对话）
+    ├─ _call_chat_api(system, messages) → str（单次对话，client 级 60s 超时）
     ├─ _call_chat_api_stream(system, messages, extra_body) → Iterator[str]（SSE）
-    ├─ _call_long_api(system, messages, max_tokens, temperature) → str（长文本）
+    ├─ _call_digest_api(system, messages, timeout) → str（群摘要，可放宽超时）
+    ├─ _call_long_api(system, messages, max_tokens, temperature, timeout) → str
     │   供 OA 摘要等使用；thinking 模式吃光 token 时自动禁用并重试
     │
     └─ consolidate_memory() → str（群记忆压缩）
@@ -57,52 +55,15 @@ AbstractSummarizer 子类
 
 | 项目 | 值 |
 |------|-----|
+| 类名 | `OpenAICompatSummarizer`（`src/summarize/deepseek_backend.py`） |
 | 默认模型 | `deepseek-v4-pro`（旗舰，1M 上下文） |
 | 快速模型 | `deepseek-v4-flash`（快/便宜，1M 上下文） |
-| token 预算 | 900K（1M 上下文留安全边际） |
-| 结构化输出 | 工具调用模拟（`STORE_SUMMARY_TOOL` + `tool_choice="auto"`） |
+| `token_budget` | 900K —— **注意见下方说明，这个值对当前 provider 偏大** |
 
 - **extra_body 语义**：provider 附加参数（如 `{"thinking": {"type": "disabled"}}`）必须经 OpenAI SDK 的 `extra_body` 参数传递，不能平铺进顶层 kwargs，否则报 `unexpected keyword argument`。调用方可通过 `_call_chat_api_stream(..., extra_body=...)` 按需传入。
-- **thinking 模式**：DeepSeek 开启思考时响应带 `reasoning_content`；若思考吃光 max_tokens 导致 content 为空，`_call_long_api` 自动禁用 thinking 并加倍 max_tokens 重试。
-- **空响应降级**：各调用方法在 content 为空时返回 `"..."` 并记 warning，不抛异常中断链路。
-
-## 摘要 Pipeline
-
-### 三级策略
-
-```
-消息数 → token 估算 → 策略选择
-
-0 条 → 空占位
-
-≤ token_budget → 直接摘要（_summarize_direct）
-  一处调用，输出完整 SummaryResult
-
-chunk_count ≤ 5 → Map-Reduce
-  Map → _summarize_chunk() × N（提取要点）
-  Reduce → _merge_chunk_summaries()（合成最终摘要）
-
-chunk_count > 5 → 多级 Map-Reduce
-  Level 1: chunk → 纯文本摘要
-  Level 2: batch merge（每 5 个合并一次）
-  Level 3: final merge（所有 batch 合成最终摘要）
-```
-
-### 结构化输出（SummaryResult）
-
-```python
-class SummaryResult(BaseModel):
-    summary_text: str        # 完整摘要文本
-    topics: list[str]        # 话题列表
-    participants: list[ParticipantContribution]
-
-class ParticipantContribution(BaseModel):
-    name: str                # 参与者昵称
-    contributions: str       # 该参与者的贡献描述
-```
-
-- Claude 后端：原生 Pydantic 解析（`client.messages.parse()`）
-- DeepSeek 后端：工具调用模拟（`tool_choice="auto"`）
+- **thinking 模式**：DeepSeek 开启思考时响应带 `reasoning_content`；若思考吃光 max_tokens 导致 content 为空，`_call_with_thinking_guard` 走双通道降级（禁用 thinking / 加倍 max_tokens）重试。
+- **`token_budget = 900_000` 的现状**：它假设 1M 上下文模型，但实测在用的 `MiniMax-M2.7-highspeed`（中转）约 **25 万真实 token** 就拒绝。唯一存活的消费者是 `src/web/ai_chat.py` 的上下文压缩阈值（0.7× / 0.9×），所以在该 provider 上压缩实际永不触发。刻意未改 —— 调小会变更 ai_chat 行为，超出删除死代码的范围。
+- **空响应**：`content` 为空时各调用方法仍返回 `"..."` 并记 warning；但 `choices` 为 null（中转 API 的错误响应体）现在会抛 `LLMResponseError` / `LLMContextOverflowError`，详见上文「LLM 异常体系」。
 
 ## 流式 AI 对话（SSE）
 
@@ -202,9 +163,13 @@ client 级 httpx 超时是 `Timeout(60.0, connect=10.0)`（构造时写死，AI 
 
 ## 关键设计决策
 
-### 1. Map-Reduce 摘要
+### 1. 摘要 map-reduce 链已删除
 
-群聊单次可产生数千条消息。直接塞入一次调用超出 token 限制且输出质量下降（lost-in-the-middle）。chunk-and-merge 让每个分段获得完整注意力再合成。
+`AbstractSummarizer.summarize()` 及其整条链（`_summarize_direct` / `_summarize_chunk` / `_merge_chunk_summaries` / `_split_into_chunks` / `_multi_level_map_reduce` / `format_summary_for_reply`）、`models.py` 的 `SummaryResult`、`prompts.py` 的三个 summary prompt 与 `STORE_SUMMARY_TOOL` 都已删除 —— `summarize()` 全仓零调用方（@提及摘要功能已弃用并清空），留着只会让人误以为定时群摘要走了分块。
+
+真正在用的分块降级实现是 `src/assistant/oa_digest.py`（公众号摘要按文章分块、`ThreadPoolExecutor` 并行 map、LLM reduce）；群摘要的打包/降级策略见 `doc/modules/group-digest.md`。
+
+`token_budget` / `chunk_size` 两个属性被保留，因为它们另有存活消费者（见上文「DeepSeek 实现细节」）。
 
 ### 2. 分离后端实现
 
@@ -224,11 +189,11 @@ Claude 和 DeepSeek 的 API 形状根本不同（原生 system 参数 / Pydantic
 |------|------|
 | AbstractSummarizer | `src/summarize/base.py` |
 | ClaudeSummarizer | `src/summarize/claude_backend.py` |
-| DeepSeekSummarizer（通用 OpenAI 兼容） | `src/summarize/deepseek_backend.py` |
+| OpenAICompatSummarizer（通用 OpenAI 兼容） | `src/summarize/deepseek_backend.py` |
 | Provider 检测 | `src/summarize/provider_detector.py` |
 | 工厂函数 | `src/summarize/__init__.py` |
 | Prompt 模板 | `src/summarize/prompts.py` + `src/assistant/digest.py` |
-| Models | `src/summarize/models.py` |
+| LLM 异常 | `src/summarize/errors.py` |
 | LLM 日志 | `src/utils/llm_logger.py` |
 | AI 对话后端 | `src/web/ai_chat.py` |
 | 前端 AIChatPanel | `ui/src/components/AIChatPanel.jsx` |

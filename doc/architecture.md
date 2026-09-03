@@ -72,11 +72,11 @@ src/
 │
 ├── summarize/                # AI 后端
 │   ├── __init__.py           # create_summarizer() 工厂 + provider 检测
-│   ├── base.py               # AbstractSummarizer（摘要 / 对话 / agent_chat / 记忆压缩）
+│   ├── base.py               # AbstractSummarizer（对话 / agent_chat / 记忆压缩 / 重试与超时）
 │   ├── claude_backend.py     # Anthropic 实现
 │   ├── deepseek_backend.py   # OpenAI 兼容实现（支持任意兼容端点）
 │   ├── provider_detector.py  # 自动检测 API 类型
-│   ├── models.py             # SummaryResult Pydantic model
+│   ├── errors.py             # LLMError / LLMResponseError / LLMContextOverflowError
 │   └── prompts.py            # prompt 模板
 │
 ├── web/                      # Web UI 服务

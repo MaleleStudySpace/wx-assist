@@ -12,16 +12,7 @@ import anthropic
 
 from .base import AbstractSummarizer
 from .errors import LLMResponseError
-from .models import SummaryResult
-from .prompts import (
-    SYSTEM_PROMPT,
-    CHUNK_SYSTEM_PROMPT,
-    MERGE_SYSTEM_PROMPT,
-    MEMORY_CONSOLE_PROMPT,
-    build_summary_prompt,
-    build_chunk_summary_prompt,
-    build_merge_prompt,
-)
+from .prompts import MEMORY_CONSOLE_PROMPT
 from ..utils.llm_logger import log_llm_interaction
 
 logger = logging.getLogger(__name__)
@@ -228,108 +219,6 @@ class ClaudeSummarizer(AbstractSummarizer):
         )
 
         return content or "", tool_calls or None, ""
-
-    # ── Direct summarization ──────────────────────────────────────
-
-    def _summarize_direct(self, messages: list[dict],
-                           requester_name: str) -> SummaryResult:
-        """All messages in one call — uses Pydantic parse for structured output."""
-        user_prompt = build_summary_prompt(messages, requester_name)
-
-        def call():
-            response = self.client.messages.parse(
-                model=self.model,
-                max_tokens=8192,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
-                output_format=SummaryResult,
-            )
-            return response.parsed_output
-
-        start = time.monotonic()
-        try:
-            result = self._retry_with_backoff(call, "direct summarization")
-            latency = (time.monotonic() - start) * 1000
-            log_llm_interaction(
-                backend="claude", call_type="summarize_direct",
-                model=self.model, system_prompt=SYSTEM_PROMPT,
-                user_prompt=user_prompt, response=str(result),
-                latency_ms=latency,
-                extra={"requester": requester_name, "msg_count": len(messages)},
-            )
-            return result
-        except RuntimeError:
-            latency = (time.monotonic() - start) * 1000
-            logger.info("[LLM] summarize_direct FAILED after %.1fms", latency)
-            raise
-
-    # ── Map-Reduce ────────────────────────────────────────────────
-
-    def _summarize_chunk(self, chunk: list[dict], chunk_num: int,
-                          total: int, requester_name: str) -> str:
-        """Extract key facts from a single chunk (plain text output)."""
-        user_prompt = build_chunk_summary_prompt(
-            chunk, chunk_num, total, requester_name
-        )
-
-        def call():
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=1024,
-                system=CHUNK_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-            return response.content[0].text
-
-        start = time.monotonic()
-        try:
-            result = self._retry_with_backoff(call, f"chunk {chunk_num}/{total}")
-            latency = (time.monotonic() - start) * 1000
-            log_llm_interaction(
-                backend="claude", call_type="summarize_chunk",
-                model=self.model, system_prompt=CHUNK_SYSTEM_PROMPT,
-                user_prompt=user_prompt, response=result,
-                latency_ms=latency,
-                extra={"chunk": f"{chunk_num}/{total}", "requester": requester_name},
-            )
-            return result
-        except RuntimeError:
-            latency = (time.monotonic() - start) * 1000
-            logger.info("[LLM] summarize_chunk %d/%d FAILED after %.1fms",
-                        chunk_num, total, latency)
-            raise
-
-    def _merge_chunk_summaries(self, chunk_summaries: list[str],
-                                requester_name: str) -> SummaryResult:
-        """Merge chunk summaries into final structured result."""
-        user_prompt = build_merge_prompt(chunk_summaries, requester_name)
-
-        def call():
-            response = self.client.messages.parse(
-                model=self.model,
-                max_tokens=8192,
-                system=MERGE_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
-                output_format=SummaryResult,
-            )
-            return response.parsed_output
-
-        start = time.monotonic()
-        try:
-            result = self._retry_with_backoff(call, "merge chunk summaries")
-            latency = (time.monotonic() - start) * 1000
-            log_llm_interaction(
-                backend="claude", call_type="merge_summaries",
-                model=self.model, system_prompt=MERGE_SYSTEM_PROMPT,
-                user_prompt=user_prompt, response=str(result),
-                latency_ms=latency,
-                extra={"chunk_count": len(chunk_summaries), "requester": requester_name},
-            )
-            return result
-        except RuntimeError:
-            latency = (time.monotonic() - start) * 1000
-            logger.info("[LLM] merge_summaries FAILED after %.1fms", latency)
-            raise
 
     # ── Memory consolidation (Claude backend) ───────────────────────
 

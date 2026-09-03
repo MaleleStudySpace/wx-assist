@@ -16,16 +16,7 @@ from openai import OpenAI, RateLimitError, APIConnectionError, APIStatusError
 
 from .base import AbstractSummarizer
 from .errors import LLMContextOverflowError, LLMResponseError
-from .models import SummaryResult
-from .prompts import (
-    SYSTEM_PROMPT,
-    CHUNK_SYSTEM_PROMPT,
-    MERGE_SYSTEM_PROMPT,
-    MEMORY_CONSOLE_PROMPT,
-    build_summary_prompt,
-    build_chunk_summary_prompt,
-    build_merge_prompt,
-)
+from .prompts import MEMORY_CONSOLE_PROMPT
 from ..utils.llm_logger import log_llm_interaction
 
 logger = logging.getLogger(__name__)
@@ -33,120 +24,30 @@ logger = logging.getLogger(__name__)
 # DeepSeek API base URL
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
-# Tool schema for structured output — matches SummaryResult Pydantic model
-STORE_SUMMARY_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "store_summary",
-        "description": "Store a structured summary of a group chat conversation",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "summary_text": {
-                    "type": "string",
-                    "description": "A 2-4 sentence overview of what was discussed",
-                },
-                "topics": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Main topics discussed in the conversation",
-                },
-                "participants": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "contributions": {"type": "string"},
-                        },
-                        "required": ["name", "contributions"],
-                        "additionalProperties": False,
-                    },
-                    "description": "Key participants and what they contributed",
-                },
-            },
-            "required": ["summary_text", "topics", "participants"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-
-def _parse_summary_from_tool_call(response) -> SummaryResult:
-    """Extract SummaryResult from DeepSeek response.
-
-    Tries in order:
-    1. Tool call → parse arguments JSON
-    2. Content is valid JSON → parse as SummaryResult
-    3. Plain text content → wrap in basic SummaryResult
-    """
-    choice = response.choices[0]
-    msg = choice.message
-
-    # Strategy 1: tool call with structured data
-    if msg.tool_calls:
-        args_json = msg.tool_calls[0].function.arguments
-        data = json.loads(args_json)
-
-        participants = []
-        for p in data.get("participants", []):
-            if isinstance(p, dict):
-                participants.append(p)
-            elif isinstance(p, str):
-                participants.append({"name": p, "contributions": ""})
-
-        return SummaryResult(
-            summary_text=data.get("summary_text", ""),
-            topics=data.get("topics", []),
-            participants=participants,
-        )
-
-    # Strategy 2: JSON in message content
-    content = msg.content or ""
-    if isinstance(content, str) and content.strip():
-        try:
-            data = json.loads(content)
-            if isinstance(data, dict) and "summary_text" in data:
-                return SummaryResult(**{
-                    k: v for k, v in data.items()
-                    if k in ("summary_text", "topics", "participants")
-                })
-        except (TypeError, ValueError):
-            # ValueError 覆盖 json.JSONDecodeError 与 pydantic ValidationError
-            # （两者都是 ValueError 子类）。LLM 返回 JSON 字段类型不符时
-            # 降级到 Strategy 3 纯文本包裹，不能抛错中断摘要。
-            pass
-
-    # Strategy 3: plain text — wrap in minimal SummaryResult
-    content = (content or "").strip()
-    if content:
-        logger.info("DeepSeek returned plain text (no tool call), wrapping as summary")
-        return SummaryResult(
-            summary_text=content[:2000],
-            topics=[],
-            participants=[],
-        )
-
-    raise RuntimeError("DeepSeek returned empty response")
-
 
 class OpenAICompatSummarizer(AbstractSummarizer):
-    """Summarization via OpenAI-compatible API (DeepSeek, OpenAI, local models, etc.).
+    """LLM backend for any OpenAI-compatible endpoint (DeepSeek, MiniMax,
+    OpenAI, local models, relays).
 
-    Uses tool calling for structured output since DeepSeek doesn't have
-    native Pydantic parsing like Claude.
-
-    Features:
-    - OpenAI-compatible tool calling for structured output
-    - Token budget: 100K (safe margin below 128K context window)
-    - Map-Reduce chunking for large conversations
+    Provides:
+    - chat / digest / long-form calls, with an optional per-request timeout
+    - SSE streaming for the AI Chat frontend
+    - ReAct agent_chat with tool calling
+    - group memory consolidation
+    - a thinking-mode guard that retries when a reasoning model spends all
+      max_tokens on reasoning_content and returns empty content
     """
 
     # DeepSeek model IDs
     MODEL_PRO = "deepseek-v4-pro"      # V4 Pro (flagship, 1M context)
     MODEL_FLASH = "deepseek-v4-flash"  # V4 Flash (fast/cheap, 1M context)
 
-    # 1M context window → 900K safe budget
+    # Only consumer left is src/web/ai_chat.py's context-compression thresholds
+    # (0.7x / 0.9x).  The 900K figure below assumes a 1M-context model, but the
+    # endpoint actually in use (MiniMax-M2.7-highspeed via relay) was measured to
+    # reject at ~250K real tokens — so on that provider ai_chat compression
+    # effectively never fires.  Left as-is deliberately: lowering it would change
+    # ai_chat behaviour, which is out of scope here.
     token_budget = 900_000
 
     _backend_name = "deepseek"
@@ -488,82 +389,6 @@ class OpenAICompatSummarizer(AbstractSummarizer):
 
         return content, tool_calls, reasoning
 
-    # ── Direct summarization ──────────────────────────────────────
-
-    def _summarize_direct(self, messages: list[dict],
-                           requester_name: str) -> SummaryResult:
-        """All messages in one call — uses tool calling for structured output."""
-        user_prompt = build_summary_prompt(messages, requester_name)
-
-        def call():
-            response = self.client.chat.completions.create(
-                model=self.model,
-                max_tokens=8192,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                tools=[STORE_SUMMARY_TOOL],
-                tool_choice="auto",  # V4 Flash doesn't support forced tool_choice with thinking
-                extra_body=self.extra_body,
-            )
-            return _parse_summary_from_tool_call(response)
-
-        start = time.monotonic()
-        try:
-            result = self._retry_with_backoff(call, "direct summarization")
-            latency = (time.monotonic() - start) * 1000
-            log_llm_interaction(
-                backend="deepseek", call_type="summarize_direct",
-                model=self.model, system_prompt=SYSTEM_PROMPT,
-                user_prompt=user_prompt, response=str(result),
-                latency_ms=latency,
-                extra={"requester": requester_name, "msg_count": len(messages)},
-            )
-            return result
-        except RuntimeError:
-            latency = (time.monotonic() - start) * 1000
-            logger.info("[LLM] summarize_direct FAILED after %.1fms", latency)
-            raise
-
-    # ── Map-Reduce ────────────────────────────────────────────────
-
-    def _summarize_chunk(self, chunk: list[dict], chunk_num: int,
-                          total: int, requester_name: str) -> str:
-        """Extract key facts from a single chunk (plain text, no structured output)."""
-        user_prompt = build_chunk_summary_prompt(
-            chunk, chunk_num, total, requester_name
-        )
-
-        def call():
-            response = self.client.chat.completions.create(
-                model=self.model,
-                max_tokens=1024,
-                messages=[
-                    {"role": "system", "content": CHUNK_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
-            return response.choices[0].message.content or ""
-
-        start = time.monotonic()
-        try:
-            result = self._retry_with_backoff(call, f"chunk {chunk_num}/{total}")
-            latency = (time.monotonic() - start) * 1000
-            log_llm_interaction(
-                backend="deepseek", call_type="summarize_chunk",
-                model=self.model, system_prompt=CHUNK_SYSTEM_PROMPT,
-                user_prompt=user_prompt, response=result,
-                latency_ms=latency,
-                extra={"chunk": f"{chunk_num}/{total}", "requester": requester_name},
-            )
-            return result
-        except RuntimeError:
-            latency = (time.monotonic() - start) * 1000
-            logger.info("[LLM] summarize_chunk %d/%d FAILED after %.1fms",
-                        chunk_num, total, latency)
-            raise
-
     # ── Memory consolidation ───────────────────────────────────────
 
     def consolidate_memory(self, existing_memory: str,
@@ -634,40 +459,3 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             logger.warning("Memory consolidation failed: %s", e)
             return existing_memory  # don't lose existing memory on failure
 
-    # ── Map-Reduce ────────────────────────────────────────────────
-
-    def _merge_chunk_summaries(self, chunk_summaries: list[str],
-                                requester_name: str) -> SummaryResult:
-        """Merge chunk summaries into final structured result via tool calling."""
-        user_prompt = build_merge_prompt(chunk_summaries, requester_name)
-
-        def call():
-            response = self.client.chat.completions.create(
-                model=self.model,
-                max_tokens=8192,
-                messages=[
-                    {"role": "system", "content": MERGE_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                tools=[STORE_SUMMARY_TOOL],
-                tool_choice="auto",
-                extra_body=self.extra_body,
-            )
-            return _parse_summary_from_tool_call(response)
-
-        start = time.monotonic()
-        try:
-            result = self._retry_with_backoff(call, "merge chunk summaries")
-            latency = (time.monotonic() - start) * 1000
-            log_llm_interaction(
-                backend="deepseek", call_type="merge_summaries",
-                model=self.model, system_prompt=MERGE_SYSTEM_PROMPT,
-                user_prompt=user_prompt, response=str(result),
-                latency_ms=latency,
-                extra={"chunk_count": len(chunk_summaries), "requester": requester_name},
-            )
-            return result
-        except RuntimeError:
-            latency = (time.monotonic() - start) * 1000
-            logger.info("[LLM] merge_summaries FAILED after %.1fms", latency)
-            raise

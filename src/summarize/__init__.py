@@ -4,23 +4,22 @@ Usage:
     from .summarize import create_summarizer
 
     summarizer = create_summarizer(config)
-    result = summarizer.summarize(messages, requester_name)
+    text = summarizer.chat("帮我看看这条消息")
+
+Backend classes are imported lazily inside `create_summarizer` (so a missing
+`anthropic` package doesn't break OpenAI-compatible users); import them from
+their own modules if you need them directly.  LLM exceptions live in
+`src.summarize.errors`.
 """
 
 import logging
 
 from .base import AbstractSummarizer
-from .models import ParticipantContribution, SummaryResult
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "AbstractSummarizer",
-    "ClaudeSummarizer",
-    "OpenAICompatSummarizer",
-    "DeepSeekSummarizer",
-    "SummaryResult",
-    "ParticipantContribution",
     "create_summarizer",
 ]
 

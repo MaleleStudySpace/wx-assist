@@ -1,6 +1,6 @@
 """Abstract base class for AI summarization backends.
 
-Implementations: ClaudeSummarizer, DeepSeekSummarizer.
+Implementations: ClaudeSummarizer, OpenAICompatSummarizer.
 """
 
 import logging
@@ -8,7 +8,6 @@ import time
 from abc import ABC, abstractmethod
 from typing import Callable, Iterator, TypeVar
 
-from .models import SummaryResult
 from ..utils.llm_logger import log_llm_interaction
 
 logger = logging.getLogger(__name__)
@@ -17,25 +16,29 @@ T = TypeVar("T")
 
 
 class AbstractSummarizer(ABC):
-    """Abstract summarizer with shared logic for chunking, retry, and formatting.
+    """Abstract summarizer — shared retry/timeout helpers plus the call contract.
 
     Subclasses must implement:
-      - _summarize_direct(messages, requester_name) -> SummaryResult
-      - _summarize_chunk(chunk, chunk_num, total, requester_name) -> str
-      - _merge_chunk_summaries(chunk_summaries, requester_name) -> SummaryResult
-      - consolidate_memory(existing_memory, new_messages) -> str
       - _call_chat_api(system_prompt, messages) -> str
+      - _call_digest_api(system_prompt, messages, timeout) -> str
+      - _call_long_api(system_prompt, messages, max_tokens, temperature, timeout) -> str
+      - _call_chat_api_stream(system_prompt, messages, max_tokens) -> Iterator[str]
+      - agent_chat(system_prompt, messages, tools) -> (content, tool_calls, reasoning)
+      - consolidate_memory(existing_memory, new_messages) -> str
 
     They may override:
-      - token_budget (default 100K)
-      - chunk_size (default 400)
       - retry_exceptions (tuple of exception types to retry on)
+
+    `token_budget` and `chunk_size` no longer drive any logic in this class —
+    the map-reduce summary chain they fed is gone.  They are kept because
+    `src/web/ai_chat.py` reads `token_budget` for its context-compression
+    thresholds and `BotConfig.chunk_size` (env CHUNK_SIZE) is validated and
+    forwarded into every backend constructor.
     """
 
     # Override in subclass
     token_budget: int = 100_000
     chunk_size: int = 400
-    merge_batch_size: int = 5
     max_retries: int = 3
     retry_exceptions: tuple = ()
     _backend_name: str = "unknown"  # Override in subclass: "deepseek" | "claude"
@@ -248,167 +251,7 @@ class AbstractSummarizer(ABC):
         """
         ...
 
-    # ── Public API ─────────────────────────────────────────────────
-
-    def summarize(self, messages: list[dict],
-                  requester_name: str) -> SummaryResult:
-        """Generate a structured summary from a list of chat messages.
-
-        Strategy:
-          - ≤200 messages        → direct (single call)
-          - 201~2000 messages    → map-reduce (chunks → merge)
-          - >2000 messages       → multi-level map-reduce (chunks → batches → merge)
-        """
-        if not messages:
-            return SummaryResult(
-                summary_text="没有找到新消息。",
-                topics=[],
-                participants=[],
-            )
-
-        estimated = self._estimate_tokens(messages)
-        logger.info(
-            "[%s] Summarizing %d messages (est. %s tokens, budget=%s)",
-            self.__class__.__name__, len(messages),
-            f"{estimated:,}", f"{self.token_budget:,}",
-        )
-
-        if estimated <= self.token_budget:
-            logger.info("Using direct summarization")
-            return self._summarize_direct(messages, requester_name)
-
-        chunks = self._split_into_chunks(messages)
-        if len(chunks) <= self.merge_batch_size:
-            logger.info(
-                "Using map-reduce: %d chunks of ~%d messages each",
-                len(chunks), self.chunk_size,
-            )
-            return self._summarize_map_reduce(chunks, requester_name)
-
-        logger.info(
-            "Using multi-level map-reduce: %d chunks of ~%d messages each "
-            "→ batches of %d",
-            len(chunks), self.chunk_size, self.merge_batch_size,
-        )
-        return self._multi_level_map_reduce(chunks, requester_name)
-
-    def _multi_level_map_reduce(self, chunks: list[list[dict]],
-                                 requester_name: str) -> SummaryResult:
-        """Handle very large conversations with multi-level merging.
-
-        Level 1 (Map):    Summarize every chunk → chunk_summaries
-        Level 2 (Batch):  Group chunk_summaries into batches of merge_batch_size,
-                          merge each batch → batch_summaries
-        Level 3 (Final):  If >1 batch summary remains, merge them → final result
-        """
-        total = len(chunks)
-        chunk_summaries: list[str] = []
-        for i, chunk in enumerate(chunks, 1):
-            logger.info("Map phase: chunk %d/%d (%d messages)", i, total, len(chunk))
-            summary = self._summarize_chunk(chunk, i, total, requester_name)
-            chunk_summaries.append(summary)
-
-        if not chunk_summaries:
-            return SummaryResult(
-                summary_text="无法生成总结。",
-                topics=[],
-                participants=[],
-            )
-
-        # Level 2: Batch merge
-        batches = [
-            chunk_summaries[j:j + self.merge_batch_size]
-            for j in range(0, len(chunk_summaries), self.merge_batch_size)
-        ]
-        logger.info(
-            "Reduce: merging %d chunk summaries in %d batches",
-            len(chunk_summaries), len(batches),
-        )
-        batch_summaries: list[str] = []
-        for b, batch in enumerate(batches, 1):
-            summary = self._merge_chunk_summaries(
-                batch, f"{requester_name}（第{b}/{len(batches)}批）"
-            )
-            batch_summaries.append(summary.summary_text)
-
-        # Level 3: Final merge
-        if len(batch_summaries) == 1:
-            return self._merge_chunk_summaries(batch_summaries, requester_name)
-
-        logger.info("Final merge: %d batch summaries", len(batch_summaries))
-        return self._merge_chunk_summaries(batch_summaries, requester_name)
-
-    def format_summary_for_reply(self, result: SummaryResult,
-                                  requester_name: str) -> str:
-        """Format a SummaryResult into a WeChat reply.
-
-        Trusts the AI's output formatting — no forced renumbering.
-        The new detailed system prompt already instructs the model
-        to produce well-structured summaries with numbered topics.
-        """
-        parts = [f"@{requester_name} 你错过的：", ""]
-
-        # Use the summary_text directly — AI is instructed to format it well
-        if result.summary_text:
-            parts.append(result.summary_text.strip())
-
-        # Fallback: if AI gave topics list instead
-        if result.topics and not result.summary_text:
-            for i, t in enumerate(result.topics, 1):
-                parts.append(f"{i}. {t}")
-
-        return "\n".join(parts)
-
     # ── Abstract methods ──────────────────────────────────────────
-
-    @abstractmethod
-    def _summarize_direct(self, messages: list[dict],
-                           requester_name: str) -> SummaryResult:
-        """Summarize all messages in a single call."""
-        ...
-
-    def _summarize_map_reduce(self, chunks: list[list[dict]],
-                               requester_name: str) -> SummaryResult:
-        """Summarize by splitting into chunks, extracting per chunk,
-        then merging.
-
-        Calls self._summarize_chunk() and self._merge_chunk_summaries(),
-        both of which are abstract and backend-specific.
-        """
-        total = len(chunks)
-
-        chunk_summaries: list[str] = []
-        for i, chunk in enumerate(chunks, 1):
-            logger.info(
-                "Map phase: chunk %d/%d (%d messages)", i, total, len(chunk)
-            )
-            summary = self._summarize_chunk(chunk, i, total, requester_name)
-            chunk_summaries.append(summary)
-
-        if not chunk_summaries:
-            return SummaryResult(
-                summary_text="无法生成总结。",
-                topics=[],
-                participants=[],
-            )
-
-        logger.info("Reduce phase: merging %d chunk summaries", len(chunk_summaries))
-        return self._merge_chunk_summaries(chunk_summaries, requester_name)
-
-    @abstractmethod
-    def _summarize_chunk(self, chunk: list[dict], chunk_num: int,
-                         total: int, requester_name: str) -> str:
-        """Summarize a single chunk into plain text.
-
-        Used by both _summarize_map_reduce and _multi_level_map_reduce.
-        """
-        ...
-
-    @abstractmethod
-    def _merge_chunk_summaries(self, chunk_summaries: list[str],
-                                requester_name: str) -> SummaryResult:
-        """Merge chunk summaries into a final SummaryResult."""
-        ...
 
     @abstractmethod
     def consolidate_memory(self, existing_memory: str,
@@ -429,13 +272,6 @@ class AbstractSummarizer(ABC):
         ...
 
     # ── Shared helpers ────────────────────────────────────────────
-
-    def _split_into_chunks(self, messages: list[dict]) -> list[list[dict]]:
-        """Split messages into roughly equal-sized chunks."""
-        chunks = []
-        for i in range(0, len(messages), self.chunk_size):
-            chunks.append(messages[i:i + self.chunk_size])
-        return chunks
 
     @staticmethod
     def _estimate_tokens(messages: list[dict]) -> int:
