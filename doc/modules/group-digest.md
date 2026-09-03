@@ -2,12 +2,12 @@
 
 ## 一句话说明
 
-按 cron 调度定时拉取群消息，AI 生成结构化摘要，写入通知队列并可选推送到微信，同时滚动更新群记忆。
+按 cron 调度定时拉取一个**分组**内所有会话的消息，打包成一次 AI 调用生成按会话分段的摘要，写入通知队列并推送到所有已绑定渠道，同时滚动更新该分组的记忆。
 
 ## 数据流
 
 ```
-用户在前端配置摘要群（群 / 时间 / 档案 / 推送）
+用户在前端配置摘要分组（组名 / 多个会话 / 时间 / 档案 / 推送）
     │
     ▼
 AssistantConfig.digest_groups[] → data/assistant_config.json
@@ -15,16 +15,25 @@ AssistantConfig.digest_groups[] → data/assistant_config.json
     ▼
 DigestScheduler daemon 线程（60s 轮询）
     │  _should_trigger() → cron 或 HH:MM 匹配
-    │  MIN_TRIGGER_GAP_SEC 去重
+    │  防重触 key = dg:{group_id}，MIN_TRIGGER_GAP_SEC=120s
+    ▼
+_run_digest_in_pool(group_id)          ← 传 id 不传对象，运行时从磁盘重读
     ▼
 _generate_digest(dg)
-    1. 拉取回溯窗口内消息（limit=500，超出时丢弃**最旧**的、返回仍按时间升序）
-    2. unread_only? → 切片到未读部分
-    3. filter_messages(raw) → 过滤噪音 + 媒体占位
-    4. 构建 system_prompt + user_prompt → AI 调用
-    5. memory_enabled? → generate_memory_update_prompt() → 更新 dg.memory
-    6. outbox.add(notif_type="group_digest")
-    7. push_target=="ilink"? → iLink 推送 + 广播推送结果
+    1/6 _collect_chat_units()   逐会话取消息（limit=500，超出丢**最旧**、返回仍升序）
+                                → unread_only 按会话各自切尾部（未读数一次拉全表）
+                                → filter_messages()（噪音 + 媒体占位 + XML 清洗）
+    2/6 plan_digest()           估算 token → 判定 single / packed / per_chat
+    3/6 _render_digest()        ├─ single   → 1 次 LLM，prompt 与改造前逐字节一致
+                                ├─ packed   → 1 次 LLM，多会话分节 + 输出契约
+                                │             被 provider 拒（上下文超限）→ 就地转 per_chat
+                                └─ per_chat → N 次 LLM（并发 3）+ concat_sections 纯拼接
+                                              **不再有第 N+1 次汇总调用**
+    4/6 _update_group_memory()  memory_enabled? → 组级单一记忆，按 group_id 写回磁盘
+                                （全部会话失败时跳过，不把错误串浓缩进记忆）
+    5/6 _publish_outbox()       chat_id=组 id，content 带 chats/digest_mode/degraded/dropped_total
+    6/6 _push_and_finish()      推给**所有**已扫码绑定渠道（legacy push_target 只是旧 opt-in 标记）
+                                → 三态状态走 delivery.aggregate_status → 任务收尾
 ```
 
 ## 配置字段
@@ -130,6 +139,73 @@ _generate_digest(dg)
 4. **标识符清洗**：消息文本中的 `wxid_xxx` / `gh_xxx` 等内部标识符在进入 prompt 前被剥离，保证摘要只展示昵称。
 
 > 这些处理同时服务于群摘要与关键词提醒（共用 `_strip_ids`），保证 LLM 输入与匹配/展示一致。
+
+## Token 预算与降级
+
+一个分组内所有会话打包成**一次** LLM 调用；打包超出预算时降级为逐会话摘要，然后**纯字符串拼接**。
+
+### 预算口径
+
+`DIGEST_TOKEN_BUDGET`（env，默认 **150_000**，夹到 `[10_000, 400_000]`）。
+
+口径**复用** `AbstractSummarizer._estimate_tokens`（`src/summarize/base.py`：1.5 字符/token + 每消息 40 字符开销 + 500 固定），不自己引 tokenizer：
+
+- 实测这批语料真实比例是 **0.42 token/字符**，估算器给 0.667 —— **保守约 1.6 倍**，保守正是需要的方向
+- 天花板设 400K 是因为估算 400K ≈ 真实 250K token，正好是实测的 provider 拒绝线（MiniMax-M2.7-highspeed：192K/224K 真实 token 通过、~250K 拒）
+- **不改** `_estimate_tokens` 的公式，也**不动** `token_budget` 类属性（`src/web/ai_chat.py` 拿它算上下文压缩阈值）
+
+**kill switch**：`DIGEST_TOKEN_BUDGET=1` → 被夹到下限 10_000 → 任何多会话分组都必然超限从而走 per_chat。出问题时改 `.env` 重启即可，不需要回滚代码。
+
+### 四个分支（`plan_digest`）
+
+`available = budget − memory_tokens − SYSTEM_RESERVE_TOKENS(800)`，且不低于 `MIN_AVAILABLE_TOKENS(2000)`。
+
+| 分支 | 条件 | 行为 |
+|------|------|------|
+| `single` | 有内容的会话只有 1 个 | 1 次调用，**不加分节标记、不追加输出契约**，prompt 与改造前逐字节一致 |
+| `packed` | `total ≤ available` | 1 次调用，多会话分节 |
+| `packed`（裁剪后） | 超限 ≤ `PACKED_TRIM_SLACK_RATIO(0.20)` | 按各会话占比均摊裁最旧，仍 1 次调用 |
+| `per_chat` | 超限 > 20%，或均摊后被 `MIN_UNIT_TOKENS(200)` 地板顶住仍超限 | N 次调用（并发 `DIGEST_PER_CHAT_WORKERS=3`）+ 纯拼接 |
+
+`total = Σ 各会话 est_tokens + SECTION_OVERHEAD_TOKENS(40) × 会话数`。
+
+> `single` 分支的意义：迁移后线上 3 个分组都是单会话，**升级当天行为零变化**。
+
+### 裁剪规则
+
+- **裁最旧、留最新**（`trim_oldest` 二分求最小起点），返回值仍按时间升序
+- 预算小到连一条都装不下时**至少保留最新 1 条**，绝不返回空
+- 省略必须在两处显式披露：打包 prompt 的分节头写 `（N 条，已省略最早 K 条）`，拼接正文写 `> 已省略最早 K 条消息（超出 token 预算）`。
+  不披露的话 LLM 会把"窗口内没提到"当成"没发生"，给出错误的确定性结论。
+
+### 降级路径为什么不再调一次 LLM 汇总
+
+需求是"区分不同群"，最终产物本来就是按会话分段的 —— 汇总就是拼接 + 会话名标题。省掉一次调用（20-40s + 费用），更重要的是避免 LLM 在汇总时把不同会话的内容串味或压掉细节。`concat_sections()` 是纯字符串函数，签名里没有 summarizer 参数（有测试守住这一点）。
+
+跨会话洞察（"今天几个群都在聊同一件事"）如果以后要，应该做成**可选开关**再加一层，而不是默认行为。
+
+### 实测依据
+
+MiniMax-M2.7-highspeed，`max_tokens=4096`：
+
+| 场景 | prompt 字符 | 真实 token | 耗时 | 结果 |
+|------|------------|-----------|------|------|
+| 3 群 / 24h | 19,176 | ~8.1K | 8.8s | ✅ |
+| 6 群 / 6h | 192,292 | ~81K | 26.1s | ✅ |
+| 6 群 / 24h（清洗 XML） | 321,668 | ~135K | 25.3s / 重跑 40.6s | ✅ |
+| 6 群 / 24h（未清洗） | 703,597 | **299,247** | 3.8s | ❌ 上下文超限 |
+
+**延迟由输出长度决定，不是输入长度**：135K token 输入输出 480 字 → 25.3s；同样输入输出 1542 字 → 40.6s。固定开销约 18s，之后约 14ms/字，输出 ~2900 字就撞旧的 60s 超时（现已对摘要路径单独放宽到 `DIGEST_LLM_TIMEOUT_SEC=180`，见 `doc/modules/ai-backend.md`）。这也是 `PACKED_OUTPUT_CONTRACT` 硬性限制"每会话 ≤200 字"的原因：6 会话 = 1200 字 ≈ 35s，余量充足。
+
+**真实数据端到端**（走完整 `_generate_digest`，真实消息库 + 真实 LLM，outbox/推送/任务中心用替身）：
+
+| 场景 | mode | LLM 调用 | prompt | 消息数 | 耗时 | 输出分段 |
+|------|------|---------|--------|-------|------|---------|
+| 线上 3 群 / 24h | `packed` | **1** | 36,768 字符 | 197 | 15.2s | 2 段（第三个群 24h 内无消息，正确跳过） |
+| 最忙 6 群 / 24h | `packed` | **1** | 85,809 字符 | 2122 | 23.6s | **6 段全部到位** |
+| 最忙 6 群 + `DIGEST_TOKEN_BUDGET=1` | `per_chat` | 6 | 各 4.5-8.3K 字符 | 1173（裁剪掉 949） | 21.2s | 6 组齐全，正文含"已省略最早 280 条消息"披露 |
+
+三点值得记下来：① 默认预算下 6 个最忙群打包只用 1 次调用、离上限还很远（85,809 字符 ≈ 36K 真实 token，上限约 250K），**正常运营基本不会触发降级**；② 降级路径并发 3，6 次调用总耗时 21.2s 而不是 6×25s；③ 输出契约生效，6 群打包时模型给每群约 183 字，没有互相串味也没有漏群。
 
 ## 记忆更新
 

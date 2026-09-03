@@ -1,8 +1,10 @@
 """Digest engine — generates timed group chat summaries with filtering and memory."""
 
 import logging
+import os
 import re
 import time
+from dataclasses import dataclass, field
 from typing import Optional
 
 from .config import AssistantConfig, DigestGroup
@@ -284,3 +286,251 @@ def generate_memory_update_prompt(previous_memory: str, digest_text: str) -> str
 - 近期重要事件/趋势变化
 - 群聊氛围和活跃度
 直接输出记忆文本，不要 JSON 包装。"""
+
+
+# ── 多会话打包与预算降级 ────────────────────────────────────────────
+#
+# 一次调度把一个分组内所有会话的消息打包成**一次** LLM 调用，输出按会话分段。
+# 打包超出 token 预算时降级为逐会话摘要，然后**纯字符串拼接**（不再调 LLM 汇总）。
+#
+# 预算口径复用 AbstractSummarizer._estimate_tokens（1.5 字符/token + 每消息 40
+# 字符开销 + 500 固定）。实测这批语料真实比例是 0.42 token/字符，即估算值比真实值
+# **保守约 1.6 倍** —— 保守正是需要的方向，所以不改那个函数、也不动 token_budget
+# 类属性（src/web/ai_chat.py 拿它算上下文压缩阈值）。
+
+DEFAULT_DIGEST_TOKEN_BUDGET = 150_000
+# 天花板 400K：估算 400K ≈ 真实 250K token，正好是实测的 provider 拒绝线。
+# 下限 10K 同时也是 kill switch —— DIGEST_TOKEN_BUDGET=1 会被夹到这里，
+# 任何多会话分组都必然超限从而走 per_chat，出问题时改 env 重启即可，不用回滚代码。
+BUDGET_FLOOR = 10_000
+BUDGET_CEIL = 400_000
+
+SYSTEM_RESERVE_TOKENS = 800      # system prompt + 输出契约的余量（估算器已含 500）
+MIN_AVAILABLE_TOKENS = 2_000     # 记忆过长时的地板，避免 available 变负
+SECTION_OVERHEAD_TOKENS = 40     # 每个 "=== [i] 名称 (N 条) ===" 分节头
+MIN_UNIT_TOKENS = 200            # 均摊裁剪时每会话最少保留
+PACKED_TRIM_SLACK_RATIO = 0.20   # 超限 ≤20% 才尝试裁剪后仍打包，否则直接降级
+
+PACKED_OUTPUT_CONTRACT = """
+
+## 多会话打包输出契约（结构约束，必须遵守）
+用户消息里给出 N 个会话，每个会话以 `=== [序号] 会话名 (条数) ===` 分隔。
+你必须：
+1. 按输入顺序，为每一个会话输出一个独立段落，段落第一行是 `## 会话名`（会话名原样照抄）。
+2. 禁止跨会话合并话题，禁止写总览/综述/开场白/结尾总结。
+3. 禁止遗漏任何一个会话；某会话没有实质内容时，输出 `## 会话名` 加一行 `（无实质内容）`。
+4. 每个会话的摘要控制在 200 字以内。"""
+
+PER_CHAT_NO_HEADING_HINT = """
+
+## 输出格式
+不要输出会话名标题、不要输出开场白，直接输出摘要正文。"""
+
+
+@dataclass
+class ChatUnit:
+    """分组内一个会话的待摘要数据。"""
+    chat_id: str
+    name: str
+    messages: list = field(default_factory=list)   # 已过 filter_messages
+    est_tokens: int = 0
+    dropped: int = 0        # 为适配预算被裁掉的最旧消息条数
+    raw_count: int = 0      # 过滤前条数，用于日志与统计
+    error: str = ""         # 取消息或摘要阶段的错误
+
+
+@dataclass
+class DigestPlan:
+    """预算判定结果。mode: "single" | "packed" | "per_chat"。"""
+    mode: str
+    units: list
+    budget: int
+    available: int
+    total_tokens: int
+    notes: list = field(default_factory=list)
+
+
+def digest_token_budget() -> int:
+    """读 env `DIGEST_TOKEN_BUDGET`，默认 150_000，非法值夹到 [10_000, 400_000]。
+
+    每次调用都重读 env（不缓存成模块常量），这样测试能用 patch.dict 覆盖，
+    运维也能只改 .env 重启就切换 kill switch。
+    """
+    raw = os.getenv("DIGEST_TOKEN_BUDGET", "").strip()
+    if not raw:
+        return DEFAULT_DIGEST_TOKEN_BUDGET
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("DIGEST_TOKEN_BUDGET=%r 不是整数，回落默认 %d",
+                       raw, DEFAULT_DIGEST_TOKEN_BUDGET)
+        return DEFAULT_DIGEST_TOKEN_BUDGET
+    if not BUDGET_FLOOR <= value <= BUDGET_CEIL:
+        clamped = min(max(value, BUDGET_FLOOR), BUDGET_CEIL)
+        logger.warning("DIGEST_TOKEN_BUDGET=%d 超出 [%d, %d]，夹到 %d",
+                       value, BUDGET_FLOOR, BUDGET_CEIL, clamped)
+        return clamped
+    return value
+
+
+def estimate_messages_tokens(messages: list) -> int:
+    """复用 AbstractSummarizer._estimate_tokens 的口径（静态方法，无需实例）。"""
+    from src.summarize.base import AbstractSummarizer
+    return AbstractSummarizer._estimate_tokens(messages)
+
+
+def trim_oldest(messages: list, budget: int) -> tuple:
+    """丢掉最旧的消息直到估算 token ≤ budget。
+
+    Returns:
+        (保留的消息, 丢弃条数)。保留部分仍按时间升序，两个调用方
+        （摘要 prompt、agent 工具的时间范围计算）都依赖这一点。
+        预算小到连一条都装不下时至少保留最新 1 条，绝不返回空。
+    """
+    n = len(messages)
+    if n == 0:
+        return [], 0
+    if budget <= 0:
+        return [], n
+    if estimate_messages_tokens(messages) <= budget:
+        return messages, 0
+
+    lo, hi = 0, n            # 求最小的 i 使 messages[i:] 装得下
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if estimate_messages_tokens(messages[mid:]) <= budget:
+            hi = mid
+        else:
+            lo = mid + 1
+    if lo >= n:              # 单条消息本身就超预算
+        return messages[-1:], n - 1
+    return messages[lo:], lo
+
+
+def plan_digest(units: list, budget: int, memory_tokens: int = 0) -> DigestPlan:
+    """判定这一轮该打包还是降级，并按需裁剪最旧消息。
+
+    四个分支：
+      1. 只有一个有内容的会话 → `single`，**不加分节标记、不追加输出契约**，
+         prompt 与改造前逐字节一致（迁移后线上分组都是单会话，升级当天零行为变化）
+      2. 全部装得下 → `packed`，一次调用
+      3. 小幅超限（≤ PACKED_TRIM_SLACK_RATIO）→ 按占比均摊裁最旧，仍 `packed`
+      4. 大幅超限 → `per_chat`，每会话独享完整 available，自身超限再裁
+
+    注意 _estimate_tokens 每条消息带 500 的固定项，所以多会话求和会略微高估；
+    方向是保守的（更早降级），可以接受。
+    """
+    active = [u for u in units if u.messages]
+    available = budget - memory_tokens - SYSTEM_RESERVE_TOKENS
+    notes: list = []
+    if available < MIN_AVAILABLE_TOKENS:
+        logger.warning("记忆占 %d token、预算 %d 过紧，available 抬到地板 %d",
+                       memory_tokens, budget, MIN_AVAILABLE_TOKENS)
+        available = MIN_AVAILABLE_TOKENS
+
+    if len(active) <= 1:
+        if active:
+            u = active[0]
+            if u.est_tokens > available:
+                u.messages, u.dropped = trim_oldest(u.messages, available)
+                u.est_tokens = estimate_messages_tokens(u.messages)
+                notes.append(f"「{u.name}」超出 token 预算，已省略最早 {u.dropped} 条消息")
+            return DigestPlan("single", units, budget, available, u.est_tokens, notes)
+        return DigestPlan("single", units, budget, available, 0, notes)
+
+    def _total() -> int:
+        return (sum(u.est_tokens for u in active)
+                + SECTION_OVERHEAD_TOKENS * len(active))
+
+    total = _total()
+
+    if total <= available:
+        return DigestPlan("packed", units, budget, available, total, notes)
+
+    over_ratio = (total - available) / available if available else float("inf")
+    if over_ratio <= PACKED_TRIM_SLACK_RATIO:
+        ratio = available / total
+        for u in active:
+            quota = max(int(u.est_tokens * ratio), MIN_UNIT_TOKENS)
+            if u.est_tokens > quota:
+                u.messages, u.dropped = trim_oldest(u.messages, quota)
+                u.est_tokens = estimate_messages_tokens(u.messages)
+                notes.append(f"「{u.name}」已省略最早 {u.dropped} 条消息以适配打包预算")
+        new_total = _total()
+        if new_total <= available:
+            notes.insert(0, f"打包需 {total} token、超出预算 {available}，"
+                            f"已按比例裁剪最旧消息（保留约 {int(ratio * 100)}%）")
+            return DigestPlan("packed", units, budget, available, new_total, notes)
+        # MIN_UNIT_TOKENS 地板导致仍超限 → 落到降级分支
+
+    notes.insert(0, f"打包需 {total} token、超出预算 {available}，降级为逐会话摘要后拼接")
+    for u in active:
+        if u.est_tokens > available:
+            u.messages, u.dropped = trim_oldest(u.messages, available)
+            u.est_tokens = estimate_messages_tokens(u.messages)
+            notes.append(f"「{u.name}」自身超出预算，已省略最早 {u.dropped} 条消息")
+    return DigestPlan("per_chat", units, budget, available, _total(), notes)
+
+
+def _format_msg_lines(messages: list) -> str:
+    lines = []
+    for m in messages:
+        content = _strip_ids(m.get("content", "") or "")
+        if not content:
+            continue
+        ts = m.get("timestamp", 0)
+        time_str = time.strftime("%H:%M", time.localtime(ts)) if ts else ""
+        lines.append(f"[{time_str}] {m.get('sender_name', '?')}: {content}")
+    return "\n".join(lines)
+
+
+def build_packed_prompt(group_cfg: DigestGroup, units: list) -> str:
+    """多会话打包的 user prompt：记忆共用一份，消息按会话分节。"""
+    memory = group_cfg.memory or "（暂无历史记忆）"
+    active = [u for u in units if u.messages]
+    sections = []
+    for i, u in enumerate(active, 1):
+        suffix = f"，已省略最早 {u.dropped} 条" if u.dropped else ""
+        sections.append(
+            f"=== [{i}] {u.name} ({len(u.messages)} 条{suffix}) ===\n"
+            f"{_format_msg_lines(u.messages)}"
+        )
+    return f"""## 近期记忆（本分组共用）
+{memory}
+
+## 待摘要的 {len(active)} 个会话
+
+{chr(10).join(sections)}"""
+
+
+def _strip_leading_heading(text: str, name: str) -> str:
+    """剥掉 LLM 自己加的会话名标题，避免拼接后出现两层标题。"""
+    lines = (text or "").split("\n")
+    if not lines:
+        return text or ""
+    first = lines[0].strip()
+    if first.startswith("#"):
+        bare = first.lstrip("#").strip()
+        if bare in (name, f"群：{name}", f"会话：{name}", f"群:{name}", f"会话:{name}"):
+            return "\n".join(lines[1:]).strip()
+    return (text or "").strip()
+
+
+def concat_sections(sections: list) -> str:
+    """把逐会话摘要拼成最终正文 —— **纯字符串操作，不调用任何 LLM**。
+
+    Args:
+        sections: [(ChatUnit, 摘要正文, 错误串)]，按会话顺序。
+    """
+    blocks = []
+    for unit, text, err in sections:
+        lines = [f"## {unit.name}"]
+        if unit.dropped:
+            lines.append(f"> 已省略最早 {unit.dropped} 条消息（超出 token 预算）")
+        if err:
+            lines.append(f"（本次摘要失败：{err}）")
+        else:
+            body = _strip_leading_heading(text, unit.name)
+            lines.append(body or "（无实质内容）")
+        blocks.append("\n".join(lines))
+    return "\n\n---\n\n".join(blocks)

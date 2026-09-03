@@ -5,21 +5,35 @@ import logging
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from src.utils.cron import cron_matches
 
 from .config import (
     AssistantConfig,
-    DigestChat,
     DigestGroup,
     MEMORY_MAX_CHARS,
     OAGroup,
     load_assistant_config,
     update_digest_group_memory,
 )
-from .digest import filter_messages, build_digest_prompt, generate_memory_update_prompt, DIGEST_SYSTEM_PROMPT, STYLE_PRESETS
+from .digest import (
+    DIGEST_SYSTEM_PROMPT,
+    PACKED_OUTPUT_CONTRACT,
+    PER_CHAT_NO_HEADING_HINT,
+    STYLE_PRESETS,
+    ChatUnit,
+    build_digest_prompt,
+    build_packed_prompt,
+    concat_sections,
+    digest_token_budget,
+    estimate_messages_tokens,
+    filter_messages,
+    generate_memory_update_prompt,
+    plan_digest,
+)
+from src.summarize.errors import LLMContextOverflowError
 from .outbox import Outbox
 from ..utils.llm_logger import log_llm_interaction
 
@@ -34,6 +48,10 @@ MIN_TRIGGER_GAP_SEC = 120   # Prevent re-trigger within 2 minutes
 # timeout.  Widen it for this path only, via a per-request timeout — chat and
 # memory-update calls keep the 60s default.
 DIGEST_LLM_TIMEOUT_SEC = float(os.getenv("DIGEST_LLM_TIMEOUT_SEC", "180"))
+
+# 降级路径的组内并发。照抄 oa_digest 的 4 但保守取 3：外层 scheduler 线程池
+# 已经是 3，最坏 3x3=9 个并发 LLM 调用（OA 侧已有 3x4=12 的先例）。
+DIGEST_PER_CHAT_WORKERS = 3
 
 # ── Startup catch-up ──────────────────────────────────────────────────
 # When the scheduler starts (after bot restart), check if any cron was
@@ -476,14 +494,6 @@ class DigestScheduler:
             return dg
         return self._load_group_fresh_by_id(dg.id) or dg
 
-    @staticmethod
-    def _primary_chat(dg: DigestGroup) -> DigestChat | None:
-        """分组内第一个启用的、已绑定 chat_id 的会话。"""
-        for c in dg.chats:
-            if c.enabled and c.chat_id:
-                return c
-        return None
-
     def _run_oa_digest_in_pool(self, oa: OAGroup, task_id: int = None) -> None:
         """Wrapper for running OA digest in thread pool with error handling."""
         try:
@@ -512,216 +522,430 @@ class DigestScheduler:
         return now_hm in dg.schedule
 
     def _generate_digest(self, dg: DigestGroup, task_id: int = None) -> None:
-        """Fetch messages, filter, summarize, update memory, push to outbox."""
+        """分组摘要编排：收集 → 预算判定 → 渲染 → 记忆 → 落库 → 推送。
+
+        签名保持不变（server.py 的手动触发路径直接调它）。
+        一次触发 = 一条 outbox 记录 = 一个 task = 一个可重推单元；
+        组内是打包还是逐会话属于内部实现细节，用户视角始终是"这个分组的一次摘要"。
+        """
         start_ts = time.monotonic()
 
-        # 用磁盘上的最新副本：手动触发路径（server.py）不经过 _run_digest_in_pool，
+        # 用磁盘上的最新副本：手动触发路径不经过 _run_digest_in_pool，
         # 而排队中的定时任务也可能在提交后才被 WebUI 改过配置或写过记忆。
         dg = self._load_group_fresh(dg)
 
-        # Task progress: running
+        # ── 1/6 收集组内各会话的消息 ──
+        units = self._collect_chat_units(dg, task_id)
+        if units is None:
+            return                      # 无需继续，任务收尾已在内部完成
+
+        # ── 2/6 预算判定：single / packed / per_chat ──
+        budget = digest_token_budget()
+        memory_tokens = estimate_messages_tokens(
+            [{"sender_name": "", "content": dg.memory or ""}])
+        plan = plan_digest(units, budget, memory_tokens)
+        logger.info("[DIGEST] Step 2/6: '%s' mode=%s budget=%d available=%d total=%d",
+                    dg.name, plan.mode, budget, plan.available, plan.total_tokens)
+        for note in plan.notes:
+            logger.info("[DIGEST]   %s", note)
+
+        # ── 3/6 生成正文 ──
+        digest_text, stats = self._render_digest(dg, plan, task_id)
+
+        # ── 4/6 记忆更新（全部失败时跳过，别把错误串浓缩进记忆）──
+        if digest_text.startswith("摘要生成失败"):
+            logger.warning("[DIGEST] Step 4/6: 摘要失败，跳过记忆更新 for '%s'", dg.name)
+        else:
+            self._update_group_memory(dg, digest_text)
+
+        # ── 5/6 落 outbox ──
+        nid, title, content = self._publish_outbox(dg, digest_text, stats)
+
+        # ── 6/6 推送 + 任务收尾 ──
+        self._push_and_finish(dg, nid, title, content, digest_text,
+                              task_id, stats, start_ts)
+
+    # ── 1/6 收集 ────────────────────────────────────────────────────
+
+    def _collect_chat_units(self, dg: DigestGroup, task_id=None):
+        """取组内每个会话的消息并过滤。
+
+        Returns:
+            list[ChatUnit]，或 None 表示本次无需继续（分组无可用会话 /
+            窗口内无新消息 / 过滤后无实质内容），任务收尾已在内部完成。
+        """
         self._tc_update(task_id, status='running', progress='正在获取消息')
 
-        # 1. Fetch messages within lookback window
-        since_ts = int(time.time()) - dg.lookback_hours * 3600
-        # 分组模型：C4 阶段仍只跑第一个启用的会话，打包编排在下一步落地。
-        chat = self._primary_chat(dg)
-        if not chat:
-            logger.warning("[DIGEST] Step 1/7: 分组 '%s' 没有可用会话", dg.name)
+        enabled = [c for c in dg.chats if c.enabled and c.chat_id]
+        if not enabled:
+            logger.warning("[DIGEST] Step 1/6: 分组 '%s' 没有可用会话", dg.name)
             self._tc_fail(task_id, error='分组没有可用会话，请在网页端重新绑定')
-            return
-        chat_id = chat.chat_id
+            return None
 
-        raw_messages = self._store.get_messages_since(chat_id, since_ts, limit=500)
-        logger.info("[DIGEST] Step 1/7: Fetched %d raw messages for '%s' (lookback=%dh)",
-                     len(raw_messages), dg.name, dg.lookback_hours)
-        if not raw_messages:
-            logger.info("Digest: no messages for '%s' in last %dh", dg.name, dg.lookback_hours)
-            # Task: completed with no content
+        since_ts = int(time.time()) - dg.lookback_hours * 3600
+        # unread_only 要按会话各自切尾部；WCDB 的 session 拉取需要串行排队，
+        # 所以一次拉全表建字典，绝不能每会话拉一次。
+        unread_map = self._get_unread_map() if dg.unread_only else {}
+
+        units = []
+        for idx, chat in enumerate(enabled, 1):
+            self._tc_update(task_id, progress=f'正在获取消息 ({idx}/{len(enabled)})')
+            name = chat.name or chat.chat_id
+            try:
+                raw = self._store.get_messages_since(chat.chat_id, since_ts, limit=500)
+            except Exception as e:
+                logger.warning("[DIGEST] 取消息失败 '%s' (%s): %s", name, chat.chat_id, e)
+                units.append(ChatUnit(chat_id=chat.chat_id, name=name,
+                                      error=f"取消息失败: {e}"))
+                continue
+            if dg.unread_only:
+                n = unread_map.get(chat.chat_id, 0)
+                raw = raw[-n:] if n > 0 else []
+            filtered = filter_messages(raw)
+            units.append(ChatUnit(
+                chat_id=chat.chat_id,
+                name=name,
+                messages=filtered,
+                est_tokens=estimate_messages_tokens(filtered),
+                raw_count=len(raw),
+            ))
+            logger.info("[DIGEST] Step 1/6: '%s' — raw=%d filtered=%d",
+                        name, len(raw), len(filtered))
+
+        total_raw = sum(u.raw_count for u in units)
+        total_msgs = sum(len(u.messages) for u in units)
+        errored = [u for u in units if u.error]
+        if total_raw == 0 and errored:
+            # 全部会话取消息失败 ≠ 窗口内没消息。不能伪装成"无新消息"，
+            # 否则用户会以为群里真的没人说话。
+            detail = "; ".join(f"{u.name}: {u.error}" for u in errored)
+            logger.error("[DIGEST] 分组 '%s' 全部 %d 个会话取消息失败: %s",
+                         dg.name, len(errored), detail)
+            self._tc_fail(task_id, error=f"取消息失败：{detail}")
+            return None
+        if total_raw == 0:
+            # 沿用既有语义：无新消息也写一条 outbox，让用户确认调度确实执行过
+            logger.info("[DIGEST] 分组 '%s' 近 %dh 无新消息", dg.name, dg.lookback_hours)
             self._tc_complete(task_id, result='无新内容')
-            # Still record in outbox so user sees the trigger happened
-            mode_label = "未读" if dg.unread_only else f"{dg.lookback_hours}h"
-            self._outbox.add(
-                notif_type="group_digest",
-                chat_id=dg.id,
-                group_name=dg.name,
-                title=f"📋 群聊摘要 · {dg.name} ({mode_label})",
-                content=json.dumps({
-                    "group": dg.name,
-                    "lookback_hours": dg.lookback_hours,
-                    "mode": mode_label,
-                    "msg_count": 0,
-                    "digest": "该时间窗口内无新消息，摘要跳过。",
-                    "display": f"📋 **群聊:** {dg.name}\n📊 **消息数量:** 0 | ⏰ **时间范围:** 近 {dg.lookback_hours}h\n\n> 该时间窗口内无新消息，摘要跳过。",
-                }, ensure_ascii=False),
-                priority="normal",
-            )
-            return
-
-        # 2. If unread_only, filter to unread portion
-        if dg.unread_only:
-            unread_count = self._get_unread_count(chat_id)
-            if unread_count == 0:
-                logger.info("[DIGEST] Step 2/7: unread_only mode, no unread messages for '%s', skipping", dg.name)
-                self._tc_complete(task_id, result='无未读消息')
-                return
-            raw_messages = raw_messages[-unread_count:]
-            logger.info("[DIGEST] Step 2/7: unread_only filter for '%s' — %d unread messages",
-                         dg.name, unread_count)
-
-        # 3. Filter (系统消息/噪音/媒体占位符 — 不再按 profile.ignore 过滤)
-        filtered = filter_messages(raw_messages)
-        logger.info("[DIGEST] Step 3/7: Noise filter for '%s' — %d → %d messages",
-                     dg.name, len(raw_messages), len(filtered))
-        if not filtered:
+            self._publish_empty_outbox(dg, units)
+            return None
+        if total_msgs == 0:
+            logger.info("[DIGEST] 分组 '%s' 过滤后无实质内容", dg.name)
             self._tc_complete(task_id, result='无实质内容')
-            return
+            return None
+        return units
 
-        # 4. Build prompt and summarize
-        # Task progress: AI generating
+    def _get_unread_map(self) -> dict:
+        """一次拉取全部会话的未读数，返回 {username: unread_count}。
+
+        取代原来的 _get_unread_count(chat_id)：那个实现每会话都要
+        get_sessions(limit=1000) 再线性查找，组内 N 个会话就是 N 次全量拉取，
+        而 WCDB 的 DLL 调用需要串行排队。
+        """
+        try:
+            from src.web.api_handlers import get_wcdb_client
+            client = get_wcdb_client()
+            if not client:
+                return {}
+            return {s.get("username"): int(s.get("unread_count", 0) or 0)
+                    for s in client.get_sessions(limit=1000) if s.get("username")}
+        except Exception as e:
+            logger.warning("Failed to get unread map: %s", e)
+            return {}
+
+    # ── 3/6 渲染 ────────────────────────────────────────────────────
+
+    def _render_digest(self, dg: DigestGroup, plan, task_id):
+        """按 plan.mode 生成正文。Returns (正文, stats dict)。"""
+        if plan.mode == "per_chat":
+            self._tc_update(task_id, progress='超出预算，改为逐会话摘要')
+            return self._render_per_chat(dg, plan, task_id)
+        try:
+            text = self._render_once(dg, plan, task_id)
+            return text, self._plan_stats(plan, failed=[])
+        except LLMContextOverflowError as e:
+            # 估算器保守但不保证；provider 的真实反馈才是最终裁判。
+            # 就地降级而不是失败 —— 用户仍然能拿到摘要。
+            logger.warning("[DIGEST] 打包被 provider 拒绝（%s），就地降级为逐会话", e)
+            plan.mode = "per_chat"
+            plan.notes.insert(0, f"打包调用被 provider 拒绝，已降级为逐会话：{e}")
+            self._tc_update(task_id, progress='打包超限，改为逐会话摘要')
+            return self._render_per_chat(dg, plan, task_id)
+
+    def _render_once(self, dg: DigestGroup, plan, task_id) -> str:
+        """一次 LLM 调用覆盖整组（single 与 packed 共用）。
+
+        single 模式下 prompt 与 system prompt 都与改造前逐字节一致 ——
+        迁移后线上分组都是单会话，升级当天零行为变化。
+        """
+        active = [u for u in plan.units if u.messages]
+        packed = plan.mode == "packed"
         self._tc_update(task_id, progress='AI 生成摘要中')
-        self._broadcast_task_update(task_id, 'group_digest', 'running', 'AI 生成摘要中', dg.name)
-        # Unified architecture: system_prompt + user_prompt
-        # - custom_prompt set → COMPLETELY REPLACES default system prompt
-        # - style preset → appended to default system prompt
-        # - build_digest_prompt() provides context only (profile + memory + messages)
-        has_custom = dg.profile and dg.profile.custom_prompt
-        prompt = build_digest_prompt(dg, filtered)
+        self._broadcast_task_update(task_id, 'group_digest', 'running',
+                                    'AI 生成摘要中', dg.name)
 
-        # Determine system prompt
-        if has_custom:
+        system_prompt = self._digest_system_prompt(dg, packed=packed)
+        if packed:
+            prompt = build_packed_prompt(dg, plan.units)
+        else:
+            prompt = build_digest_prompt(dg, active[0].messages)
+        logger.info("[DIGEST] Step 3/6: '%s' mode=%s system_len=%d user_len=%d",
+                    dg.name, plan.mode, len(system_prompt), len(prompt))
+
+        extra = {
+            "group_id": dg.id,
+            "group_name": dg.name,
+            "digest_mode": plan.mode,
+            "chat_count": len(active),
+            "chats": [u.chat_id for u in active],
+            "msg_count": sum(len(u.messages) for u in active),
+            "unread_only": dg.unread_only,
+            "lookback_hours": dg.lookback_hours,
+            "has_custom_prompt": bool(dg.profile and dg.profile.custom_prompt),
+        }
+        return self._call_digest_llm(dg, system_prompt, prompt, extra, reraise=False)
+
+    def _render_per_chat(self, dg: DigestGroup, plan, task_id):
+        """降级路径：逐会话摘要后**纯字符串拼接**，不再调 LLM 汇总。
+
+        骨架对齐 oa_digest._map_reduce_digest（并行 map + 按 idx 复序 +
+        单块失败降级），唯一区别是 reduce 阶段零 LLM 调用。
+        """
+        active = [u for u in plan.units if u.messages]
+        system_prompt = self._digest_system_prompt(dg, packed=False) + PER_CHAT_NO_HEADING_HINT
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=DIGEST_PER_CHAT_WORKERS) as pool:
+            fut2idx = {}
+            for idx, unit in enumerate(active):
+                fut2idx[pool.submit(self._summarize_one_chat, dg, unit, system_prompt)] = idx
+            for fut in as_completed(fut2idx):
+                idx = fut2idx[fut]
+                try:
+                    results[idx] = (fut.result(timeout=DIGEST_LLM_TIMEOUT_SEC + 30), "")
+                except Exception as e:
+                    logger.error("[DIGEST] 会话 '%s' 单独摘要失败: %s", active[idx].name, e)
+                    results[idx] = ("", str(e)[:200])
+                self._tc_update(task_id, progress=f'逐会话摘要 ({len(results)}/{len(active)})')
+
+        sections = []
+        failed = []
+        for idx, unit in enumerate(active):
+            text, err = results.get(idx, ("", "内部错误：结果丢失"))
+            if err:
+                failed.append(unit.name)
+            sections.append((unit, text, err))
+
+        body = concat_sections(sections)
+        if failed and len(failed) == len(active):
+            # 全部失败 → 沿用既有的"摘要生成失败"前缀判定，让上层 fail 任务
+            detail = "; ".join(f"{u.name}: {e}" for (u, _t, e) in sections if e)
+            body = f"摘要生成失败: {detail}"
+        elif failed:
+            logger.warning("[DIGEST] 分组 '%s' 有 %d/%d 个会话摘要失败: %s",
+                           dg.name, len(failed), len(active), failed)
+        return body, self._plan_stats(plan, failed=failed)
+
+    def _summarize_one_chat(self, dg: DigestGroup, unit, system_prompt: str) -> str:
+        """单会话摘要单元。失败时抛异常，由 _render_per_chat 记为该会话的错误。"""
+        prompt = build_digest_prompt(dg, unit.messages)
+        extra = {
+            "group_id": dg.id,
+            "group_name": dg.name,
+            "digest_mode": "per_chat",
+            "chat_id": unit.chat_id,
+            "chat_name": unit.name,
+            "msg_count": len(unit.messages),
+            "dropped": unit.dropped,
+            "lookback_hours": dg.lookback_hours,
+        }
+        return self._call_digest_llm(dg, system_prompt, prompt, extra, reraise=True)
+
+    def _digest_system_prompt(self, dg: DigestGroup, packed: bool) -> str:
+        """custom_prompt 完全替代默认指令；style 预设追加；打包时再追加输出契约。"""
+        if dg.profile and dg.profile.custom_prompt:
             system_prompt = dg.profile.custom_prompt
-            logger.info("[DIGEST] Using custom system prompt for '%s' (len=%d)",
-                        dg.name, len(system_prompt))
         else:
             system_prompt = DIGEST_SYSTEM_PROMPT
-            # Append style preset if configured
             style = dg.profile.style if dg.profile else ""
             if style and style in STYLE_PRESETS:
                 system_prompt += STYLE_PRESETS[style]
-                logger.info("[DIGEST] Using default system prompt + style '%s' for '%s'",
-                            style, dg.name)
-            else:
-                logger.info("[DIGEST] Using default system prompt for '%s'", dg.name)
+        if packed:
+            # 输出契约是**结构约束**而不是风格指令，所以即使 custom_prompt
+            # 完全替代了摘要指令也必须追加，否则多个会话会被混写成一篇。
+            system_prompt += PACKED_OUTPUT_CONTRACT
+        return system_prompt
 
-        logger.info("[DIGEST] System prompt len=%d, User prompt len=%d for '%s'",
-                    len(system_prompt), len(prompt), dg.name)
+    def _call_digest_llm(self, dg: DigestGroup, system_prompt: str, prompt: str,
+                         extra: dict, reraise: bool) -> str:
+        """调 LLM 并记 llm 日志。
 
+        Args:
+            reraise: True 时普通失败向上抛（降级路径据此把单个会话标成失败段落）；
+                False 时转成"摘要生成失败: ..."字符串（打包/单会话路径沿用旧行为）。
+                LLMContextOverflowError 两种情况都向上抛 —— 调用方要据此降级。
+        """
+        llm_start = time.monotonic()
         try:
-            llm_start = time.monotonic()
-            digest_text = self._summarizer._call_digest_api(
+            text = self._summarizer._call_digest_api(
                 system_prompt,
                 [{"role": "user", "content": prompt}],
                 timeout=DIGEST_LLM_TIMEOUT_SEC,
             ) or "摘要生成失败"
-            llm_latency = (time.monotonic() - llm_start) * 1000
             log_llm_interaction(
                 backend=getattr(self._summarizer, "_backend_name", "unknown"),
                 call_type="group_digest",
                 model=getattr(self._summarizer, "model", "unknown"),
-                system_prompt=system_prompt,
-                user_prompt=prompt,
-                response=digest_text,
-                latency_ms=llm_latency,
-                extra={
-                    "group_id": chat_id,
-                    "group_name": dg.name,
-                    "chat_id": chat_id,
-                    "msg_count": len(filtered),
-                    "unread_only": dg.unread_only,
-                    "lookback_hours": dg.lookback_hours,
-                    "has_custom_prompt": bool(has_custom),
-                },
+                system_prompt=system_prompt, user_prompt=prompt, response=text,
+                latency_ms=(time.monotonic() - llm_start) * 1000, extra=extra,
             )
-            logger.info("[DIGEST] Step 4/7: LLM call success for '%s' — result len=%d, preview=%s",
-                         dg.name, len(digest_text), digest_text[:100].replace('\n', ' '))
+            logger.info("[DIGEST] LLM ok for '%s' — len=%d preview=%s",
+                        dg.name, len(text), text[:100].replace('\n', ' '))
+            return text
+        except LLMContextOverflowError as e:
+            log_llm_interaction(
+                backend=getattr(self._summarizer, "_backend_name", "unknown"),
+                call_type="group_digest",
+                model=getattr(self._summarizer, "model", "unknown"),
+                system_prompt=system_prompt, user_prompt=prompt,
+                response=f"[ContextOverflow: {e}]",
+                latency_ms=(time.monotonic() - llm_start) * 1000,
+                extra={**extra, "error": str(e), "prompt_tokens": e.prompt_tokens},
+            )
+            raise
         except Exception as e:
-            llm_latency = (time.monotonic() - llm_start) * 1000 if "llm_start" in locals() else 0
             log_llm_interaction(
                 backend=getattr(self._summarizer, "_backend_name", "unknown"),
                 call_type="group_digest",
                 model=getattr(self._summarizer, "model", "unknown"),
-                system_prompt=system_prompt,
-                user_prompt=prompt,
+                system_prompt=system_prompt, user_prompt=prompt,
                 response=f"[Error: {e}]",
-                latency_ms=llm_latency,
-                extra={
-                    "group_id": chat_id,
-                    "group_name": dg.name,
-                    "chat_id": chat_id,
-                    "msg_count": len(filtered),
-                    "error": str(e),
-                },
+                latency_ms=(time.monotonic() - llm_start) * 1000,
+                extra={**extra, "error": str(e)},
             )
-            logger.error("[DIGEST] Step 4/7: LLM call failed for '%s': %s", dg.name, e)
-            digest_text = f"摘要生成失败: {e}"
+            logger.error("[DIGEST] LLM call failed for '%s': %s", dg.name, e)
+            if reraise:
+                raise
+            return f"摘要生成失败: {e}"
 
-        # 5. Update memory — 仅在群记忆开关开启时更新
-        if dg.memory_enabled:
-            mem_system_prompt = "你是一个群聊记忆助手，负责记录群聊摘要要点。用中文，≤2000字。"
-            try:
-                mem_prompt = generate_memory_update_prompt(dg.memory, digest_text)
-                mem_start = time.monotonic()
-                new_memory = self._summarizer._call_chat_api(
-                    mem_system_prompt,
-                    [{"role": "user", "content": mem_prompt}],
-                )
-                mem_latency = (time.monotonic() - mem_start) * 1000
-                log_llm_interaction(
-                    backend=getattr(self._summarizer, "_backend_name", "unknown"),
-                    call_type="group_digest_memory",
-                    model=getattr(self._summarizer, "model", "unknown"),
-                    system_prompt=mem_system_prompt,
-                    user_prompt=mem_prompt,
-                    response=new_memory or "",
-                    latency_ms=mem_latency,
-                    extra={
-                        "group_id": dg.id,
-                        "group_name": dg.name,
-                        "existing_memory_len": len(dg.memory or ""),
-                    },
-                )
-                if new_memory:
-                    # 按 id 写回磁盘，而不是改内存对象再整份覆盖写配置。
-                    # 原写法在 WebUI 期间保存过配置时会静默丢掉这次记忆
-                    # （dg 属于旧 config 对象，落盘的却是新对象）。
-                    rev = update_digest_group_memory(dg.id, new_memory)
-                    dg.memory = new_memory[:MEMORY_MAX_CHARS]
-                    dg.memory_rev = rev
-                    logger.info("[DIGEST] Step 5/7: Memory updated for '%s' (%d chars, rev=%d)",
-                                dg.name, len(dg.memory), rev)
-                else:
-                    logger.warning("[DIGEST] Step 5/7: LLM 返回空记忆，保留原值 for '%s'", dg.name)
-            except Exception as e:
-                mem_latency = (time.monotonic() - mem_start) * 1000 if "mem_start" in locals() else 0
-                log_llm_interaction(
-                    backend=getattr(self._summarizer, "_backend_name", "unknown"),
-                    call_type="group_digest_memory",
-                    model=getattr(self._summarizer, "model", "unknown"),
-                    system_prompt=mem_system_prompt,
-                    user_prompt=generate_memory_update_prompt(dg.memory, digest_text) if dg.memory else "",
-                    response=f"[Error: {e}]",
-                    latency_ms=mem_latency,
-                    extra={
-                        "group_id": dg.id,
-                        "group_name": dg.name,
-                        "error": str(e),
-                    },
-                )
-                logger.warning("[DIGEST] Step 5/7: Memory update failed for '%s': %s", dg.name, e)
-        else:
-            logger.debug("[DIGEST] Step 5/7: Memory update skipped for '%s' (memory_enabled=false)", dg.name)
+    @staticmethod
+    def _plan_stats(plan, failed) -> dict:
+        return {
+            "digest_mode": plan.mode,
+            "degraded": plan.mode == "per_chat",
+            "msg_count": sum(len(u.messages) for u in plan.units),
+            "dropped_total": sum(u.dropped for u in plan.units),
+            # 取消息阶段就失败的会话也要暴露出来，否则它会从摘要里静默消失
+            "failed_chats": list(failed) + [u.name for u in plan.units if u.error],
+            "chat_names": [u.name for u in plan.units if u.messages],
+            "notes": list(plan.notes),
+        }
 
-        # 6. Push to outbox
+    @staticmethod
+    def _format_chat_names(names: list) -> str:
+        if not names:
+            return "（无）"
+        if len(names) <= 3:
+            return "、".join(names)
+        return "、".join(names[:3]) + f" 等 {len(names)} 个"
+
+    # ── 4/6 记忆 ────────────────────────────────────────────────────
+
+    def _update_group_memory(self, dg: DigestGroup, digest_text: str) -> None:
+        """摘要后更新组级记忆。仅在 memory_enabled 为真时执行。"""
+        if not dg.memory_enabled:
+            logger.debug("[DIGEST] Step 4/6: 记忆更新已跳过 for '%s' (memory_enabled=false)",
+                         dg.name)
+            return
+        mem_system_prompt = "你是一个群聊记忆助手，负责记录群聊摘要要点。用中文，≤2000字。"
+        mem_start = time.monotonic()
+        mem_prompt = generate_memory_update_prompt(dg.memory, digest_text)
+        try:
+            new_memory = self._summarizer._call_chat_api(
+                mem_system_prompt, [{"role": "user", "content": mem_prompt}])
+            log_llm_interaction(
+                backend=getattr(self._summarizer, "_backend_name", "unknown"),
+                call_type="group_digest_memory",
+                model=getattr(self._summarizer, "model", "unknown"),
+                system_prompt=mem_system_prompt, user_prompt=mem_prompt,
+                response=new_memory or "",
+                latency_ms=(time.monotonic() - mem_start) * 1000,
+                extra={"group_id": dg.id, "group_name": dg.name,
+                       "existing_memory_len": len(dg.memory or "")},
+            )
+            if new_memory:
+                # 按 id 写回磁盘，不改内存对象再整份覆盖写配置（见 config.mutate_config）
+                rev = update_digest_group_memory(dg.id, new_memory)
+                dg.memory = new_memory[:MEMORY_MAX_CHARS]
+                dg.memory_rev = rev
+                logger.info("[DIGEST] Step 4/6: 记忆已更新 for '%s' (%d chars, rev=%d)",
+                            dg.name, len(dg.memory), rev)
+            else:
+                logger.warning("[DIGEST] Step 4/6: LLM 返回空记忆，保留原值 for '%s'", dg.name)
+        except Exception as e:
+            log_llm_interaction(
+                backend=getattr(self._summarizer, "_backend_name", "unknown"),
+                call_type="group_digest_memory",
+                model=getattr(self._summarizer, "model", "unknown"),
+                system_prompt=mem_system_prompt, user_prompt=mem_prompt,
+                response=f"[Error: {e}]",
+                latency_ms=(time.monotonic() - mem_start) * 1000,
+                extra={"group_id": dg.id, "group_name": dg.name, "error": str(e)},
+            )
+            logger.warning("[DIGEST] Step 4/6: 记忆更新失败 for '%s': %s", dg.name, e)
+
+    # ── 5/6 + 6/6 落库与推送 ────────────────────────────────────────
+
+    def _publish_empty_outbox(self, dg: DigestGroup, units: list) -> None:
+        mode_label = "未读" if dg.unread_only else f"{dg.lookback_hours}h"
+        names = [u.name for u in units]
+        self._outbox.add(
+            notif_type="group_digest",
+            chat_id=dg.id,
+            group_name=dg.name,
+            title=f"📋 群聊摘要 · {dg.name} ({mode_label})",
+            content=json.dumps({
+                "group": dg.name,
+                "chats": names,
+                "lookback_hours": dg.lookback_hours,
+                "mode": mode_label,
+                "msg_count": 0,
+                "digest_mode": "none",
+                "degraded": False,
+                "dropped_total": 0,
+                "digest": "该时间窗口内无新消息，摘要跳过。",
+                "display": (f"📋 **分组:** {dg.name}\n"
+                            f"👥 **会话:** {self._format_chat_names(names)}\n"
+                            f"📊 **消息:** 0 条 | ⏰ **时间:** 近 {dg.lookback_hours}h\n\n"
+                            f"> 该时间窗口内无新消息，摘要跳过。"),
+            }, ensure_ascii=False),
+            priority="normal",
+        )
+
+    def _publish_outbox(self, dg: DigestGroup, digest_text: str, stats: dict):
+        """写 outbox。Returns (nid, title, content)。
+
+        chat_id 存**组 id**（与 OA 摘要用 oa.id 一致）：一次触发 = 一条记录
+        = 一个可重推单元。旧记录的 chat_id 仍是会话 id。
+        """
         mode_label = "未读" if dg.unread_only else f"{dg.lookback_hours}h"
         title = f"📋 群聊摘要 · {dg.name} ({mode_label})"
+        names = stats.get("chat_names", [])
         content = json.dumps({
             "group": dg.name,
+            "chats": names,
             "lookback_hours": dg.lookback_hours,
             "mode": mode_label,
-            "msg_count": len(filtered),
+            "msg_count": stats["msg_count"],
+            "digest_mode": stats["digest_mode"],
+            "degraded": stats["degraded"],
+            "dropped_total": stats["dropped_total"],
+            "failed_chats": stats["failed_chats"],
             "digest": digest_text,
-            "display": f"📋 **群聊:** {dg.name}\n📊 **消息:** {len(filtered)} 条 | ⏰ **时间:** 近 {dg.lookback_hours}h\n\n{digest_text}",
+            "display": (f"📋 **分组:** {dg.name}\n"
+                        f"👥 **会话:** {self._format_chat_names(names)}\n"
+                        f"📊 **消息:** {stats['msg_count']} 条 | ⏰ **时间:** 近 {dg.lookback_hours}h"
+                        f"{' | ⚠️ 已降级为逐会话' if stats['degraded'] else ''}\n\n{digest_text}"),
         }, ensure_ascii=False)
         nid = self._outbox.add(
             notif_type="group_digest",
@@ -731,15 +955,16 @@ class DigestScheduler:
             content=content,
             priority="normal",
         )
-        logger.info("[DIGEST] Step 6/7: Outbox entry #%d created for '%s'", nid, dg.name)
-        self._tc_update(task_id, outbox_id=nid)
+        logger.info("[DIGEST] Step 5/6: Outbox entry #%d created for '%s'", nid, dg.name)
+        return nid, title, content
 
-        # Task progress: pushing
+    def _push_and_finish(self, dg: DigestGroup, nid: int, title: str, content: str,
+                         digest_text: str, task_id, stats: dict, start_ts: float) -> None:
+        self._tc_update(task_id, outbox_id=nid)
         self._tc_update(task_id, progress='推送中')
 
-        # Auto-deliver to every QR-bound channel; legacy push_target is only the old opt-in flag.
+        # 推给所有已扫码绑定的渠道；legacy push_target 只是旧的 opt-in 标记。
         try:
-            import json as _json
             from src.im.delivery import DeliveryRequest, DeliveryService, get_delivery_service
             from src.im.targets import bound_push_targets
             bound = bound_push_targets()
@@ -747,14 +972,12 @@ class DigestScheduler:
                 self._outbox.update_push_result(nid, "", "skipped", "未绑定任何推送渠道")
                 self._tc_push_result(task_id, "skipped", "未绑定任何推送渠道")
             else:
-                push_data = _json.loads(content) if isinstance(content, str) else content
+                push_data = json.loads(content) if isinstance(content, str) else content
                 push_text = push_data.get("display", content)
-                # All bound channels use the same product-wide WeChat/iLink
-                # text format; it is not selected by the first bound channel.
-                fmt_target = bound[0]
+                # 所有绑定渠道用同一套产品级文本格式，不由第一个渠道决定。
                 push_msg = DeliveryService.format_text("", title, push_text)
                 result = get_delivery_service().send_text(DeliveryRequest(
-                    platform=fmt_target,
+                    platform=bound[0],
                     text=push_msg,
                     source_type="group_digest",
                     source_id=str(nid),
@@ -764,6 +987,7 @@ class DigestScheduler:
                     conversation_key=dg.id,
                 ))
                 push_ok = result.get("success", False)
+                # 三态聚合的唯一实现是 delivery.aggregate_status，业务侧不得重写
                 push_status = result.get("status") or ("success" if push_ok else "failed")
                 push_err = "" if push_status == "success" else result.get("error", "")
                 self._outbox.update_push_result(
@@ -790,31 +1014,18 @@ class DigestScheduler:
                 pass
 
         elapsed = (time.monotonic() - start_ts) * 1000
-        # Task: completed or failed (if LLM error)
         if digest_text.startswith("摘要生成失败"):
             self._tc_fail(task_id, error=digest_text)
-            self._broadcast_task_update(task_id, 'group_digest', 'failed', '', dg.name, error=digest_text[:100])
+            self._broadcast_task_update(task_id, 'group_digest', 'failed', '', dg.name,
+                                        error=digest_text[:100])
         else:
-            # result 存完整摘要（不截断）——重推功能需要完整内容
-            self._tc_complete(task_id, result=digest_text if filtered else '',
-                              msg_count=len(filtered) if filtered else 0)
+            # result 存完整正文不截断 —— 重推的三级兜底会用到它
+            self._tc_complete(task_id, result=digest_text,
+                              msg_count=stats["msg_count"])
             self._broadcast_task_update(task_id, 'group_digest', 'completed', '完成', dg.name)
-        logger.info("[DIGEST] Pipeline completed for '%s' in %.0fms", dg.name, elapsed)
-
-    def _get_unread_count(self, chat_id: str) -> int:
-        """Get unread count for a chat from WCDB sessions."""
-        try:
-            from src.web.api_handlers import get_wcdb_client
-            client = get_wcdb_client()
-            if not client:
-                return 0
-            sessions = client.get_sessions(limit=1000)
-            for s in sessions:
-                if s.get("username") == chat_id:
-                    return int(s.get("unread_count", 0) or 0)
-        except Exception as e:
-            logger.warning("Failed to get unread count for %s: %s", chat_id, e)
-        return 0
+        logger.info("[DIGEST] Step 6/6: '%s' pipeline completed in %.0fms (mode=%s, %d 条消息, 裁剪 %d 条, 失败 %d 个会话)",
+                    dg.name, elapsed, stats["digest_mode"], stats["msg_count"],
+                    stats["dropped_total"], len(stats["failed_chats"]))
 
     def _generate_oa_digest(self, oa: OAGroup, task_id: int = None) -> None:
         """Generate OA digest for a scheduled OA group.
