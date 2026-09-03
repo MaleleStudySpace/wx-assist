@@ -271,21 +271,41 @@ WebUI 批量 `PUT /api/assistant/config` 用 `merge_digest_groups()` 合并，�
 
 群档案（style）是输出风格上下文，不应被自定义指令覆盖；custom_prompt 是用户对该群摘要的"额外要求"，作为 system 输入完全替代默认指令，让用户获得完全控制权。
 
+> **例外**：多会话打包时的 `PACKED_OUTPUT_CONTRACT` 仍然追加，见决策 6。
+
 ### 4. 风格预设作为 system 追加
 
 style 预设是轻量调整（行动项优先 / 完整复盘 / 极简速览），追加到默认 system 之后，不替代默认角色定义。与 custom_prompt 互斥（选了自定义就不叠加预设）。
 
-### 5. 无消息也入队
+### 5. 无消息也入队，但取消息失败不算无消息
 
 回溯窗口内无新消息时仍写一条 Outbox（标注"无新消息，摘要跳过"），让用户确认调度确实执行过，便于排查"为什么没收到摘要"。
+
+但**全部会话取消息失败**（DB 锁、连接断开等）时 `total_raw` 同样是 0，必须与"窗口内真的没消息"区分开：前者 `_tc_fail` 并把每个会话的错误写进 error，**不写 Outbox**。否则一次故障会变成一条"该时间窗口内无新消息"，用户会以为群里真的没人说话。部分会话失败则继续跑，失败的会话由 `failed_chats` 与正文里的 `（本次摘要失败：…）` 暴露。
+
+### 6. 打包输出契约是结构约束，不是风格指令
+
+`PACKED_OUTPUT_CONTRACT`（按会话分段 / 禁止跨会话合并 / 禁止漏群 / 每会话 ≤200 字）**即使用户设了 custom_prompt 也必须追加**。custom_prompt 替代的是"怎么摘要"，契约约束的是"输出必须分成几段"——少了它，6 个会话会被混写成一篇，`## 会话名` 的分段结构就没了。
+
+第 4 条"每会话 ≤200 字"是硬性的延迟护栏：实测延迟由输出长度决定（固定 ~18s + ~14ms/字），6 会话 × 200 字 ≈ 35s，在 180s 超时内余量充足；不限长时输出 2900 字就会撞旧的 60s。
+
+`single` 模式（组内只有一个有内容的会话）**不追加契约、不加分节标记**，prompt 与改造前逐字节一致。
+
+### 7. 一个分组一个 task_center 任务
+
+一次触发 = 一条 Outbox 记录 = 一个 task = 一个可重推单元。降级成逐会话只是内部实现细节，用户视角始终是"这个分组的一次摘要"。
+
+拆成 N 个 task 会破坏两处既有机制：重推正文的三级兜底（`outbox_id` → 时间窗匹配 → `task.result`）依赖"一个 task 一份完整正文"；推送三态（`delivery.aggregate_status`）是按一次 `send_text` 聚合的，天然对应"一组一次推送"。组内进度用 `update_task(progress=...)` 表达（`正在获取消息 (2/6)` → `超出预算，改为逐会话摘要 (3/6)` → `推送中`）。
 
 ## 代码位置
 
 | 组件 | 文件 |
 |------|------|
-| DigestScheduler | `src/assistant/scheduler.py` |
-| DigestGroup / GroupProfile | `src/assistant/config.py` |
-| 过滤 + prompt 构建 + 记忆更新 | `src/assistant/digest.py` |
+| DigestScheduler（编排：`_collect_chat_units` / `_render_digest` / `_render_packed` / `_render_per_chat` / `_publish_outbox` / `_push_and_finish`） | `src/assistant/scheduler.py` |
+| DigestGroup / DigestChat / GroupProfile / 迁移与校验 / `mutate_config` / 记忆窄接口 | `src/assistant/config.py` |
+| 过滤 + XML 清洗 + prompt 构建 + 记忆更新 + 预算降级（`plan_digest` / `trim_oldest` / `build_packed_prompt` / `concat_sections` / `digest_token_budget`） | `src/assistant/digest.py` |
+| LLM 异常（`LLMContextOverflowError` 触发降级） | `src/summarize/errors.py` |
 | Outbox | `src/assistant/outbox.py` |
+| 推送与三态聚合 | `src/im/delivery.py` |
 | iLink 推送 | `src/wechat/ilink_push.py` |
-| 前端 DigestGroupCard / Editor | `ui/src/components/AssistantPanel.jsx` |
+| 前端 DigestGroupCard / Editor / **MultiChatPicker**（多选会话） | `ui/src/components/AssistantPanel.jsx` |

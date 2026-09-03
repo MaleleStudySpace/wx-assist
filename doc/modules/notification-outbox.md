@@ -22,8 +22,8 @@
 |------|------|------|
 | id | INTEGER PK | 自增 ID |
 | type | TEXT | 通知类型 |
-| chat_id | TEXT | 相关会话 ID |
-| group_name | TEXT | 群显示名 |
+| chat_id | TEXT | 相关会话 ID。**例外**：`group_digest` 存**分组 id**（`dg_NNN`）、`oa_digest` 存公众号分组 id —— 一次触发 = 一条记录 = 一个可重推单元。分组化改造前的旧 `group_digest` 记录仍是会话 id，按会话筛选时需注意这个新旧差异 |
+| group_name | TEXT | 群显示名；`group_digest` 为**分组名** |
 | title | TEXT | 通知标题 |
 | content | TEXT | JSON 结构化内容 |
 | priority | TEXT | "high" / "normal" |
@@ -64,7 +64,14 @@
 各类型附加字段：
 
 - `keyword_alert`：`sender`、`keywords`、`message`
-- `group_digest`：`lookback_hours`、`mode`、`msg_count`、`digest`
+- `group_digest`：`chats`（组内会话名数组）、`lookback_hours`、`mode`、`msg_count`、`digest`、
+  `digest_mode`、`degraded`、`dropped_total`、`failed_chats`
+  - `group` 是**分组名**（不再是单个群名）
+  - `digest_mode`：`single`（组内只有 1 个有内容的会话）/ `packed`（多会话打包成一次 LLM 调用）/
+    `per_chat`（超预算降级为逐会话摘要后拼接）/ `none`（窗口内无新消息）
+  - `degraded` = `digest_mode == "per_chat"`，前端推送记录据此显示"· 已降级"
+  - `dropped_total`：为适配 token 预算被裁掉的最旧消息总条数（正文里也会逐会话披露）
+  - `failed_chats`：取消息或摘要失败的会话名；部分失败不影响其他会话出摘要
 - `oa_digest`：`articles_count`、`digest`
 - `oa_article_alert`：`time`、`article_title`、`digest`、`url`
 - `cron`：skill 执行结果文本（或 `[CRON 错误] ...` 错误信息）
