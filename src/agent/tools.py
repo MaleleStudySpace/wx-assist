@@ -177,15 +177,21 @@ class ToolExecutor:
         # ── run_oa_digest (消耗 AI，直接执行) ─────────────────────────
         r.register(
             name="run_oa_digest",
-            description="为指定公众号分组生成文章摘要。"
-                       "用户说'总结某某公众号'、'公众号有什么新文章'时调用。"
+            description="为指定公众号分组或公众号生成文章摘要。"
+                       "优先匹配已配置的公众号分组名称；若未命中则按公众号名称模糊查找。"
+                       "用户说'总结某某公众号'、'逛逛GitHub最近的文章'时调用。"
                        "直接执行，不需用户二次确认。",
             parameters={
                 "type": "object",
                 "properties": {
                     "group_name": {
                         "type": "string",
-                        "description": "公众号分组名称",
+                        "description": "公众号分组名称或公众号名称，例如'技术前沿'、'逛逛GitHub'",
+                    },
+                    "hours": {
+                        "type": "integer",
+                        "description": "回看最近多少小时的文章，默认 24（仅 ad-hoc 模式生效，已配置分组走配置里的 lookback）",
+                        "default": 24,
                     },
                 },
                 "required": ["group_name"],
@@ -794,27 +800,68 @@ class ToolExecutor:
 
     # ── run_oa_digest (写操作) ─────────────────────────────────────
 
-    def _handle_run_oa_digest(self, group_name: str) -> str:
-        """为指定公众号分组生成文章摘要。"""
+    def _handle_run_oa_digest(self, group_name: str, hours: int = 24) -> str:
+        """为指定公众号分组或公众号生成文章摘要。
+
+        优先匹配已配置的 oa_groups；未命中则按公众号名称模糊查找 oa_accounts，
+        构造临时 OAGroup 走 ad-hoc 管线。
+        """
         try:
             cfg = load_assistant_config()
         except Exception as e:
             return f"读取配置失败: {e}"
 
+        # ── ① 优先匹配已配置的分组 ──
         oa_group = None
         for g in cfg.oa_groups:
             if g.name.lower() == group_name.lower():
                 oa_group = g
                 break
+
+        hours_override = None
+
         if not oa_group:
-            names = '，'.join(g.name for g in cfg.oa_groups) if cfg.oa_groups else '无配置'
-            return f"未找到公众号分组「{group_name}」\n已配置的分组: {names}"
+            # ── ② ad-hoc: 按公众号名称模糊查找 ──
+            if not self._content_cache:
+                names = '，'.join(g.name for g in cfg.oa_groups) if cfg.oa_groups else '无'
+                return (f"未找到公众号分组「{group_name}」\n"
+                        f"已配置的分组: {names}\n"
+                        f"（内容缓存未就绪，无法按公众号名称查找）")
+
+            try:
+                rows = self._content_cache.query(
+                    "SELECT gh_id, display_name FROM oa_accounts WHERE display_name LIKE ?",
+                    [f"%{group_name}%"],
+                )
+            except Exception as e:
+                return f"查询公众号失败: {e}"
+
+            if not rows:
+                names = '，'.join(g.name for g in cfg.oa_groups) if cfg.oa_groups else '无'
+                return f"未找到公众号「{group_name}」\n已配置的分组: {names}"
+
+            if len(rows) > 1:
+                matches = '\n'.join(f"  - {r['display_name']}" for r in rows[:10])
+                return f"找到多个匹配的公众号，请更精确地指定：\n{matches}"
+
+            # 构造临时 OAGroup（不写入配置，仅内存中存在）
+            from src.assistant.config import OAGroup
+            gh_id = rows[0]['gh_id']
+            display_name = rows[0]['display_name']
+            oa_group = OAGroup(
+                id=f"adhoc_{gh_id}",
+                name=display_name,
+                accounts=[gh_id],
+                lookback_hours=hours,
+                lookback_mode="manual",
+            )
+            hours_override = hours
 
         tid = None
         if self._task_center:
             try:
                 tid = self._task_center.create_task(
-                    'oa_digest', 'agent', oa_group.id, group_name,
+                    'oa_digest', 'agent', oa_group.id, oa_group.name,
                 )
             except Exception:
                 pass
@@ -823,8 +870,10 @@ class ToolExecutor:
             return "摘要调度器未就绪"
 
         try:
-            self._scheduler._generate_oa_digest(oa_group, task_id=tid)
-            return f"✅ 已开始为「{group_name}」生成摘要，完成后将自动推送到消息推送页中已绑定的平台。"
+            self._scheduler._generate_oa_digest(
+                oa_group, task_id=tid, hours_override=hours_override,
+            )
+            return f"✅ 已开始为「{oa_group.name}」生成摘要，完成后将自动推送到消息推送页中已绑定的平台。"
         except Exception as e:
             logger.warning("run_oa_digest failed: %s", e)
             if tid:

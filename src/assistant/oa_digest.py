@@ -277,14 +277,18 @@ class OADigestService:
         scrape_full: bool = True,
         max_content_chars: int = 8000,
         force: bool = False,
+        hours_override: int = None,
+        group: 'OAGroup' = None,
     ) -> dict:
         """Generate a digest for an OA group.
 
         Args:
-            group_id: The group to generate digest for
+            group_id: The group to generate digest for (ignored if group is provided)
             scrape_full: Whether to scrape full article content
             max_content_chars: Max chars per article for LLM input
             force: If True, skip dedup filter (allow re-generating already-digested articles)
+            hours_override: If set, override the lookback window (hours) regardless of group config
+            group: If provided, use this OAGroup directly instead of looking up by group_id
 
         Returns:
             dict with: success, group_id, articles_count, digest_text, errors
@@ -294,10 +298,11 @@ class OADigestService:
         # Cleanup stale history entries on each digest run
         self._history.cleanup()
 
-        manager = OAGroupManager(self._config)
-        group = manager.get_group(group_id)
-        if not group:
-            return {"success": False, "error": f"Group {group_id} not found"}
+        if group is None:
+            manager = OAGroupManager(self._config)
+            group = manager.get_group(group_id)
+            if not group:
+                return {"success": False, "error": f"Group {group_id} not found"}
 
         if not self._client and not self._cache:
             return {"success": False, "error": "WCDB client not available"}
@@ -359,7 +364,7 @@ class OADigestService:
             }
 
         # Apply lookback time filter
-        lookback_hours = self._calc_effective_lookback(group)
+        lookback_hours = hours_override if hours_override else self._calc_effective_lookback(group)
         if lookback_hours > 0:
             cutoff = time.time() - lookback_hours * 3600
             before_count = len(all_articles)

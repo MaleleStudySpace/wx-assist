@@ -1048,11 +1048,17 @@ class DigestScheduler:
                     dg.name, elapsed, stats["digest_mode"], stats["msg_count"],
                     stats["dropped_total"], len(stats["failed_chats"]))
 
-    def _generate_oa_digest(self, oa: OAGroup, task_id: int = None) -> None:
+    def _generate_oa_digest(self, oa: OAGroup, task_id: int = None,
+                            hours_override: int = None) -> None:
         """Generate OA digest for a scheduled OA group.
 
         Uses OADigestService to generate the digest, then pushes to
         outbox and optionally to WeChat via iLink.
+
+        Args:
+            oa: The OA group to generate digest for
+            task_id: Optional task center task ID
+            hours_override: If set, override the lookback window (hours)
         """
         from .oa_digest import OADigestService
 
@@ -1078,7 +1084,7 @@ class DigestScheduler:
         self._broadcast_task_update(task_id, 'oa_digest', 'running', 'AI 生成摘要中', oa.name)
 
         service = OADigestService(self._config, client, summarizer=self._summarizer)
-        result = service.generate_digest(oa.id)
+        result = service.generate_digest(oa.id, hours_override=hours_override, group=oa)
 
         # 失败自动重试一次
         if not result.get("success", False):
@@ -1088,7 +1094,7 @@ class DigestScheduler:
             self._broadcast_task_update(task_id, 'oa_digest', 'running', '重试中', oa.name)
             import time as _rt
             _rt.sleep(30)
-            result = service.generate_digest(oa.id, force=True)
+            result = service.generate_digest(oa.id, force=True, hours_override=hours_override, group=oa)
 
         if not result.get("success", False):
             error_msg = result.get("error", "摘要生成失败")
