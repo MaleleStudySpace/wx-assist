@@ -152,7 +152,8 @@ class ToolExecutor:
         # ── run_digest (消耗 AI，直接执行) ────────────────────────────
         r.register(
             name="run_digest",
-            description="为指定群聊手动生成近期消息摘要。"
+            description="为指定分组或群聊手动生成近期消息摘要。"
+                       "优先匹配定时分组名称；若未命中则按单个群聊名称查找。"
                        "用户说'总结一下某某群'、'群里说了什么'时调用。"
                        "直接执行，不需用户二次确认。",
             parameters={
@@ -160,11 +161,11 @@ class ToolExecutor:
                 "properties": {
                     "group_name": {
                         "type": "string",
-                        "description": "群聊名称，例如'项目群'、'技术交流群'",
+                        "description": "分组名称或群聊名称，例如'聚沙成塔'、'项目群'",
                     },
                     "hours": {
                         "type": "integer",
-                        "description": "回看最近多少小时的消息，默认 6",
+                        "description": "回看最近多少小时的消息，默认 6（仅在单聊回退时生效，分组走配置里的 lookback_hours）",
                         "default": 6,
                     },
                 },
@@ -241,9 +242,9 @@ class ToolExecutor:
         # ── add_digest (写操作，需 confirm) ─────────────────────────
         r.register(
             name="add_digest",
-            description="【群聊定时摘要】为指定群聊配置定时消息摘要。"
-                       "配置后，每天在设定时间自动生成该群的聊天摘要并自动推送到消息推送页中已绑定的平台。"
-                       "如果该群已存在定时摘要配置，则更新已有配置。"
+            description="【分组定时摘要】为指定群聊配置定时消息摘要。"
+                       "配置后，每天在设定时间自动生成该分组的聊天摘要并自动推送到消息推送页中已绑定的平台。"
+                       "如果该群聊已属于某个定时分组，则更新该分组的配置（影响分组内所有会话）。"
                        "用户说'每天早上9点给我发群摘要'、'帮我总结项目群的消息'时调用。"
                        "这是写操作，会修改系统配置。"
                        "调用前需明确：群聊名称、生成时间（HH:MM）。",
@@ -252,7 +253,7 @@ class ToolExecutor:
                 "properties": {
                     "group_name": {
                         "type": "string",
-                        "description": "群聊名称，例如'项目群'、'技术交流群'",
+                        "description": "群聊名称，例如'项目群'、'技术交流群'。如果该群已属于某个分组，会更新整个分组",
                     },
                     "schedule": {
                         "type": "string",
@@ -711,12 +712,34 @@ class ToolExecutor:
         if not self._store:
             return "无法生成摘要：数据库未就绪"
 
-        # 查找 chat_id（直接查 messages 表）
+        # ── 优先匹配定时分组 ──
+        dg = self._resolve_digest_group(group_name)
+        if dg is not None:
+            if not self._scheduler:
+                return "摘要调度器未就绪"
+            tid = None
+            if self._task_center:
+                try:
+                    tid = self._task_center.create_task(
+                        'group_digest', 'agent', dg.id, dg.name,
+                    )
+                    self._task_center.update_task(tid, status='running', progress='获取消息中')
+                except Exception:
+                    pass
+            try:
+                self._scheduler._generate_digest(dg, task_id=tid)
+                return f"✅ 已开始为「{dg.name}」生成摘要，完成后将自动推送到已绑定平台。"
+            except Exception as e:
+                logger.warning("run_digest (group) failed: %s", e)
+                if tid:
+                    self._task_center.fail_task(tid, error=str(e))
+                return f"摘要生成失败: {e}"
+
+        # ── 回退：单聊模式（未配置分组的群聊）──
         chat_id = self._resolve_chat_id(group_name)
         if not chat_id:
-            return f"未找到「{group_name}」的消息记录"
+            return f"未找到「{group_name}」的分组或消息记录"
 
-        # 创建 TaskCenter 任务
         tid = None
         if self._task_center:
             try:
@@ -896,16 +919,20 @@ class ToolExecutor:
                     push_target=push_target,
                     enabled=True,
                 ))
-                outcome.update(created=True, name=group_name)
+                outcome.update(created=True, name=group_name, chats=1,
+                               chat_names=[group_name])
                 return
+            old_schedule = ', '.join(owner.schedule) if owner.schedule else '无'
+            old_cron = owner.cron_expr or '无'
+            chat_names = [c.name or c.chat_id for c in owner.chats]
             owner.schedule = [schedule]
             owner.cron_expr = cron_expr
             owner.lookback_hours = lookback_hours
             owner.push_target = push_target
             owner.enabled = True
-            # 用该会话所属分组的真实名字回复，别让用户以为新建了一个组
             outcome.update(created=False, name=owner.name,
-                           chats=len(owner.chats))
+                           chats=len(owner.chats), chat_names=chat_names,
+                           old_schedule=old_schedule, old_cron=old_cron)
 
         try:
             cfg = mutate_config(_apply)
@@ -917,15 +944,25 @@ class ToolExecutor:
             self._scheduler.update_config(cfg)
 
         name = outcome["name"]
-        head = (f"✅ 已为「{name}」配置群聊定时摘要"
-                if outcome["created"] else
-                f"✅ 已更新「{name}」的群聊定时摘要（该分组共 {outcome['chats']} 个会话）")
-        return (
-            f"{head}\n"
-            f"📅 时间: 每天 {schedule}\n"
-            f"⏱ 回看: 最近 {lookback_hours} 小时\n"
-            f"📮 推送: 自动推送到已绑定平台"
-        )
+        if outcome["created"]:
+            return (
+                f"✅ 已为「{name}」配置分组定时摘要\n"
+                f"📅 时间: 每天 {schedule}\n"
+                f"⏱ 回看: 最近 {lookback_hours} 小时\n"
+                f"📮 推送: 自动推送到已绑定平台"
+            )
+        lines = [f"✅ 已更新「{name}」的分组定时摘要"]
+        old_sched = outcome.get("old_schedule", "")
+        if old_sched and old_sched != schedule:
+            lines.append(f"📅 时间: {old_sched} → {schedule}")
+        else:
+            lines.append(f"📅 时间: {schedule}")
+        lines.append(f"⏱ 回看: 最近 {lookback_hours} 小时")
+        lines.append(f"📮 推送: 自动推送到已绑定平台")
+        chat_names = outcome.get("chat_names", [])
+        if len(chat_names) > 1:
+            lines.append(f"📋 分组包含 {outcome['chats']} 个会话: {', '.join(chat_names)}")
+        return '\n'.join(lines)
 
     # ── add_oa_scheduled_digest (写操作) ────────────────────────────
 
@@ -1095,6 +1132,28 @@ class ToolExecutor:
         return "\n".join(lines)
 
     # ── Internal helpers ──────────────────────────────────────────────
+
+    def _resolve_digest_group(self, group_name: str):
+        """Match *group_name* against configured digest_groups.
+
+        Returns the DigestGroup on exact or case-insensitive name match,
+        or None if no group matches.
+        """
+        try:
+            cfg = load_assistant_config()
+        except Exception as e:
+            logger.warning("resolve_digest_group: load config failed: %s", e)
+            return None
+
+        target = group_name.strip()
+        for dg in cfg.digest_groups:
+            if dg.name == target:
+                return dg
+        lowered = target.lower()
+        for dg in cfg.digest_groups:
+            if dg.name.lower() == lowered:
+                return dg
+        return None
 
     def _resolve_chat_id(self, group_name: str) -> str | None:
         """Resolve a chat display name to its chat_id.

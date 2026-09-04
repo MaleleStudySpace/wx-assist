@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .config import AssistantConfig, DigestGroup, memory_char_budget
+from .config import DigestGroup, memory_char_budget
 
 logger = logging.getLogger(__name__)
 
@@ -448,8 +448,8 @@ def plan_digest(units: list, budget: int, memory_tokens: int = 0) -> DigestPlan:
     """判定这一轮该打包还是降级，并按需裁剪最旧消息。
 
     四个分支：
-      1. 只有一个有内容的会话 → `single`，**不加分节标记、不追加输出契约**，
-         prompt 与改造前逐字节一致（迁移后线上分组都是单会话，升级当天零行为变化）
+      1. 只有一个有内容的会话 → `single`，追加 `SINGLE_HEADING_CONTRACT` 点名会话
+         （避免记忆跨会话污染；不再保证与改造前逐字节一致）
       2. 全部装得下 → `packed`，一次调用
       3. 小幅超限（≤ PACKED_TRIM_SLACK_RATIO）→ 按占比均摊裁最旧，仍 `packed`
       4. 大幅超限 → `per_chat`，每会话独享完整 available，自身超限再裁

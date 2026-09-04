@@ -60,8 +60,8 @@ class TaskCenter:
 
     Usage:
         tc = TaskCenter()
-        tid = tc.create_task('group_digest', 'manual', 'xxx@chatroom', '测试群')
-        tc.update_task(tid, status='running', progress='正在获取消息')
+        tid = tc.create_task('group_digest', 'manual', 'dg_001', '聚沙成塔')
+        tc.update_task(tid, status='running', progress='正在获取消息 (1/3)')
         tc.complete_task(tid, result='摘要生成完成', msg_count=42)
     """
 

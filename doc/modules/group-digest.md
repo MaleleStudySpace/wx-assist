@@ -24,7 +24,7 @@ _generate_digest(dg)
                                 → unread_only 按会话各自切尾部（未读数一次拉全表）
                                 → filter_messages()（噪音 + 媒体占位 + XML 清洗）
     2/6 plan_digest()           估算 token → 判定 single / packed / per_chat
-    3/6 _render_digest()        ├─ single   → 1 次 LLM，prompt 与改造前逐字节一致
+    3/6 _render_digest()        ├─ single   → 1 次 LLM，追加 SINGLE_HEADING_CONTRACT 点名会话
                                 ├─ packed   → 1 次 LLM，多会话分节 + 输出契约
                                 │             被 provider 拒（上下文超限）→ 就地转 per_chat
                                 └─ per_chat → N 次 LLM（并发 3）+ concat_sections 纯拼接
@@ -175,7 +175,7 @@ _generate_digest(dg)
 
 | 分支 | 条件 | 行为 |
 |------|------|------|
-| `single` | 有内容的会话只有 1 个 | 1 次调用，**不加分节标记、不追加输出契约**，prompt 与改造前逐字节一致 |
+| `single` | 有内容的会话只有 1 个 | 1 次调用，追加 `SINGLE_HEADING_CONTRACT` 点名会话（避免记忆跨会话污染） |
 | `packed` | `total ≤ available` | 1 次调用，多会话分节 |
 | `packed`（裁剪后） | 超限 ≤ `PACKED_TRIM_SLACK_RATIO(0.20)` | 按各会话占比均摊裁最旧，仍 1 次调用 |
 | `per_chat` | 超限 > 20%，或均摊后被 `MIN_UNIT_TOKENS(200)` 地板顶住仍超限 | N 次调用（并发 `DIGEST_PER_CHAT_WORKERS=3`）+ 纯拼接 |

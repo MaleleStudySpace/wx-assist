@@ -524,17 +524,6 @@ export default function AssistantPanel() {
     update('alert_groups', next)
   }
 
-  function applyGroupToDigest(index, chatId) {
-    const selected = findGroup(chatId)
-    const next = [...(config.digest_groups || [])]
-    next[index] = {
-      ...next[index],
-      chat_id: chatId,
-      group_name: selected?.group_name || next[index].group_name || '',
-    }
-    update('digest_groups', next)
-  }
-
   async function save() {
     await doSave(config)
   }

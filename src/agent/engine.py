@@ -252,7 +252,8 @@ class AgentEngine:
 
             # ── Process tool calls ────────────────────────────────
             # 1) Check for confirm_action (intercept before execution)
-            # 2) Check requires_confirm against bypass flag
+            # 2) Check requires_confirm — only gates config/file-changing writes,
+            #    NOT pipeline triggers like run_digest/run_oa_digest
 
             with self._state_lock:
                 bypass_this_round = conversation_key in self._bypass_confirms

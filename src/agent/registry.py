@@ -45,7 +45,10 @@ class ToolDef:
     description: str
     parameters: dict  # JSON Schema for the tool's arguments
     handler: Handler  # Synchronous function that takes **args and returns str
-    requires_confirm: bool = False  # Write operations need user confirmation
+    # Only for config/file-changing write operations (add_digest, add_alert, etc.).
+    # Pipeline triggers (run_digest, run_oa_digest) do NOT need confirmation —
+    # they invoke existing pipelines without modifying persistent state.
+    requires_confirm: bool = False
 
     def to_openai_schema(self) -> dict:
         """Convert to OpenAI function calling format."""
@@ -81,7 +84,9 @@ class ToolRegistry:
             description: What the tool does and when to call it.
             parameters: JSON Schema for arguments.
             handler: Synchronous function that takes **args and returns str.
-            requires_confirm: True if this is a write operation.
+            requires_confirm: True only for config/file-changing write operations
+                (add_digest, add_alert, add_oa_monitor, etc.). Pipeline triggers
+                like run_digest/run_oa_digest do NOT need confirmation.
         """
         if name in self._tools:
             logger.warning("Overwriting existing tool: %s", name)
