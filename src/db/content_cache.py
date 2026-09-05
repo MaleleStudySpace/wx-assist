@@ -742,7 +742,7 @@ class ContentCache:
                             "SELECT COUNT(*) AS c FROM oa_cache WHERE content_status=0"
                         )["c"]
                         logger.info(
-                            "[CACHE] RAG OA 原文追加索引中: 已处理 %d 篇，剩余 %d 篇待抓",
+                            "[CACHE] 公众号原文 本地缓存中: 已处理 %d 篇，剩余 %d 篇待抓",
                             self._fetcher_count, _pending,
                         )
                     except Exception:
