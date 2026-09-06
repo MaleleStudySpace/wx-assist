@@ -4783,6 +4783,8 @@ def handle_oa_digest_run(params, config: AssistantConfig):
         _grp = _mgr.get_group(group_id)
         if _grp:
             _group_name = _grp.name
+            if not _grp.enabled:
+                return {"ok": False, "error": "公众号分组已停用"}
     except Exception:
         pass
 
