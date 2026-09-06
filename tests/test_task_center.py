@@ -152,6 +152,69 @@ class TestTaskCenter(unittest.TestCase):
         task = self.tc.get_task(tid)
         self.assertEqual(task['outbox_id'], 42)
 
+    def test_get_latest_completed_digest_exact_group_and_scheduled_only(self):
+        """摘要查询只返回精确分组的定时任务，且不受推送状态影响。"""
+        scheduled = self.tc.create_task('oa_digest', 'scheduler', 'oa-1', '开源项目')
+        self.tc.complete_task(scheduled, result='完整公众号摘要' * 200, articles_count=3)
+        self.tc.update_push_result(scheduled, 'failed', '推送失败')
+
+        manual = self.tc.create_task('oa_digest', 'manual', 'oa-1', '开源项目')
+        self.tc.complete_task(manual, result='手动生成的更新摘要')
+
+        other = self.tc.create_task('oa_digest', 'scheduler', 'oa-2', '其他分组')
+        self.tc.complete_task(other, result='不应返回')
+
+        latest = self.tc.get_latest_completed_digest('oa_digest', '开源项目')
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest['id'], scheduled)
+        self.assertEqual(latest['source'], 'scheduler')
+        self.assertEqual(latest['push_status'], 'failed')
+        self.assertEqual(len(latest['result']), len('完整公众号摘要' * 200))
+
+    def test_get_latest_completed_digest_supports_group_digest(self):
+        task_id = self.tc.create_task(
+            'group_digest', 'catchup', 'dg-1', '技术交流群'
+        )
+        self.tc.complete_task(task_id, result='群聊摘要正文', msg_count=12)
+
+        latest = self.tc.get_latest_completed_digest(
+            'group_digest', '技术交流群'
+        )
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest['id'], task_id)
+        self.assertEqual(latest['msg_count'], 12)
+        self.assertEqual(latest['result'], '群聊摘要正文')
+
+    def test_get_latest_completed_digest_excludes_running_and_expired(self):
+        running = self.tc.create_task('oa_digest', 'scheduler', 'oa-1', '开源项目')
+        self.tc.update_task(running, status='running')
+        self.assertIsNone(
+            self.tc.get_latest_completed_digest('oa_digest', '开源项目')
+        )
+
+        completed = self.tc.create_task('oa_digest', 'scheduler', 'oa-1', '开源项目')
+        self.tc.complete_task(completed, result='过期摘要')
+        import sqlite3
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute(
+                "UPDATE task_center SET created_at=? WHERE id=?",
+                ('2020-01-01T00:00:00', completed),
+            )
+            conn.commit()
+        self.assertIsNone(
+            self.tc.get_latest_completed_digest(
+                'oa_digest', '开源项目', within_hours=48
+            )
+        )
+
+    def test_get_latest_completed_digest_rejects_unknown_type_or_blank_name(self):
+        self.assertIsNone(
+            self.tc.get_latest_completed_digest('cron', '开源项目')
+        )
+        self.assertIsNone(
+            self.tc.get_latest_completed_digest('oa_digest', '  ')
+        )
+
     def test_get_failed_push_tasks(self):
         # 推送失败（digest 类）
         t1 = self.tc.create_task('oa_digest', 'scheduler', 'g1', '群1')
