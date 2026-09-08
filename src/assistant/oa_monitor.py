@@ -126,6 +126,7 @@ class OAMonitorEngine:
                           if g.id == job.get("group_id") and g.enabled
                           and job.get("gh_id") in (g.accounts or [])), None)
             if job.get("state") == "suppressed":
+                self._content_cache.finish_oa_job(job["id"], token, "suppressed")
                 return
             if not config.assistant_enabled or not group:
                 self._content_cache.finish_oa_job(job["id"], token, "suppressed", "监控组已停用")
@@ -177,12 +178,24 @@ class OAMonitorEngine:
             "digest": digest, "url": url,
             "display": f"📰 **文章:** {title}\n🕐 **时间:** {time_str}\n\n{digest}\n\n🔗 **原文链接:** {url}",
         }, ensure_ascii=False)
-        nid = self._outbox.add("oa_article_alert", group.name or source, notif_title, content,
-                                priority="high", chat_id=job.get("gh_id", ""), url=url)
-        task_id = self._task_center.create_task(
-            "oa_article_alert", "system", job.get("gh_id", ""),
-            f"{source} · {title}", outbox_id=nid) if self._task_center else None
-        self._content_cache.update_oa_job_links(job["id"], outbox_id=nid, task_id=task_id or 0)
+        existing = self._outbox.get_by_url(url, "oa_article_alert") if self._outbox else None
+        if existing and existing.get("push_status") in ("success", "partial"):
+            self._content_cache.finish_oa_job(job["id"], job["lease_token"], "sent")
+            return
+        if existing:
+            nid = int(existing["id"])
+            # 复用失败通知时直接使用其原始 payload，避免重试期间摘要内容漂移。
+            notif_title = existing.get("title") or notif_title
+            content = existing.get("content") or content
+        else:
+            nid = self._outbox.add("oa_article_alert", group.name or source, notif_title, content,
+                                    priority="high", chat_id=job.get("gh_id", ""), url=url)
+        task_id = int(job.get("task_id") or 0)
+        if not task_id and self._task_center:
+            task_id = self._task_center.create_task(
+                "oa_article_alert", "system", job.get("gh_id", ""),
+                f"{source} · {title}", outbox_id=nid) or 0
+        self._content_cache.update_oa_job_links(job["id"], outbox_id=nid, task_id=task_id)
         status, error = self._push_to_wechat(nid, group.name or source, notif_title, content, group.push_target)
         if task_id:
             self._task_center.complete_task(task_id, result={

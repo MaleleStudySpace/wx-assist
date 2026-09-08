@@ -947,8 +947,8 @@ class ContentCache:
         except Exception as e:
             logger.warning("[CACHE] OA 全文任务补建失败: %s", e)
 
-
-        # 总开关关闭 → 不抓取（线程空闲）
+    def _fetch_one_content(self):
+        """抓取一篇待抓取的文章全文。"""
         if not self._full_text_enabled:
             return
         # 忽略列表 → 查询排除这些公众号
