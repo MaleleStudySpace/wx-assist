@@ -651,7 +651,8 @@ class Bot:
                         logger.warning("[CACHE] WCDB 不可用，全量同步跳过")
                         return
 
-                    # 全量同步（三源）— 已有缓存则跳过，避免重启重复拉取
+                    # 首次缓存同步（三源）。OA 历史文章只进缓存，不创建即时提醒；
+                    # 统一扫描器随后只处理最新文章并建立即时提醒任务。
                     try:
                         _cnt = content_cache.query("SELECT COUNT(*) as c FROM oa_cache")[0]["c"]
                         if _cnt == 0:
@@ -725,32 +726,8 @@ class Bot:
                 threading.Thread(target=_fav_timer, daemon=True,
                                  name="fav-sync-timer").start()
 
-                # ── OA 60s 增量定时器（TaskCenter 追踪） ──
-                _oa_tick = [0]
-                def _oa_timer():
-                    import time as _t
-                    logger.info("[CACHE] OA 增量同步定时器已启动")
-                    while True:
-                        _t.sleep(60)
-                        try:
-                            from src.web.api_handlers import get_wcdb_client
-                            _c = get_wcdb_client()
-                            if _c:
-                                _n = content_cache.sync_oa_incremental(_c, task_center)
-                                _oa_tick[0] += 1
-                                if _oa_tick[0] % 60 == 0:
-                                    logger.info("[CACHE] OA 增量同步活检查: tick=%d, last_n=%d",
-                                                 _oa_tick[0], _n)
-                                if _n > 0 and rag_engine:
-                                    content_cache.index_to_rag(rag_engine, "oa")
-                            else:
-                                logger.warning("[CACHE] OA 增量同步: get_wcdb_client 返回 None")
-                        except Exception as e:
-                            logger.warning('[CACHE] OA 增量同步异常: %s', e)
-                        except BaseException as be:
-                            logger.critical('[CACHE] OA 增量同步线程崩溃(BaseException): %s', be)
-                threading.Thread(target=_oa_timer, daemon=True,
-                                 name="oa-sync-timer").start()
+                # ── OA 60s 增量扫描已统一由 OAMonitorEngine 负责 ──
+                # ContentCache 只提供缓存/任务存储，避免第二条 WCDB 文章扫描链路。
 
                 # ── OA 账号 30min 刷新定时器 ──
                 def _oa_accounts_timer():
@@ -879,6 +856,11 @@ class Bot:
                         pass
                 except Exception:
                     pass
+            if content_cache is not None:
+                try:
+                    content_cache.stop_oa_content_fetcher()
+                except Exception as e:
+                    logger.warning("[CACHE] OA 全文 worker stop error: %s", e)
             if assistant_scheduler is not None:
                 try:
                     assistant_scheduler.stop()

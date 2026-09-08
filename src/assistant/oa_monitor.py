@@ -58,73 +58,156 @@ class OAMonitorEngine:
         self._alerted_urls: dict[str, float] = {}
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._alert_worker: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._config_lock = threading.RLock()
 
     def start(self) -> None:
-        """Start the background polling thread."""
+        """Start the shared OA scanner and instant-alert worker."""
         if self._running:
             return
+        self._stop_event.clear()
         self._running = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True, name="oa-monitor")
         self._thread.start()
+        self._alert_worker = threading.Thread(
+            target=self._alert_worker_loop, daemon=True, name="oa-alert-worker"
+        )
+        self._alert_worker.start()
         logger.info("OAMonitorEngine started, monitoring %d groups", len(self._config.oa_monitor_groups))
 
     def stop(self) -> None:
-        """Stop the background polling thread."""
+        """Stop scanner and instant-alert worker without leaving old threads behind."""
         self._running = False
+        self._stop_event.set()
+        for thread in (self._thread, self._alert_worker):
+            if thread and thread.is_alive() and thread is not threading.current_thread():
+                thread.join(timeout=5)
+        self._thread = None
+        self._alert_worker = None
         logger.info("OAMonitorEngine stopping")
 
     def update_config(self, config: AssistantConfig) -> None:
         """Hot-reload configuration (called when user saves OA monitor settings)."""
-        self._config = config
+        with self._config_lock:
+            self._config = config
         logger.info("OAMonitorEngine config updated, now monitoring %d groups", len(config.oa_monitor_groups))
 
-    # ── Polling loop ────────────────────────────────────────────────────
+    def scan_now(self) -> int:
+        """Run one shared metadata scan; never performs HTTP/LLM/push work."""
+        client = self._get_wcdb_client()
+        if not client or not self._content_cache:
+            return 0
+        with self._config_lock:
+            config = self._config
+        return self._content_cache.scan_oa_incremental(
+            client, config=config, task_center=self._task_center,
+        )
+
+    def _alert_worker_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self._process_next_alert_job()
+            except Exception as e:
+                logger.error("OAMonitor alert worker error: %s", e, exc_info=True)
+            self._stop_event.wait(1)
+
+    def _process_next_alert_job(self) -> None:
+        if not self._content_cache:
+            return
+        job = self._content_cache.claim_oa_job("instant_alert", lease_seconds=180)
+        if not job:
+            return
+        token = job.get("lease_token", "")
+        try:
+            with self._config_lock:
+                config = self._config
+            group = next((g for g in config.oa_monitor_groups
+                          if g.id == job.get("group_id") and g.enabled
+                          and job.get("gh_id") in (g.accounts or [])), None)
+            if job.get("state") == "suppressed":
+                return
+            if not config.assistant_enabled or not group:
+                self._content_cache.finish_oa_job(job["id"], token, "suppressed", "监控组已停用")
+                return
+            self._process_alert_job(job, group, config)
+        except Exception as e:
+            delay = min(300, 10 * (2 ** min(int(job.get("attempts", 1)), 5)))
+            self._content_cache.finish_oa_job(job["id"], token, "retry", str(e), delay)
+            logger.warning("OAMonitor alert job failed: %s", e)
+
+    def _process_alert_job(self, job: dict, group, config) -> None:
+        """Build and deliver an alert from cached metadata, without HTTP/WCDB fetch."""
+        import json as _json
+        url = job["url"]
+        if self._outbox and self._outbox.query_by_url(url, "oa_article_alert", only_success=True):
+            self._content_cache.finish_oa_job(job["id"], job["lease_token"], "sent")
+            return
+        title = job.get("title") or "(无标题)"
+        source = job.get("source_name") or job.get("gh_id") or "公众号"
+        digest = job.get("digest") or ""
+        row = self._content_cache.query_one(
+            "SELECT full_content, llm_summary FROM oa_cache WHERE url=?", [url]
+        ) if self._content_cache else None
+        article_text = (row["full_content"] if row else "") or digest
+        llm_summary = ""
+        if article_text:
+            try:
+                from src.config import load_config
+                from src.summarize import create_summarizer
+                cfg = load_config()
+                smrz = create_summarizer(cfg)
+                prompt = f"{group.custom_prompt or '请用1-2句话总结以下公众号文章的核心内容'}\n\n{article_text}"
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as exe:
+                    fut = exe.submit(smrz.chat, message=prompt, context_messages=[],
+                                     requester_name="system", group_name=source)
+                    try:
+                        llm_summary = (fut.result(timeout=35) or "").strip()
+                    except Exception:
+                        llm_summary = ""
+            except Exception as e:
+                logger.debug("OAMonitor alert summary failed for '%s': %s", title[:30], e)
+        digest = llm_summary or digest or "（暂无文章摘要）"
+        ts = job.get("article_time") or job.get("pub_time") or 0
+        time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else ""
+        notif_title = f"🔔 新文章 · {source}"
+        content = _json.dumps({
+            "group": source, "time": time_str, "article_title": title,
+            "digest": digest, "url": url,
+            "display": f"📰 **文章:** {title}\n🕐 **时间:** {time_str}\n\n{digest}\n\n🔗 **原文链接:** {url}",
+        }, ensure_ascii=False)
+        nid = self._outbox.add("oa_article_alert", group.name or source, notif_title, content,
+                                priority="high", chat_id=job.get("gh_id", ""), url=url)
+        task_id = self._task_center.create_task(
+            "oa_article_alert", "system", job.get("gh_id", ""),
+            f"{source} · {title}", outbox_id=nid) if self._task_center else None
+        self._content_cache.update_oa_job_links(job["id"], outbox_id=nid, task_id=task_id or 0)
+        status, error = self._push_to_wechat(nid, group.name or source, notif_title, content, group.push_target)
+        if task_id:
+            self._task_center.complete_task(task_id, result={
+                "success": "推送成功", "partial": "推送部分成功",
+                "skipped": "未绑定任何推送渠道（仅入库）",
+            }.get(status, "推送失败"))
+            self._task_center.update_push_result(task_id, status, error)
+        if status in ("success", "partial", "skipped"):
+            self._content_cache.finish_oa_job(job["id"], job["lease_token"], "sent")
+        else:
+            delay = min(300, 10 * (2 ** min(int(job.get("attempts", 1)), 5)))
+            self._content_cache.finish_oa_job(job["id"], job["lease_token"], "retry", error, delay)
 
     def _poll_loop(self) -> None:
-        """Main polling loop — runs in daemon thread."""
-        while self._running:
+        """Run one shared metadata scan per interval."""
+        while self._running and not self._stop_event.is_set():
             try:
-                self._poll_cycle()
+                self.scan_now()
             except Exception as e:
                 logger.error("OAMonitor poll cycle error: %s", e, exc_info=True)
-
-            # Sleep in short intervals so stop() is responsive
-            for _ in range(POLL_SEC):
-                if not self._running:
-                    return
-                _time.sleep(1)
+            self._stop_event.wait(POLL_SEC)
 
     def _poll_cycle(self) -> None:
-        """One poll cycle: check all enabled monitor groups for new articles."""
-        if not self._config.assistant_enabled:
-            return
-
-        total_cached_new = 0
-        for mg in self._config.oa_monitor_groups:
-            if not mg.enabled or not mg.accounts:
-                continue
-
-            for gh_id in mg.accounts:
-                try:
-                    total_cached_new += self._check_account(mg, gh_id) or 0
-                except Exception as e:
-                    logger.warning("OAMonitor: error checking %s: %s", gh_id, e)
-
-        # ── 本轮有新文章写入 oa_cache → 触发 RAG 重索引（整轮只触发一次） ──
-        # 上移到 _poll_cycle：原实现在 _check_account 内每个号触发一次，
-        # 补课期间每号 cached_new>0 会一轮触发 91 次 index_to_rag（日志刷屏）。
-        # 游标增量机制保证无论触发几次索引结果一致，合并为一次不影响正确性。
-        if total_cached_new > 0:
-            try:
-                from src.web.server import get_rag_engine
-                _re = get_rag_engine()
-                if _re and self._content_cache:
-                    self._content_cache.index_to_rag(_re, "oa")
-            except Exception:
-                pass
-
-        # Periodic dedup cleanup
-        self._cleanup_dedup()
+        """Compatibility wrapper for tests/diagnostics."""
+        self.scan_now()
 
     def _check_account(self, mg: OAMonitorGroup, gh_id: str) -> None:
         """Check one OA account for new articles.
