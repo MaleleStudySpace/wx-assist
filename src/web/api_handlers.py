@@ -290,7 +290,7 @@ def _bg_sync_oa(cc, gh_id=None):
                 from src.web.server import _oa_monitor
                 if _oa_monitor:
                     if gh_id:
-                        cc.scan_oa_incremental(client, gh_id=gh_id)
+                        _oa_monitor.scan_now(gh_id=gh_id)
                     else:
                         _oa_monitor.scan_now()
                     return

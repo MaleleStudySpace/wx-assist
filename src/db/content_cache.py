@@ -577,6 +577,8 @@ class ContentCache:
                     new.append(cleaned)
         if new:
             self.batch_upsert("oa_cache", new)
+            for cleaned in new:
+                self._ensure_oa_job("full_text", cleaned)
             logger.debug("[CACHE] OA 增量 %s: 新增 %d 篇", gh_id, len(new))
         return len(new)
 

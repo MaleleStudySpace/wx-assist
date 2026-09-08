@@ -4,12 +4,11 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.assistant.config import AssistantConfig, OAMonitorGroup
-from src.db.content_cache import ContentCache
 from src.assistant.oa_parser import OAArticle
+from src.db.content_cache import ContentCache
 
 
 class TestOAPipeline(unittest.TestCase):
@@ -69,6 +68,44 @@ class TestOAPipeline(unittest.TestCase):
         self.assertIsNotNone(self.cache.query_one(
             "SELECT url FROM oa_cache WHERE url=?", ["https://example.test/cache"]
         ))
+
+    @patch("src.assistant.oa_reader.fetch_article_content")
+    def test_fulltext_worker_consumes_job_and_updates_cache(self, fetch):
+        fetch.return_value = "正文内容"
+        article = {
+            "url": "https://example.test/full", "gh_id": "gh_test",
+            "title": "全文", "digest": "摘要", "source_name": "测试公众号",
+        }
+        self.cache.upsert("oa_cache", {
+            "url": article["url"], "gh_id": article["gh_id"], "title": article["title"],
+            "digest": article["digest"], "cover_url": "", "source_name": article["source_name"],
+            "pub_time": 0, "full_content": "", "content_status": 0,
+            "llm_summary": "", "llm_summary_ok": 0, "cached_at": 1,
+        })
+        self.cache._ensure_oa_job("full_text", article)
+        self.cache._fetch_one_content_job()
+        row = self.cache.query_one(
+            "SELECT full_content, content_status FROM oa_cache WHERE url=?",
+            [article["url"]],
+        )
+        self.assertEqual(row["full_content"], "正文内容")
+        self.assertEqual(row["content_status"], 1)
+
+    @patch("src.assistant.oa_parser.fetch_oa_articles")
+    def test_full_sync_backfills_fulltext_job(self, fetch):
+        fetch.return_value = []
+        self.cache.upsert("oa_cache", {
+            "url": "https://example.test/legacy", "gh_id": "gh_test", "title": "旧文",
+            "digest": "摘要", "cover_url": "", "source_name": "测试公众号", "pub_time": 1,
+            "full_content": "", "content_status": 0, "llm_summary": "", "llm_summary_ok": 0,
+            "cached_at": 1,
+        })
+        self.cache.start_oa_content_fetcher()
+        self.cache.stop_oa_content_fetcher()
+        row = self.cache.query_one(
+            "SELECT kind FROM oa_jobs WHERE url=?", ["https://example.test/legacy"]
+        )
+        self.assertEqual(row["kind"], "full_text")
 
     def test_claim_lease_and_retry(self):
         article = {

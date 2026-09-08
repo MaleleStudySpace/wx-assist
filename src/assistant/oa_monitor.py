@@ -93,7 +93,7 @@ class OAMonitorEngine:
             self._config = config
         logger.info("OAMonitorEngine config updated, now monitoring %d groups", len(config.oa_monitor_groups))
 
-    def scan_now(self) -> int:
+    def scan_now(self, gh_id: str | None = None) -> int:
         """Run one shared metadata scan; never performs HTTP/LLM/push work."""
         client = self._get_wcdb_client()
         if not client or not self._content_cache:
@@ -101,7 +101,7 @@ class OAMonitorEngine:
         with self._config_lock:
             config = self._config
         return self._content_cache.scan_oa_incremental(
-            client, config=config, task_center=self._task_center,
+            client, config=config, task_center=self._task_center, gh_id=gh_id,
         )
 
     def _alert_worker_loop(self) -> None:
