@@ -919,7 +919,7 @@ class ContentCache:
         def _loop():
             while not self._oa_fetch_stop.is_set():
                 try:
-                    self._fetch_one_content()
+                    self._fetch_one_content_job()
                 except Exception as e:
                     logger.debug("[CACHE] OA 全文抓取循环异常: %s", e)
                 self._oa_fetch_stop.wait(2)
@@ -947,108 +947,45 @@ class ContentCache:
         except Exception as e:
             logger.warning("[CACHE] OA 全文任务补建失败: %s", e)
 
-    def _fetch_one_content(self):
-        """抓取一篇待抓取的文章全文。"""
-        if not self._full_text_enabled:
+    def _fetch_one_content_job(self):
+        """Consume one durable full-text job without blocking alert workers."""
+        job = self.claim_oa_job("full_text", lease_seconds=60)
+        if not job:
             return
-        # 忽略列表 → 查询排除这些公众号
-        _sql = "SELECT url, title FROM oa_cache WHERE content_status=0"
-        _params: list = []
-        if self._full_text_ignore:
-            _sql += " AND gh_id NOT IN ({})".format(
-                ",".join("?" * len(self._full_text_ignore)))
-            _params = list(self._full_text_ignore)
-        _sql += " LIMIT 1"
-        row = self.query_one(_sql, _params)
-        if not row:
-            # 没有待抓取文章时，重置任务状态
-            if self._fetcher_task_id:
-                _complete_task(self._fetcher_tc, self._fetcher_task_id,
-                               f"抓取完成: {self._fetcher_count} 篇")
-                self._fetcher_task_id = None
-                # 追加索引完成日志：明确这是正常收敛，不是异常反复
-                logger.info("[CACHE] RAG OA 原文追加索引完成: 共追加 %d 篇全文（RAG 已含全文，此后仅新文章触发索引）",
-                            self._fetcher_count)
-                self._fetcher_count = 0
+        token = job["lease_token"]
+        url, title = job["url"], job["title"]
+        row = self.query_one("SELECT gh_id FROM oa_cache WHERE url=?", [url])
+        if not self._full_text_enabled or (row and row["gh_id"] in self._full_text_ignore):
+            self.finish_oa_job(job["id"], token, "retry", "全文抓取已暂停", 30)
             return
-
-        # 首次有文章时创建任务
-        if not self._fetcher_task_id and self._fetcher_tc:
-            self._fetcher_task_id = _create_task(
-                self._fetcher_tc, "cache_oa_content", "", "OA全文抓取"
-            )
-            # 追加索引开始日志：明确首次全量同步的预期行为
-            try:
-                _pending = self.query_one(
-                    "SELECT COUNT(*) AS c FROM oa_cache WHERE content_status=0"
-                )["c"]
-                logger.info(
-                    "[CACHE] RAG OA 原文追加索引开始: %d 篇待抓取全文（每 2 秒 1 篇，期间 "
-                    "抓取成功会刷新 cached_at 触发 RAG 增量索引，表现为连续 "
-                    "'RAG 索引 OA 文章: N 条'，属正常追加，抓完自动停止）",
-                    _pending,
-                )
-            except Exception:
-                pass
-
-        url = row["url"]
-        title = row["title"]
         try:
             from src.assistant.oa_reader import fetch_article_content
             content = fetch_article_content(url, timeout=15, title=title)
-            if content:
-                import html, re
-                content = html.unescape(content)
-                content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', content)
-                self.update("oa_cache", {
-                    "full_content": content[:50000],  # 最长 5 万字
-                    "content_status": 1,
-                    "cached_at": int(time.time()),  # 触及时戳触发增量重索引
-                }, {"url": url})
-                try:
-                    from src.web.server import get_rag_engine
-                    rag = get_rag_engine()
-                    if rag:
-                        self.index_to_rag(rag, "oa")
-                except Exception:
-                    pass
-                self._fetcher_count += 1
-                self._fetcher_retries.pop(url, None)  # 成功后清除重试计数
-                # 每 10 篇打一次追加索引进度日志
-                if self._fetcher_count % 10 == 0:
-                    try:
-                        _pending = self.query_one(
-                            "SELECT COUNT(*) AS c FROM oa_cache WHERE content_status=0"
-                        )["c"]
-                        logger.info(
-                            "[CACHE] 公众号原文 本地缓存中: 已处理 %d 篇，剩余 %d 篇待抓",
-                            self._fetcher_count, _pending,
-                        )
-                    except Exception:
-                        pass
-                # 每 5 篇更新一次任务进度
-                if self._fetcher_count % 5 == 0 and self._fetcher_task_id:
-                    _update_task(self._fetcher_tc, self._fetcher_task_id,
-                                 f"已抓取 {self._fetcher_count} 篇")
-            else:
+            if not content:
                 self.update("oa_cache", {"content_status": -1}, {"url": url})
+                self.finish_oa_job(job["id"], token, "dead", "未获取到文章全文")
+                return
+            content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', html.unescape(content))
+            self.update("oa_cache", {
+                "full_content": content[:50000], "content_status": 1,
+                "cached_at": int(time.time()),
+            }, {"url": url})
+            try:
+                from src.web.server import get_rag_engine
+                rag = get_rag_engine()
+                if rag:
+                    self.index_to_rag(rag, "oa")
+            except Exception:
+                pass
+            self.finish_oa_job(job["id"], token, "completed")
         except Exception as e:
-            # 403/429 直接标记失败；其他异常连续失败 ≥5 次也放弃（防无限重试卡队列）
-            resp_err = getattr(e, "response", None)
-            status = getattr(resp_err, "status_code", 0) if resp_err else 0
-            if status in (403, 429):
-                logger.warning("[CACHE] OA 全文抓取失败 %s (HTTP %d)", url, status)
+            attempts = int(job.get("attempts") or 1)
+            status = getattr(getattr(e, "response", None), "status_code", 0)
+            if status in (403, 429) or attempts >= 5:
                 self.update("oa_cache", {"content_status": -1}, {"url": url})
+                self.finish_oa_job(job["id"], token, "dead", str(e))
             else:
-                self._fetcher_retries[url] = self._fetcher_retries.get(url, 0) + 1
-                if self._fetcher_retries[url] >= 5:
-                    logger.warning("[CACHE] OA 全文抓取放弃 %s — 连续失败 %d 次: %s",
-                                   url, self._fetcher_retries[url], e)
-                    self.update("oa_cache", {"content_status": -1}, {"url": url})
-                    self._fetcher_retries.pop(url, None)
-                else:
-                    logger.debug("[CACHE] OA 全文抓取重试 %s (%d/5): %s",
-                                 url, self._fetcher_retries[url], e)
+                self.finish_oa_job(job["id"], token, "retry", str(e), min(300, 10 * 2 ** (attempts - 1)))
 
     # ══════════════════════════════════════════════════════════════
     # SNS 全量同步 + 增量合并
