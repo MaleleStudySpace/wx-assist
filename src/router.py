@@ -26,30 +26,21 @@ WELCOME_TEMPLATE = """\
 不确定从哪儿开始？随便跟我说一句试试，我立刻就办 ✨"""
 
 
-def _build_welcome_text(tool_descriptions: str) -> str:
-    """Build welcome message from tool descriptions.
+_WELCOME_EXAMPLES = (
+    "帮我看看系统状态",
+    "现在有哪些定时摘要",
+    "我盯着哪些群了",
+    "有哪些公众号分组和实时提醒",
+    "总结一下项目群",
+    "看看这个公众号说了什么",
+    "搜索聊天记录、公众号文章、朋友圈或收藏",
+    "帮我管理定时任务和常用 AI 技能",
+)
 
-    Extracts tool descriptions from the registry and generates
-    example prompts dynamically — no hardcoded map needed.
-    When a new tool is registered, it automatically appears here.
-    """
-    # Internal tools that shouldn't appear in welcome
-    SKIP_TOOLS = {"confirm_action"}
 
-    examples = []
-    for line in tool_descriptions.split("\n"):
-        line = line.strip()
-        if line.startswith("- ") and ":" in line:
-            tool_name = line[2:].split(":")[0].strip()
-            if tool_name in SKIP_TOOLS:
-                continue
-            # Extract the short description (up to first period)
-            desc_part = line.split(":", 1)[1].strip()
-            short = desc_part.split("。")[0].strip() if "。" in desc_part else desc_part[:80]
-            examples.append(short)
-
-    tool_section = "\n".join(f"- {e}" for e in examples)
-
+def _build_welcome_text(_tool_descriptions: str = "") -> str:
+    """Build a short user-facing welcome without exposing tool schemas."""
+    tool_section = "\n".join(f"- {example}" for example in _WELCOME_EXAMPLES)
     return WELCOME_TEMPLATE.format(tool_examples=tool_section)
 
 
@@ -201,10 +192,5 @@ class MessageRouter:
         except Exception as e:
             logger.warning("Failed to save welcomed user: %s", e)
 
-        # Build welcome text
-        try:
-            desc = self._agent_engine.get_tool_descriptions()
-            return _build_welcome_text(desc)
-        except Exception as e:
-            logger.warning("Failed to build welcome: %s", e)
-            return ""
+        # Build welcome
+        return _build_welcome_text()

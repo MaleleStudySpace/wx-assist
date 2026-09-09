@@ -61,7 +61,7 @@ ToolExecutor (src/agent/tools.py)
 - `get_descriptions()` — 生成 system prompt 可读文本
 - `execute(name, args)` — 同步执行 handler；未知工具/异常都返回格式化错误字符串（成为 LLM 的 Observation）
 
-**新增工具只需一行 `r.register(...)`**，Agent、反向 MCP Server、欢迎语自动同步更新。
+Agent、反向 MCP Server 仍从 ToolRegistry 获取完整工具；首次欢迎消息只展示固定精选的用户能力示例，避免把内部工具参数和 schema 暴露给用户。
 
 ### 内置工具清单（`src/agent/tools.py`）
 

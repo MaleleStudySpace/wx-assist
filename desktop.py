@@ -50,10 +50,14 @@ def start_bot():
     sys.path.insert(0, str(PROJECT_ROOT))
 
     from src.web.server import (
-        start_web_server, update_status,
-        register_bot, _bot_exited,
+        start_web_server, update_status, _bot_exited, _bot_control,
     )
     web_thread = start_web_server()
+
+    owner = _bot_control.reserve_start()
+    if owner is None:
+        logger.info("Bot auto-start skipped: another Bot is running or stopping")
+        return
 
     try:
         from src.config import load_config
@@ -63,8 +67,9 @@ def start_bot():
         )
         from src.bot import Bot
         bot = Bot(config)
-        # Bot.run() calls _register_backend() during init — no patch needed
-        register_bot(thread=threading.current_thread(), backend=None)
+        if not _bot_control.register_running_thread(threading.current_thread(), owner):
+            logger.info("Bot auto-start cancelled before Bot.run")
+            return
         bot.run()
         # Bot exited normally (e.g., no groups found)
         update_status(running=False)
@@ -77,7 +82,7 @@ def start_bot():
     finally:
         # Always reset bot control state so the user can restart
         # via the web UI (or auto-restart will work next launch)
-        _bot_exited()
+        _bot_exited(owner)
 
 
 def _graceful_shutdown():
