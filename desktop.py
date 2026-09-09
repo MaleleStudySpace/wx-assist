@@ -58,6 +58,10 @@ def start_bot():
     if owner is None:
         logger.info("Bot auto-start skipped: another Bot is running or stopping")
         return
+    if not _bot_control.register_running_thread(threading.current_thread(), owner):
+        logger.info("Bot auto-start reservation expired")
+        _bot_exited(owner)
+        return
 
     try:
         from src.config import load_config
