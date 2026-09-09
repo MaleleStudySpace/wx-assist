@@ -1111,7 +1111,7 @@ def _bot_exited(owner=None):
 
 def _register_backend(backend):
     """Register backend from Bot.run() — explicit API, no monkey-patching."""
-    _bot_control.register_backend(backend)
+    return _bot_control.register_backend(backend)
 
 
 def _stop_bot():

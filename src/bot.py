@@ -287,7 +287,11 @@ class Bot:
         # API — no monkey-patching needed).
         try:
             from .web.server import _register_backend
-            _register_backend(backend)
+            accepted = _register_backend(backend)
+            if accepted is False:
+                logger.info("Bot backend registration rejected because shutdown is in progress")
+                backend.stop()
+                return
         except Exception as e:
             logger.debug("register_backend 失败: %s", e)
 
