@@ -150,7 +150,49 @@ class OAMonitorEngine:
         row = self._content_cache.query_one(
             "SELECT full_content, llm_summary FROM oa_cache WHERE url=?", [url]
         ) if self._content_cache else None
-        article_text = (row["full_content"] if row else "") or digest
+        article_text = (row["full_content"] if row else "") or ""
+        content_source = "cache" if article_text else ""
+        if not article_text:
+            try:
+                from src.assistant.oa_reader import fetch_article_content
+                fetched = fetch_article_content(url, timeout=15, title=title)
+                if fetched:
+                    article_text = fetched
+                    content_source = "http"
+                    self._content_cache.update("oa_cache", {
+                        "full_content": fetched[:50000], "content_status": 2,
+                        "cached_at": int(_time.time()),
+                    }, {"url": url})
+            except Exception as e:
+                logger.warning("OAMonitor: HTTP fetch failed for '%s': %s", title[:30], e)
+        if not article_text and job.get("gh_id"):
+            try:
+                from src.assistant.oa_parser import decode_content, parse_oa_article
+                wcdb_client = self._get_wcdb_client()
+                if wcdb_client:
+                    for message in wcdb_client.get_messages(talker=job["gh_id"], limit=50) or []:
+                        xml = decode_content(message.get("message_content", ""))
+                        if "<appmsg" not in xml:
+                            continue
+                        parsed = parse_oa_article(xml)
+                        wcdb_url = parsed.get("url", "")
+                        if not wcdb_url or not (wcdb_url == url or wcdb_url.endswith(url[-32:])):
+                            continue
+                        from src.assistant.oa_reader import fetch_article_content
+                        fetched = fetch_article_content(wcdb_url, timeout=15, title=title)
+                        if fetched:
+                            article_text = fetched
+                            content_source = "wcdb_retry"
+                            self._content_cache.update("oa_cache", {
+                                "full_content": fetched[:50000], "content_status": 2,
+                                "cached_at": int(_time.time()),
+                            }, {"url": url})
+                        break
+            except Exception as e:
+                logger.warning("OAMonitor: WCDB retry failed for '%s': %s", title[:30], e)
+        article_text = article_text or digest
+        if not content_source:
+            content_source = "wcdb_des" if digest else ""
         llm_summary = ""
         if article_text:
             try:
