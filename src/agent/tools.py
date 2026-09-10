@@ -5,6 +5,7 @@ Tools can be added/removed without modifying AgentEngine.
 All handlers are synchronous — no async needed.
 """
 
+import json
 import logging
 import time
 from datetime import datetime
@@ -147,6 +148,56 @@ class ToolExecutor:
                 },
             },
             handler=self._handle_list_tasks,
+        )
+
+        # ── get_latest_oa_digest ─────────────────────────────────────
+        r.register(
+            name="get_latest_oa_digest",
+            description="【只读查询】获取指定公众号分组最近一次已完成的摘要正文。"
+                       "只读取已经生成的摘要，不会重新抓取文章、不调用AI生成、也不发送推送。"
+                       "用户要把公众号摘要整理到笔记、查看最近一份公众号摘要时调用。"
+                       "默认只查定时任务（scheduler/catchup），精确匹配分组名称。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "group_name": {
+                        "type": "string",
+                        "description": "公众号摘要分组名称，例如‘开源项目’",
+                    },
+                    "within_hours": {
+                        "type": "integer",
+                        "description": "向前查询的时间范围，默认48小时，最大30天",
+                        "default": 48,
+                    },
+                },
+                "required": ["group_name"],
+            },
+            handler=self._handle_get_latest_oa_digest,
+        )
+
+        # ── get_latest_group_digest ──────────────────────────────────
+        r.register(
+            name="get_latest_group_digest",
+            description="【只读查询】获取指定群聊摘要分组最近一次已完成的摘要正文。"
+                       "只读取已经生成的摘要，不会重新读取消息、不调用AI生成、也不发送推送。"
+                       "用户要把群聊摘要整理到笔记、查看最近一份群聊摘要时调用。"
+                       "默认只查定时任务（scheduler/catchup），精确匹配分组名称。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "group_name": {
+                        "type": "string",
+                        "description": "群聊摘要分组名称，例如‘技术交流群’",
+                    },
+                    "within_hours": {
+                        "type": "integer",
+                        "description": "向前查询的时间范围，默认48小时，最大30天",
+                        "default": 48,
+                    },
+                },
+                "required": ["group_name"],
+            },
+            handler=self._handle_get_latest_group_digest,
         )
 
         # ── run_digest (消耗 AI，直接执行) ────────────────────────────
@@ -710,6 +761,73 @@ class ToolExecutor:
             if t.get('error'):
                 lines.append(f"   错误: {t['error']}")
         return "\n".join(lines)
+
+    # ── digest result lookup ────────────────────────────────────────
+
+    def _get_latest_digest(self, task_type: str, group_name: str,
+                           within_hours: int = 48) -> str:
+        """Read one completed scheduled digest without triggering generation."""
+        if not self._task_center:
+            return "摘要查询不可用：任务中心未就绪。"
+        normalized_name = str(group_name or "").strip()
+        if not normalized_name:
+            return "请提供分组名称。"
+        task = self._task_center.get_latest_completed_digest(
+            task_type, normalized_name, within_hours=within_hours,
+            scheduled_only=True,
+        )
+        if not task:
+            kind = "公众号" if task_type == "oa_digest" else "群聊"
+            return (f"未找到「{normalized_name}」最近 {within_hours} 小时内"
+                    f"已完成的定时{kind}摘要。")
+
+        result = str(task.get("result") or "").strip()
+        no_content = (
+            not result
+            or result in {"无新内容", "无实质内容"}
+            or result.startswith("没有新的公众号文章")
+            or result.startswith("最近") and "没有新的公众号文章" in result
+            or result.startswith("所有文章已摘要过")
+        )
+        if no_content:
+            return json.dumps({
+                "ok": True,
+                "has_content": False,
+                "reason": result or "摘要正文为空",
+                "task_id": task.get("id"),
+                "task_type": task.get("task_type"),
+                "source": task.get("source"),
+                "group_id": task.get("group_id"),
+                "group_name": task.get("group_name"),
+                "created_at": task.get("created_at"),
+                "finished_at": task.get("finished_at"),
+                "articles_count": task.get("articles_count", 0),
+                "msg_count": task.get("msg_count", 0),
+            }, ensure_ascii=False)
+
+        return json.dumps({
+            "ok": True,
+            "has_content": True,
+            "task_id": task.get("id"),
+            "task_type": task.get("task_type"),
+            "source": task.get("source"),
+            "group_id": task.get("group_id"),
+            "group_name": task.get("group_name"),
+            "created_at": task.get("created_at"),
+            "started_at": task.get("started_at"),
+            "finished_at": task.get("finished_at"),
+            "articles_count": task.get("articles_count", 0),
+            "msg_count": task.get("msg_count", 0),
+            "digest": result,
+        }, ensure_ascii=False)
+
+    def _handle_get_latest_oa_digest(self, group_name: str,
+                                     within_hours: int = 48) -> str:
+        return self._get_latest_digest("oa_digest", group_name, within_hours)
+
+    def _handle_get_latest_group_digest(self, group_name: str,
+                                        within_hours: int = 48) -> str:
+        return self._get_latest_digest("group_digest", group_name, within_hours)
 
     # ── run_digest (写操作) ────────────────────────────────────────
 

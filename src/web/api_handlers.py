@@ -280,19 +280,28 @@ def _match_my_wxid(sender: str, my_wxid: str) -> bool:
 # ── 后台缓存同步辅助（非阻塞，daemon 线程） ──────────────────────────
 
 def _bg_sync_oa(cc, gh_id=None):
-    """后台增量同步 OA 缓存（账号 + 文章）。gh_id 指定则只同步一个公众号。"""
+    """后台同步 OA 缓存，优先复用统一扫描器，避免第二条文章扫描链路。"""
     def _run():
         try:
             client = get_wcdb_client()
             if not client:
                 return
+            try:
+                from src.web.server import _oa_monitor
+                if _oa_monitor:
+                    if gh_id:
+                        _oa_monitor.scan_now(gh_id=gh_id)
+                    else:
+                        _oa_monitor.scan_now()
+                    return
+            except Exception:
+                pass
             if gh_id:
                 cc.sync_oa_single(client, gh_id)
             else:
-                cc.sync_oa_accounts(client)       # ← 先刷账号列表
-                cc.sync_oa_incremental(client)    # ← 再刷文章
+                cc.sync_oa_accounts(client)
+                cc.sync_oa_incremental(client)
         except Exception as e:
-            # 后台同步线程是缓存唯一更新源，失败会长期走降级路径且无日志。
             logger.warning("bg-oa-sync failed: %s", e)
     threading.Thread(target=_run, daemon=True, name="bg-oa-sync").start()
 
@@ -4783,6 +4792,8 @@ def handle_oa_digest_run(params, config: AssistantConfig):
         _grp = _mgr.get_group(group_id)
         if _grp:
             _group_name = _grp.name
+            if not _grp.enabled:
+                return {"ok": False, "error": "公众号分组已停用"}
     except Exception:
         pass
 

@@ -32,10 +32,12 @@ class ContentCache:
     def __init__(self, db_path: str = "data/messages.db"):
         self._db_path = db_path
         self._write_lock = threading.Lock()
+        self._oa_scan_lock = threading.Lock()
+        self._oa_fetch_stop = threading.Event()
+        self._oa_fetch_thread = None
         # 全文抓取开关（默认全开=现状）：由 bot/server 热更新注入 set_full_text_config
         self._full_text_enabled = True
         self._full_text_ignore: set[str] = set()
-        # 全量同步进行中标记，防定时器重复触发
         self._syncing: dict[str, bool] = {
             "oa": False, "sns": False, "fav": False,
         }
@@ -166,6 +168,31 @@ class ContentCache:
             clean_text       TEXT DEFAULT '',
             cached_at        INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS oa_jobs (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind             TEXT NOT NULL,
+            url              TEXT NOT NULL,
+            gh_id            TEXT NOT NULL DEFAULT '',
+            title            TEXT NOT NULL DEFAULT '',
+            digest           TEXT NOT NULL DEFAULT '',
+            source_name      TEXT NOT NULL DEFAULT '',
+            pub_time         INTEGER DEFAULT 0,
+            article_time     INTEGER DEFAULT 0,
+            group_id         TEXT NOT NULL DEFAULT '',
+            group_name       TEXT NOT NULL DEFAULT '',
+            group_prompt     TEXT NOT NULL DEFAULT '',
+            state            TEXT NOT NULL DEFAULT 'pending',
+            attempts         INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at  REAL NOT NULL DEFAULT 0,
+            lease_until      REAL NOT NULL DEFAULT 0,
+            lease_token      TEXT NOT NULL DEFAULT '',
+            outbox_id        INTEGER NOT NULL DEFAULT 0,
+            task_id          INTEGER NOT NULL DEFAULT 0,
+            last_error       TEXT NOT NULL DEFAULT '',
+            created_at       REAL NOT NULL,
+            updated_at       REAL NOT NULL
+        );
         """
         index_ddl = """
         CREATE INDEX IF NOT EXISTS idx_oa_gh_id ON oa_cache(gh_id);
@@ -174,6 +201,9 @@ class ContentCache:
         CREATE INDEX IF NOT EXISTS idx_sns_create_time ON sns_cache(create_time);
         CREATE INDEX IF NOT EXISTS idx_fav_type ON fav_cache(type);
         CREATE INDEX IF NOT EXISTS idx_fav_update_time ON fav_cache(update_time);
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_oa_jobs_kind_url ON oa_jobs(kind, url);
+        CREATE INDEX IF NOT EXISTS idx_oa_jobs_ready ON oa_jobs(kind, state, next_attempt_at);
+        CREATE INDEX IF NOT EXISTS idx_oa_jobs_lease ON oa_jobs(lease_until);
         """
         conn = self._get_conn()
         try:
@@ -547,6 +577,8 @@ class ContentCache:
                     new.append(cleaned)
         if new:
             self.batch_upsert("oa_cache", new)
+            for cleaned in new:
+                self._ensure_oa_job("full_text", cleaned)
             logger.debug("[CACHE] OA 增量 %s: 新增 %d 篇", gh_id, len(new))
         return len(new)
 
@@ -584,69 +616,288 @@ class ContentCache:
         }
 
     # ══════════════════════════════════════════════════════════════
-    # OA 增量合并（定时器 + 用户访问触发）
+    # OA 统一发现与持久化任务
     # ══════════════════════════════════════════════════════════════
 
-    def sync_oa_single(self, client, gh_id: str, task_center=None) -> int:
-        """增量同步单个公众号的文章。返回新增条数。
+    def _ensure_oa_job(self, kind: str, article: dict, *, state: str = "pending",
+                       group: dict | None = None) -> int | None:
+        """Ensure one durable OA job exists for ``(kind, url)``.
 
-        由 API 触发器调用，轻量级操作（只拉最新 10 篇），
-        不检查 _syncing flag（增量合并无冲突风险）。
+        This table is deliberately separate from TaskCenter/Outbox: those two
+        tables are user-visible history and delivery audit, not worker queues.
+        INSERT OR IGNORE keeps repeated scans and API-triggered scans harmless.
         """
+        url = str(article.get("url") or "").strip()
+        if not url or kind not in ("full_text", "instant_alert"):
+            return None
+        now = time.time()
+        group = group or {}
+        values = (
+            kind, url, str(article.get("gh_id") or ""),
+            str(article.get("title") or ""), str(article.get("digest") or ""),
+            str(article.get("source_name") or ""), int(article.get("pub_time") or 0),
+            int(article.get("article_time") or article.get("timestamp") or 0),
+            str(group.get("id") or ""), str(group.get("name") or ""),
+            str(group.get("custom_prompt") or ""), state, now, now,
+        )
+        with self._write_lock:
+            conn = self._get_conn()
+            try:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO oa_jobs "
+                    "(kind,url,gh_id,title,digest,source_name,pub_time,article_time,"
+                    "group_id,group_name,group_prompt,state,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    values,
+                )
+                conn.commit()
+                return int(cur.lastrowid) if cur.rowcount else None
+            except Exception as e:
+                logger.warning("[CACHE] OA job 入队失败 (%s, %s): %s", kind, url[:60], e)
+                return None
+            finally:
+                conn.close()
+
+    def claim_oa_job(self, kind: str, lease_seconds: int = 180) -> dict | None:
+        """Atomically claim one ready OA job, recovering expired leases."""
+        if kind not in ("full_text", "instant_alert"):
+            return None
+        now = time.time()
+        token = f"{threading.get_ident()}-{now:.6f}"
+        with self._write_lock:
+            conn = self._get_conn()
+            try:
+                conn.execute(
+                    "UPDATE oa_jobs SET state='pending', lease_until=0, lease_token='', updated_at=? "
+                    "WHERE state='processing' AND lease_until > 0 AND lease_until < ?",
+                    (now, now),
+                )
+                row = conn.execute(
+                    "SELECT * FROM oa_jobs WHERE kind=? AND state IN ('pending','retry') "
+                    "AND next_attempt_at<=? ORDER BY created_at, id LIMIT 1",
+                    (kind, now),
+                ).fetchone()
+                if not row:
+                    conn.commit()
+                    return None
+                lease_until = now + max(30, int(lease_seconds))
+                cur = conn.execute(
+                    "UPDATE oa_jobs SET state='processing', attempts=attempts+1, "
+                    "lease_until=?, lease_token=?, updated_at=? "
+                    "WHERE id=? AND state IN ('pending','retry')",
+                    (lease_until, token, now, row["id"]),
+                )
+                if cur.rowcount != 1:
+                    conn.rollback()
+                    return None
+                claimed = dict(row)
+                claimed["attempts"] = int(row["attempts"] or 0) + 1
+                claimed["lease_token"] = token
+                conn.commit()
+                return claimed
+            except Exception as e:
+                conn.rollback()
+                logger.warning("[CACHE] OA job claim 失败 (%s): %s", kind, e)
+                return None
+            finally:
+                conn.close()
+
+    def finish_oa_job(self, job_id: int, lease_token: str, state: str,
+                      error: str = "", delay: float = 0) -> bool:
+        """Finish/requeue a claimed job only if its lease is still owned."""
+        allowed = {"completed", "sent", "failed", "dead", "retry", "suppressed"}
+        if state not in allowed or not job_id or not lease_token:
+            return False
+        now = time.time()
+        next_at = now + max(0, float(delay)) if state == "retry" else 0
+        with self._write_lock:
+            conn = self._get_conn()
+            try:
+                cur = conn.execute(
+                    "UPDATE oa_jobs SET state=?, next_attempt_at=?, lease_until=0, "
+                    "lease_token='', last_error=?, updated_at=? "
+                    "WHERE id=? AND state='processing' AND lease_token=?",
+                    (state, next_at, str(error or "")[:1000], now, int(job_id), lease_token),
+                )
+                conn.commit()
+                return cur.rowcount == 1
+            except Exception as e:
+                logger.warning("[CACHE] OA job finish 失败 (#%s): %s", job_id, e)
+                return False
+            finally:
+                conn.close()
+
+    def update_oa_job_links(self, job_id: int, *, outbox_id: int = 0,
+                            task_id: int = 0) -> bool:
+        """Persist notification/task links without changing worker state."""
+        updates = []
+        params = []
+        if outbox_id:
+            updates.append("outbox_id=?"); params.append(int(outbox_id))
+        if task_id:
+            updates.append("task_id=?"); params.append(int(task_id))
+        if not updates:
+            return False
+        updates.append("updated_at=?"); params.append(time.time()); params.append(int(job_id))
+        with self._write_lock:
+            conn = self._get_conn()
+            try:
+                cur = conn.execute(
+                    f"UPDATE oa_jobs SET {', '.join(updates)} WHERE id=?", params
+                )
+                conn.commit()
+                return cur.rowcount == 1
+            finally:
+                conn.close()
+
+    def scan_oa_incremental(self, client, config=None, task_center=None,
+                             gh_id: str | None = None) -> int:
+        """Single OA discovery pass shared by cache and instant alerts.
+
+        The scanner only reads WCDB, persists metadata, and enqueues durable
+        jobs. HTTP, LLM, RAG and IM delivery happen in consumers.
+        """
+        if client is None or self._is_full_syncing("oa"):
+            return 0
+        if not self._oa_scan_lock.acquire(blocking=False):
+            logger.debug("[CACHE] OA 统一扫描已在进行中，跳过重入")
+            return 0
         try:
-            return self._sync_oa_gh(client, gh_id)
+            accounts = self.query("SELECT gh_id, display_name FROM oa_accounts")
+            if gh_id:
+                accounts = [row for row in accounts if row["gh_id"] == gh_id]
+            if not accounts:
+                return 0
+            from src.assistant.oa_parser import fetch_oa_articles
+            now = time.time()
+            total = 0
+            groups = list(getattr(config, "oa_monitor_groups", []) or []) if config else []
+            assistant_enabled = bool(getattr(config, "assistant_enabled", False)) if config else False
+            for row in accounts:
+                gh_id = row["gh_id"]
+                try:
+                    articles = fetch_oa_articles(client, gh_id, limit=10)
+                except Exception as e:
+                    logger.warning("[CACHE] OA 统一扫描 %s 失败: %s", row["display_name"] or gh_id, e)
+                    continue
+                for art in articles:
+                    cleaned = self._clean_oa(art)
+                    if not cleaned:
+                        continue
+                    article = dict(cleaned)
+                    article["article_time"] = int(art.timestamp or art.pub_time or 0)
+                    with self._write_lock:
+                        conn = self._get_conn()
+                        try:
+                            exists = conn.execute(
+                                "SELECT content_status FROM oa_cache WHERE url=?", (article["url"],)
+                            ).fetchone()
+                            if not exists:
+                                conn.execute(
+                                    "INSERT INTO oa_cache "
+                                    "(url,gh_id,title,digest,cover_url,source_name,pub_time,full_content,"
+                                    "content_status,llm_summary,llm_summary_ok,cached_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                                    tuple(article[k] for k in (
+                                        "url","gh_id","title","digest","cover_url","source_name",
+                                        "pub_time","full_content","content_status","llm_summary","llm_summary_ok","cached_at")),
+                                )
+                                total += 1
+                            status = int(exists["content_status"]) if exists else 0
+                            if status == 0:
+                                self._ensure_oa_job_unlocked(conn, "full_text", article)
+                            if assistant_enabled and article["article_time"] >= now - 300:
+                                group = self._match_monitor_group(groups, gh_id)
+                                if group:
+                                    dnd = self._in_dnd(group)
+                                    self._ensure_oa_job_unlocked(
+                                        conn, "instant_alert", article,
+                                        state="suppressed" if dnd else "pending", group=group,
+                                    )
+                            conn.commit()
+                        except Exception:
+                            conn.rollback()
+                            raise
+                        finally:
+                            conn.close()
+            if total:
+                logger.info("[CACHE] OA 统一扫描: 新增 %d 篇", total)
+                try:
+                    from src.web.server import get_rag_engine
+                    rag = get_rag_engine()
+                    if rag:
+                        self.index_to_rag(rag, "oa")
+                except Exception:
+                    pass
+                if task_center:
+                    tid = _create_task(task_center, "cache_oa_incremental", "", "OA增量同步")
+                    _complete_task(task_center, tid, f"OA 增量: 新增 {total} 篇")
+            return total
+        except Exception as e:
+            logger.warning("[CACHE] OA 统一扫描失败: %s", e)
+            return 0
+        finally:
+            self._oa_scan_lock.release()
+
+    @staticmethod
+    def _ensure_oa_job_unlocked(conn, kind: str, article: dict, *, state="pending", group=None):
+        now = time.time()
+        group = group or {}
+        conn.execute(
+            "INSERT OR IGNORE INTO oa_jobs "
+            "(kind,url,gh_id,title,digest,source_name,pub_time,article_time,group_id,group_name,group_prompt,state,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (kind, article.get("url", ""), article.get("gh_id", ""), article.get("title", ""),
+             article.get("digest", ""), article.get("source_name", ""), int(article.get("pub_time", 0) or 0),
+             int(article.get("article_time", 0) or 0), group.get("id", ""), group.get("name", ""),
+             group.get("custom_prompt", ""), state, now, now),
+        )
+
+    @staticmethod
+    def _match_monitor_group(groups, gh_id):
+        for group in groups:
+            if getattr(group, "enabled", False) and gh_id in (getattr(group, "accounts", []) or []):
+                return {
+                    "id": getattr(group, "id", ""), "name": getattr(group, "name", ""),
+                    "custom_prompt": getattr(group, "custom_prompt", ""),
+                    "dnd_start": getattr(group, "dnd_start", ""),
+                    "dnd_end": getattr(group, "dnd_end", ""),
+                }
+        return None
+
+    @staticmethod
+    def _in_dnd(group):
+        start, end = group.get("dnd_start", ""), group.get("dnd_end", "")
+        if not start or not end:
+            return False
+        try:
+            now = time.localtime()
+            cur = now.tm_hour * 60 + now.tm_min
+            sh, sm = (int(x) for x in start.split(":"))
+            eh, em = (int(x) for x in end.split(":"))
+            begin, finish = sh * 60 + sm, eh * 60 + em
+            return begin <= cur < finish if begin <= finish else cur >= begin or cur < finish
+        except (ValueError, AttributeError):
+            return False
+
+
+    def sync_oa_single(self, client, gh_id: str, task_center=None) -> int:
+        """增量同步单个公众号，保留旧返回语义。"""
+        try:
+            return self.scan_oa_incremental(client, task_center=task_center, gh_id=gh_id)
         except Exception as e:
             logger.warning("[CACHE] sync_oa_single %s 失败: %s", gh_id, e)
             return 0
 
-    def sync_oa_incremental(self, client, task_center=None) -> int:
-        """增量合并 OA 文章。定时器 60s + 用户访问触发。
-        Returns:
-            int: 新增文章数，0 表示无新内容。
-        """
+    def sync_oa_incremental(self, client, task_center=None, config=None) -> int:
+        """增量合并 OA 文章，统一走共享扫描入口。"""
         if self._is_full_syncing("oa"):
             logger.debug("[CACHE] OA 全量进行中，增量跳过")
             return 0
         if client is None:
             logger.warning("[CACHE] WCDB 不可用, OA 同步跳过")
             return 0
-        accounts = self.query("SELECT gh_id, display_name FROM oa_accounts")
-        if not accounts:
-            return 0
-        total = 0
-        all_new_titles = []
-        tid = None
-        try:
-            existing = self._get_existing_oa_urls()
-            for row in accounts:
-                gh_id = row["gh_id"]
-                name = row["display_name"] or gh_id
-                try:
-                    from src.assistant.oa_parser import fetch_oa_articles
-                    articles = fetch_oa_articles(client, gh_id, limit=10)
-                    new = []
-                    for a in articles:
-                        if a.url not in existing:
-                            cleaned = self._clean_oa(a)
-                            if cleaned:
-                                new.append(cleaned)
-                                existing.add(a.url)
-                    if new:
-                        self.batch_upsert("oa_cache", new)
-                        total += len(new)
-                        all_new_titles.extend(c.get("title", "") for c in new if c.get("title"))
-                except Exception as e:
-                    logger.warning("[CACHE] OA 增量 %s 失败: %s", name, e)
-            if total:
-                title_summary = " | ".join(t[:30] for t in all_new_titles[:10])
-                logger.info("[CACHE] OA 增量合并: %d 篇 | %s", total, title_summary)
-                tid = _create_task(task_center, "cache_oa_incremental", "", "OA增量同步")
-                _complete_task(task_center, tid, f"OA 增量: 新增 {total} 篇")
-        except Exception as e:
-            logger.warning("[CACHE] OA 增量合并失败: %s", e)
-            if tid:
-                _fail_task(task_center, tid, str(e))
-        return total
+        return self.scan_oa_incremental(client, config=config, task_center=task_center)
+
 
     # ══════════════════════════════════════════════════════════════
     # OA 全文抓取队列
@@ -658,118 +909,85 @@ class ContentCache:
         Args:
             task_center: 可选，用于创建 cache_oa_content 任务追踪。
         """
+        if self._oa_fetch_thread and self._oa_fetch_thread.is_alive():
+            return
         self._fetcher_tc = task_center
         self._fetcher_count = 0
         self._fetcher_task_id = None
         self._fetcher_retries: dict[str, int] = {}  # url → 连续失败次数（防卡队列）
+        self._oa_fetch_stop.clear()
+        self._backfill_oa_fulltext_jobs()
 
         def _loop():
-            while True:
+            while not self._oa_fetch_stop.is_set():
                 try:
-                    self._fetch_one_content()
+                    self._fetch_one_content_job()
                 except Exception as e:
                     logger.debug("[CACHE] OA 全文抓取循环异常: %s", e)
-                time.sleep(2)  # 2 秒 1 篇，避免被封
-        t = threading.Thread(target=_loop, daemon=True, name="oa-content-fetch")
-        t.start()
+                self._oa_fetch_stop.wait(2)
+        self._oa_fetch_thread = threading.Thread(target=_loop, daemon=True, name="oa-content-fetch")
+        self._oa_fetch_thread.start()
         logger.info("[CACHE] OA 全文抓取队列已启动")
 
-    def _fetch_one_content(self):
-        """抓取一篇待抓取的文章全文。"""
-        # 总开关关闭 → 不抓取（线程空闲）
-        if not self._full_text_enabled:
-            return
-        # 忽略列表 → 查询排除这些公众号
-        _sql = "SELECT url, title FROM oa_cache WHERE content_status=0"
-        _params: list = []
-        if self._full_text_ignore:
-            _sql += " AND gh_id NOT IN ({})".format(
-                ",".join("?" * len(self._full_text_ignore)))
-            _params = list(self._full_text_ignore)
-        _sql += " LIMIT 1"
-        row = self.query_one(_sql, _params)
-        if not row:
-            # 没有待抓取文章时，重置任务状态
-            if self._fetcher_task_id:
-                _complete_task(self._fetcher_tc, self._fetcher_task_id,
-                               f"抓取完成: {self._fetcher_count} 篇")
-                self._fetcher_task_id = None
-                # 追加索引完成日志：明确这是正常收敛，不是异常反复
-                logger.info("[CACHE] RAG OA 原文追加索引完成: 共追加 %d 篇全文（RAG 已含全文，此后仅新文章触发索引）",
-                            self._fetcher_count)
-                self._fetcher_count = 0
-            return
+    def stop_oa_content_fetcher(self, join_timeout: float = 5) -> None:
+        """停止 OA 全文 worker，避免 bot 重启时旧线程继续读写数据库。"""
+        self._oa_fetch_stop.set()
+        thread = self._oa_fetch_thread
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=max(0, float(join_timeout)))
+        self._oa_fetch_thread = None
 
-        # 首次有文章时创建任务
-        if not self._fetcher_task_id and self._fetcher_tc:
-            self._fetcher_task_id = _create_task(
-                self._fetcher_tc, "cache_oa_content", "", "OA全文抓取"
+    def _backfill_oa_fulltext_jobs(self) -> None:
+        """Backfill durable full-text jobs for articles found before migration."""
+        try:
+            rows = self.query(
+                "SELECT url,gh_id,title,digest,source_name,pub_time FROM oa_cache "
+                "WHERE content_status=0"
             )
-            # 追加索引开始日志：明确首次全量同步的预期行为
-            try:
-                _pending = self.query_one(
-                    "SELECT COUNT(*) AS c FROM oa_cache WHERE content_status=0"
-                )["c"]
-                logger.info(
-                    "[CACHE] RAG OA 原文追加索引开始: %d 篇待抓取全文（每 2 秒 1 篇，期间 "
-                    "抓取成功会刷新 cached_at 触发 RAG 增量索引，表现为连续 "
-                    "'RAG 索引 OA 文章: N 条'，属正常追加，抓完自动停止）",
-                    _pending,
-                )
-            except Exception:
-                pass
+            for row in rows:
+                self._ensure_oa_job("full_text", dict(row))
+        except Exception as e:
+            logger.warning("[CACHE] OA 全文任务补建失败: %s", e)
 
-        url = row["url"]
-        title = row["title"]
+    def _fetch_one_content_job(self):
+        """Consume one durable full-text job without blocking alert workers."""
+        job = self.claim_oa_job("full_text", lease_seconds=60)
+        if not job:
+            return
+        token = job["lease_token"]
+        url, title = job["url"], job["title"]
+        row = self.query_one("SELECT gh_id FROM oa_cache WHERE url=?", [url])
+        if not self._full_text_enabled or (row and row["gh_id"] in self._full_text_ignore):
+            self.finish_oa_job(job["id"], token, "retry", "全文抓取已暂停", 30)
+            return
         try:
             from src.assistant.oa_reader import fetch_article_content
             content = fetch_article_content(url, timeout=15, title=title)
-            if content:
-                import html, re
-                content = html.unescape(content)
-                content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', content)
-                self.update("oa_cache", {
-                    "full_content": content[:50000],  # 最长 5 万字
-                    "content_status": 1,
-                    "cached_at": int(time.time()),  # 触及时戳触发增量重索引
-                }, {"url": url})
-                self._fetcher_count += 1
-                self._fetcher_retries.pop(url, None)  # 成功后清除重试计数
-                # 每 10 篇打一次追加索引进度日志
-                if self._fetcher_count % 10 == 0:
-                    try:
-                        _pending = self.query_one(
-                            "SELECT COUNT(*) AS c FROM oa_cache WHERE content_status=0"
-                        )["c"]
-                        logger.info(
-                            "[CACHE] 公众号原文 本地缓存中: 已处理 %d 篇，剩余 %d 篇待抓",
-                            self._fetcher_count, _pending,
-                        )
-                    except Exception:
-                        pass
-                # 每 5 篇更新一次任务进度
-                if self._fetcher_count % 5 == 0 and self._fetcher_task_id:
-                    _update_task(self._fetcher_tc, self._fetcher_task_id,
-                                 f"已抓取 {self._fetcher_count} 篇")
-            else:
+            if not content:
                 self.update("oa_cache", {"content_status": -1}, {"url": url})
+                self.finish_oa_job(job["id"], token, "dead", "未获取到文章全文")
+                return
+            content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', html.unescape(content))
+            self.update("oa_cache", {
+                "full_content": content[:50000], "content_status": 1,
+                "cached_at": int(time.time()),
+            }, {"url": url})
+            try:
+                from src.web.server import get_rag_engine
+                rag = get_rag_engine()
+                if rag:
+                    self.index_to_rag(rag, "oa")
+            except Exception:
+                pass
+            self.finish_oa_job(job["id"], token, "completed")
         except Exception as e:
-            # 403/429 直接标记失败；其他异常连续失败 ≥5 次也放弃（防无限重试卡队列）
-            resp_err = getattr(e, "response", None)
-            status = getattr(resp_err, "status_code", 0) if resp_err else 0
-            if status in (403, 429):
-                logger.warning("[CACHE] OA 全文抓取失败 %s (HTTP %d)", url, status)
+            attempts = int(job.get("attempts") or 1)
+            status = getattr(getattr(e, "response", None), "status_code", 0)
+            if status in (403, 429) or attempts >= 5:
                 self.update("oa_cache", {"content_status": -1}, {"url": url})
+                self.finish_oa_job(job["id"], token, "dead", str(e))
             else:
-                self._fetcher_retries[url] = self._fetcher_retries.get(url, 0) + 1
-                if self._fetcher_retries[url] >= 5:
-                    logger.warning("[CACHE] OA 全文抓取放弃 %s — 连续失败 %d 次: %s",
-                                   url, self._fetcher_retries[url], e)
-                    self.update("oa_cache", {"content_status": -1}, {"url": url})
-                    self._fetcher_retries.pop(url, None)
-                else:
-                    logger.debug("[CACHE] OA 全文抓取重试 %s (%d/5): %s",
-                                 url, self._fetcher_retries[url], e)
+                self.finish_oa_job(job["id"], token, "retry", str(e), min(300, 10 * 2 ** (attempts - 1)))
 
     # ══════════════════════════════════════════════════════════════
     # SNS 全量同步 + 增量合并

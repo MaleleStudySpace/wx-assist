@@ -36,6 +36,95 @@ class _FailingDelivery(_RecordingDelivery):
         super().__init__({"success": False, "error": "provider failed", "results": []})
 
 
+def test_agent_digest_lookup_tools_return_complete_json_payloads():
+    import json
+
+    task_center = MagicMock()
+    task_center.get_latest_completed_digest.side_effect = [
+        {
+            "id": 101,
+            "task_type": "oa_digest",
+            "source": "scheduler",
+            "group_id": "oa-1",
+            "group_name": "开源项目",
+            "created_at": "2026-09-07T08:00:00",
+            "started_at": "2026-09-07T08:00:01",
+            "finished_at": "2026-09-07T08:01:00",
+            "articles_count": 2,
+            "msg_count": 0,
+            "result": "公众号完整摘要正文" * 100,
+        },
+        {
+            "id": 102,
+            "task_type": "group_digest",
+            "source": "catchup",
+            "group_id": "dg-1",
+            "group_name": "技术交流群",
+            "created_at": "2026-09-07T08:00:00",
+            "started_at": "2026-09-07T08:00:01",
+            "finished_at": "2026-09-07T08:01:00",
+            "articles_count": 0,
+            "msg_count": 8,
+            "result": "群聊完整摘要正文",
+        },
+    ]
+    executor = ToolExecutor.__new__(ToolExecutor)
+    executor._task_center = task_center
+
+    oa = json.loads(executor._handle_get_latest_oa_digest("开源项目"))
+    group = json.loads(executor._handle_get_latest_group_digest("技术交流群"))
+
+    assert oa["ok"] is True
+    assert oa["has_content"] is True
+    assert oa["task_id"] == 101
+    assert len(oa["digest"]) == len("公众号完整摘要正文" * 100)
+    assert group["task_id"] == 102
+    assert group["msg_count"] == 8
+    assert task_center.get_latest_completed_digest.call_args_list[0].args == (
+        "oa_digest", "开源项目"
+    )
+    assert task_center.get_latest_completed_digest.call_args_list[1].args == (
+        "group_digest", "技术交流群"
+    )
+
+
+def test_agent_digest_lookup_returns_no_content_payload():
+    import json
+
+    executor = ToolExecutor.__new__(ToolExecutor)
+    executor._task_center = MagicMock()
+    executor._task_center.get_latest_completed_digest.return_value = {
+        "id": 103,
+        "task_type": "oa_digest",
+        "source": "scheduler",
+        "group_id": "oa-1",
+        "group_name": "开源项目",
+        "created_at": "2026-09-07T08:00:00",
+        "finished_at": "2026-09-07T08:00:10",
+        "articles_count": 0,
+        "msg_count": 0,
+        "result": "所有文章已摘要过，无新内容",
+    }
+
+    result = json.loads(executor._handle_get_latest_oa_digest("开源项目"))
+
+    assert result["ok"] is True
+    assert result["has_content"] is False
+    assert result["task_id"] == 103
+    assert result["reason"] == "所有文章已摘要过，无新内容"
+
+
+def test_agent_digest_lookup_requires_task_center_and_exact_name():
+    executor = ToolExecutor.__new__(ToolExecutor)
+    executor._task_center = None
+    assert "任务中心未就绪" in executor._handle_get_latest_oa_digest("开源项目")
+
+    executor._task_center = MagicMock()
+    assert "请提供分组名称" in executor._handle_get_latest_group_digest("  ")
+    executor._task_center.get_latest_completed_digest.return_value = None
+    assert "未找到" in executor._handle_get_latest_oa_digest("开源项目", 24)
+
+
 def test_agent_cron_creation_keeps_auto_push_when_legacy_target_is_empty():
     jobs = []
 

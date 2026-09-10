@@ -581,6 +581,12 @@ class PublicApiTests(unittest.TestCase):
         result = _stop_bot()
         self.assertFalse(result)
 
+    def test_concurrent_start_has_single_winner(self):
+        from src.web.server import _BotControl
+        control = _BotControl()
+        owners = [control.reserve_start(), control.reserve_start()]
+        self.assertEqual(sum(owner is not None for owner in owners), 1)
+
     def test_start_bot_in_thread_returns_error_when_already_running(self):
         """_start_bot_in_thread() refuses if bot is already running."""
         from src.web.server import _start_bot_in_thread, _bot_control

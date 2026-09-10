@@ -47,18 +47,22 @@ class QQBotAdapter(BasePlatformAdapter):
         self._chat_type_map: dict[str, str] = {}
         self._seen_messages: dict[str, float] = {}
         self._state_lock = threading.RLock()
-
+        self._start_lock = threading.Lock()
     def start(self, callback: MessageCallback,
               groups: list[str] | None = None) -> bool:
         if not self._client.app_id or not self._client.client_secret:
             logger.error("[qqbot] app_id/client_secret 未配置")
             return False
         logger.info("[qqbot] starting adapter: app_id=%s", self._client.app_id)
-        self._callback = callback
-        self._stop_event.clear()
-        self._ws_thread = threading.Thread(
-            target=self._ws_loop, name="qqbot-gateway", daemon=True)
-        self._ws_thread.start()
+        with self._start_lock:
+            if self._ws_thread and self._ws_thread.is_alive():
+                logger.info("[qqbot] adapter already running")
+                return True
+            self._callback = callback
+            self._stop_event.clear()
+            self._ws_thread = threading.Thread(
+                target=self._ws_loop, name="qqbot-gateway", daemon=True)
+            self._ws_thread.start()
         return True
 
     def stop(self) -> None:
@@ -69,6 +73,12 @@ class QQBotAdapter(BasePlatformAdapter):
                 ws.close()
             except Exception:
                 pass
+        thread = self._ws_thread
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=5)
+        if not thread or not thread.is_alive():
+            self._ws_thread = None
+            self._ws = None
         self._client.close()
 
     def send_text(self, chat_id: str, content: str,

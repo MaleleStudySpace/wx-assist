@@ -114,10 +114,11 @@ const DEFAULT_CUSTOM_PROMPT = `你是一个专业的公众号信息摘要助手�
 2. 摘要提炼核心要点，不重复标题
 3. 总结要有洞察，不要简单罗列`
 
-function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accounts, lastDigest, onViewAccount }) {
+function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accounts, lastDigest, onViewAccount, onToggle }) {
   const [expanded, setExpanded] = useState(false)
   const [showDigest, setShowDigest] = useState(false)
   const isRunning = digestRunning === group.id
+  const enabled = group.enabled !== false
   const digest = lastDigest?.groupId === group.id ? lastDigest : null
   const cardRef = useRef(null)
 
@@ -149,10 +150,14 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
   return (
     <div ref={cardRef} className={`border rounded-xl overflow-hidden bg-bg-card transition-colors
       ${isRunning ? 'border-brand-green/40 shadow-[0_0_12px_rgba(24,226,153,0.08)]' : 'border-border-main hover:border-text-muted/20'}`}>
-      <div
-        className="flex items-center gap-3 p-5 cursor-pointer hover:bg-bg-raised/50 transition-colors"
+      <div className={`flex items-center gap-3 p-5 cursor-pointer hover:bg-bg-raised/50 transition-colors ${!enabled ? 'opacity-65' : ''}`}
         onClick={() => setExpanded(!expanded)}
       >
+        <Toggle
+          enabled={enabled}
+          onChange={value => onToggle?.(group, value)}
+          title="自动推送到已扫码绑定的消息平台（在「系统配置 → 消息推送」完成绑定后生效）"
+        />
         <div className="w-9 h-9 rounded-lg bg-brand-green-light/30 flex items-center justify-center text-brand-green">
           {templateInfo?.PhosphorIcon ? <templateInfo.PhosphorIcon size={18} /> : <Folder size={18} />}
         </div>
@@ -168,14 +173,9 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
                 <span className="text-xs text-brand-green/70">{templateInfo.label}</span>
               </>
             )}
-            {group.enabled !== false && (
-              <>
-                <span className="text-sm text-text-muted">·</span>
-                <span className="text-xs text-status-success flex items-center gap-0.5">
-                  <Bell size={10} weight="fill" />推送
-                </span>
-              </>
-            )}
+            <span className={`text-xs flex items-center gap-0.5 ${enabled ? 'text-status-success' : 'text-text-muted'}`}>
+              <Bell size={10} weight="fill" />{enabled ? '自动推送' : '已停用'}
+            </span>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -221,9 +221,9 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-text-muted">推送</span>
-                <span className="text-xs px-1.5 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">
-                  {group.enabled === false ? '未启用' : '自动推送'}
+                <span className="text-text-muted">状态</span>
+                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${enabled ? 'bg-brand-green/10 text-brand-green-hover dark:text-brand-green' : 'bg-bg-raised text-text-muted'}`}>
+                  {enabled ? '已启用 · 自动推送' : '已停用 · 不推送'}
                 </span>
               </div>
             </div>
@@ -273,11 +273,13 @@ function GroupCard({ group, onEdit, onDelete, onRunDigest, digestRunning, accoun
             <div className="mt-3 pt-3 border-t border-border-main flex items-center gap-4">
               <button
                 onClick={(e) => { e.stopPropagation(); onRunDigest(group.id) }}
-                disabled={isRunning}
+                disabled={isRunning || !enabled}
                 className={`flex items-center gap-1.5 text-xs font-medium transition-colors cursor-pointer
                   ${isRunning
                     ? 'text-brand-green/50 cursor-wait'
-                    : 'text-brand-green hover:text-brand-green-hover'
+                    : !enabled
+                      ? 'text-text-muted/50 cursor-not-allowed'
+                      : 'text-brand-green hover:text-brand-green-hover'
                   }`}
               >
                 <Play size={13} weight="fill" />
@@ -647,7 +649,7 @@ function GroupEditor({ group, accounts, onSave, onCancel, onViewAccount }) {
         <div>
           <label className="block text-sm text-text-muted mb-2">推送设置</label>
           <div className="rounded-lg border border-border-main bg-bg-raised px-3 py-2">
-            <p className="text-xs text-text-muted">自动推送到已绑定的平台（在「系统配置 → 消息推送」完成绑定后生效）</p>
+            <p className="text-xs text-text-muted">自动推送到已扫码绑定的消息平台（在「系统配置 → 消息推送」完成绑定后生效）</p>
           </div>
         </div>
       </div>
@@ -1476,6 +1478,25 @@ export default function OATab() {
     }
   }
 
+  async function handleToggleGroup(group, enabled) {
+    try {
+      const res = await fetch(`${API_BASE}/api/oa/groups/${group.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      })
+      const result = await res.json()
+      if (result.ok) {
+        setGroups(prev => prev.map(item => item.id === group.id ? { ...item, enabled } : item))
+        showActionToast(true, enabled ? `✓ 已启用：${group.name || group.id}` : `✓ 已停用：${group.name || group.id}`)
+      } else {
+        showActionToast(false, `⚠ 操作失败：${result.error || '未知错误'}`)
+      }
+    } catch (e) {
+      showActionToast(false, `⚠ 操作失败：${e.message || '网络错误'}`)
+    }
+  }
+
   async function handleToggleMonitor(group) {
     const updated = monitorGroups.map(g =>
       g.id === group.id ? { ...g, enabled: !g.enabled } : g
@@ -1831,6 +1852,7 @@ export default function OATab() {
                 digestRunning={digestRunning}
                 lastDigest={lastDigest}
                 onViewAccount={handleViewAccount}
+                onToggle={handleToggleGroup}
               />
             ))}
           </div>

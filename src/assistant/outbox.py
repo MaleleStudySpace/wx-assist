@@ -155,6 +155,27 @@ class Outbox:
         """Return pending notifications, oldest first."""
         return self.list_notifications(status="pending", limit=limit)
 
+    def get_by_url(self, url: str, notif_type: str = "") -> Optional[dict]:
+        """Return the newest notification for an article URL."""
+        if not url:
+            return None
+        try:
+            with self._get_conn() as conn:
+                if notif_type:
+                    row = conn.execute(
+                        "SELECT * FROM assistant_outbox WHERE url=? AND type=? "
+                        "ORDER BY id DESC LIMIT 1", (url, notif_type)
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT * FROM assistant_outbox WHERE url=? "
+                        "ORDER BY id DESC LIMIT 1", (url,)
+                    ).fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            logger.warning("Outbox: get_by_url failed: %s", e)
+            return None
+
     def get_notification(self, notif_id: int) -> Optional[dict]:
         """Return a single notification by ID.
 

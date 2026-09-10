@@ -681,38 +681,98 @@ class _BotControl:
         self.thread = None
         self.backend = None
         self.running = False
+        self.state = "idle"  # idle | starting | running | stopping
+        self._generation = 0
+        self._owner = 0
+
+    def reserve_start(self):
+        """Atomically reserve the one Bot startup slot."""
+        with self._lock:
+            if self.state != "idle":
+                return None
+            self._generation += 1
+            self._owner = self._generation
+            self.state = "starting"
+            self.running = True
+            self.thread = None
+            self.backend = None
+            return self._owner
+
+    def start_reserved_thread(self, thread, owner) -> bool:
+        """Register and start a reserved Bot thread atomically with its state."""
+        with self._lock:
+            if owner != self._owner or self.state != "starting":
+                return False
+            self.thread = thread
+            self.state = "running"
+            self.running = True
+            thread.start()
+            return True
+
+    def register_running_thread(self, thread, owner) -> bool:
+        """Register an already-running desktop Bot thread for an owner."""
+        with self._lock:
+            if owner != self._owner or self.state != "starting":
+                return False
+            self.thread = thread
+            self.state = "running"
+            self.running = True
+            return True
+
+    def is_owner_active(self, owner=None) -> bool:
+        with self._lock:
+            return self.state == "running" and (owner is None or owner == self._owner)
 
     def register(self, thread=None, backend=None):
         with self._lock:
+            if self.state == "stopping":
+                return False
             if thread is not None:
                 self.thread = thread
             if backend is not None:
                 self.backend = backend
             self.running = True
-
+            self.state = "running"
+            return True
     def register_backend(self, backend):
         """Called by Bot.run() during initialization."""
+        stop_backend = False
         with self._lock:
-            self.backend = backend
+            if self.state == "stopping":
+                stop_backend = True
+            else:
+                self.backend = backend
+        if stop_backend and hasattr(backend, "stop"):
+            backend.stop()
+            return False
+        return True
 
     def stop(self):
-        """Stop the bot backend and wait for the thread to exit."""
-        # Read refs under lock, then call stop + join outside the lock
-        # to avoid deadlock if stop() needs the lock.
+        """Stop the current Bot and keep the start slot reserved until exit."""
         with self._lock:
+            if self.state == "idle":
+                self.running = False
+                return False
+            self.state = "stopping"
+            self.running = False
             backend = self.backend
             thread = self.thread
 
         if backend is not None and hasattr(backend, "stop"):
             backend.stop()
-
         if thread is not None and thread.is_alive():
             thread.join(timeout=30)
 
         with self._lock:
-            self.running = False
+            if thread is not self.thread:
+                return backend is not None
+            if thread is not None and thread.is_alive():
+                logger.warning("Bot stop timed out; start remains blocked until old thread exits")
+                return backend is not None
             self.backend = None
             self.thread = None
+            self.state = "idle"
+            self._owner = 0
         return backend is not None
 
     def is_running(self):
@@ -722,18 +782,22 @@ class _BotControl:
     def set_running(self):
         with self._lock:
             self.running = True
+            self.state = "running"
 
-    def mark_stopped(self):
-        """Reset running state when the bot thread exits on its own.
-
-        Does NOT stop the backend or join the thread — use stop() for
-        external shutdown requests.  This is called from within the bot
-        thread's ``finally`` block so the next /api/start can proceed.
-        """
+    def mark_stopped(self, owner=None):
+        """Release only the matching Bot owner; never clear a newer Bot."""
         with self._lock:
+            if owner is not None and owner != self._owner:
+                return False
+            if owner is not None and self.state == "stopping":
+                # stop() owns cleanup and will release the slot after join
+                return False
             self.running = False
             self.backend = None
             self.thread = None
+            self.state = "idle"
+            self._owner = 0
+            return True
 
     def set_thread(self, thread):
         with self._lock:
@@ -1040,18 +1104,14 @@ def register_bot(thread=None, backend=None):
     update_status(running=True)
 
 
-def _bot_exited():
-    """Notify that the bot thread has exited (any path — normal/error).
-
-    Resets the control lock so the next /api/start can proceed.
-    Called from desktop.py's start_bot() and _start_bot_in_thread().
-    """
-    _bot_control.mark_stopped()
+def _bot_exited(owner=None):
+    """Notify that the bot thread has exited without clearing a newer owner."""
+    return _bot_control.mark_stopped(owner)
 
 
 def _register_backend(backend):
     """Register backend from Bot.run() — explicit API, no monkey-patching."""
-    _bot_control.register_backend(backend)
+    return _bot_control.register_backend(backend)
 
 
 def _stop_bot():
@@ -1069,8 +1129,9 @@ def _stop_bot():
 
 def _start_bot_in_thread():
     """Start the bot in a new daemon thread. Call from API handler."""
-    if _bot_control.is_running():
-        return {"ok": False, "error": "Bot is already running"}
+    owner = _bot_control.reserve_start()
+    if owner is None:
+        return {"ok": False, "error": "Bot is already running or stopping"}
 
     import sys
     from src.config import PROJECT_ROOT
@@ -1089,7 +1150,6 @@ def _start_bot_in_thread():
             )
             from src.bot import Bot
             bot = Bot(config)
-            # Bot.run() calls _register_backend() during init — no patch needed
             bot.run()
         except SystemExit:
             update_status(running=False)
@@ -1097,19 +1157,16 @@ def _start_bot_in_thread():
             update_status(running=False, error=str(e))
             logger.exception("Bot crashed during startup")
         finally:
-            # Always clear the running flag so the user can restart
-            # (bot.run() exits gracefully on errors like KEY_MISSING)
-            _bot_control.mark_stopped()
+            _bot_control.mark_stopped(owner)
 
     thread = threading.Thread(target=_run, daemon=True, name="bot-main")
-    thread.start()
-    _bot_control.set_thread(thread)
-    _bot_control.set_running()
+    if not _bot_control.start_reserved_thread(thread, owner):
+        return {"ok": False, "error": "Bot start reservation expired"}
     update_status(running=True)
 
     # Auto-detect AI connectivity on startup (background, non-blocking)
     def _auto_ai_check():
-        time.sleep(6)  # Wait for bot to initialize
+        time.sleep(6)
         try:
             from src.config import load_config
             cfg = load_config()
@@ -1126,7 +1183,6 @@ def _start_bot_in_thread():
             logger.warning("Auto AI check failed: %s", e)
 
     threading.Thread(target=_auto_ai_check, daemon=True, name="ai-auto-check").start()
-
     return {"ok": True}
 
 

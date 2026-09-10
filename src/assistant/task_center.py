@@ -291,6 +291,50 @@ class TaskCenter:
             logger.warning("[TASK-CENTER] get_task #%d failed: %s", task_id, e)
             return None
 
+    def get_latest_completed_digest(
+        self, task_type: str, group_name: str, within_hours: int = 48,
+        scheduled_only: bool = True,
+    ) -> Optional[dict]:
+        """Return the latest completed digest for an exact group name.
+
+        This is a read-only lookup for Agent integrations.  It never starts a
+        new digest and deliberately ignores push status: a generated digest is
+        still useful even when delivery to an IM channel failed.
+        """
+        if task_type not in ("oa_digest", "group_digest"):
+            return None
+        normalized_name = str(group_name or "").strip()
+        if not normalized_name:
+            return None
+        try:
+            hours = max(1, min(int(within_hours or 48), 24 * 30))
+        except (TypeError, ValueError):
+            hours = 48
+
+        try:
+            cutoff = _now_offset(-hours * 3600)
+            source_clause = ""
+            params: list[object] = [task_type, normalized_name, cutoff]
+            if scheduled_only:
+                source_clause = " AND source IN ('scheduler', 'catchup')"
+            with self._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT id, task_type, source, group_id, group_name, "
+                    "status, result, error, articles_count, msg_count, "
+                    "push_status, push_error, created_at, started_at, finished_at "
+                    "FROM task_center "
+                    "WHERE task_type=? AND group_name=? AND status='completed' "
+                    "AND created_at>=?" + source_clause + " "
+                    "ORDER BY COALESCE(finished_at, created_at) DESC, id DESC LIMIT 1",
+                    params,
+                ).fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            logger.warning(
+                "[TASK-CENTER] get_latest_completed_digest failed: %s", e
+            )
+            return None
+
     def get_failed_push_tasks(self, hours: int = 24) -> list[dict]:
         """Return retryable push-failed tasks within the last N hours.
 
