@@ -1,139 +1,66 @@
-# 公众号助手（OA Assistant）
+# 公众号助手
 
-## 一句话说明
+## 1. 功能拆分
 
-将关注的公众号按主题分组，AI 定时或手动生成摘要，支持预设模板和完全自定义 prompt。同时提供新文章即时提醒能力。
+| 子系统 | 作用 | AI 依赖 |
+|---|---|---:|
+| 账号和文章列表 | 浏览公众号和文章 | 否 |
+| 文章缓存和搜索 | 本地缓存、全文抓取、搜索 | 否 |
+| 定时摘要 | 按分组和时间整理文章 | 是 |
+| 即时提醒 | 新文章发现后通知 | 否，AI 速读为增强项 |
 
-## 功能拆分
+## 2. 账号与文章
 
-公众号助手包含两个独立子系统：
+公众号助手将可用账号按分组管理。文章先解析标题、摘要、来源和链接，再写入本地缓存。缓存可以降低重复读取成本，也支持在账号状态变化后继续浏览已经保存的文章。
 
-| 子系统 | 触发方式 | 用途 |
-|--------|----------|------|
-| OA 定时摘要 | 定时 cron / 手动触发 | 按分组汇总新文章，AI 生成结构化摘要 |
-| OA 即时提醒 | 后台 60s 轮询 | 监控公众号，新文章发布即刻推送通知 |
+文章搜索优先使用本地缓存，未命中时再读取可用账号的近期文章。
 
-两个子系统共享 OA 文章解析引擎，但调度和去重机制各自独立。
+## 3. 定时摘要
 
-## OA 定时摘要
-
-### 配置字段（OAGroup）
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `id` | str | "" | 唯一 ID（自动生成） |
-| `name` | str | "" | 分组显示名 |
-| `accounts` | list[str] | [] | 公众号列表（gh_xxx） |
-| `cron_expr` | str | "" | 5 字段 cron 表达式（多行支持） |
-| `digest_template` | str | "default" | 摘要模板 key |
-| `push_target` | str | "" | "ilink"=推送到微信 |
-| `lookback_hours` | int | 24 | 回溯窗口 |
-| `lookback_mode` | str | "auto" | auto=从 schedule 推导；manual=直接使用 lookback_hours |
-| `custom_prompt` | str | "" | 自定义 prompt（替代模板） |
-| `enabled` | bool | True | 主开关 |
-
-### 数据流
-
-```
-触发摘要（手动 / 定时 cron 匹配）
-    │
-    ▼
-1. 遍历 group.accounts[]（gh_xxx 列表）
-2. 从本地数据库查询每号最近文章
-3. 解析 → zstd 解压 → XML 提取 title/url/digest/cover
-4. 时间窗口过滤 + URL 去重（DigestHistory）
-5. 可选全文抓取（HTTP GET）→ HTML 清洗 → 截断 8000 字
-6. Prompt 组装：
-   system = custom_prompt? or DIGEST_TEMPLATES[key]
-   user   = "请总结以下 N 篇文章：\n---\n### {标题}\n来源: {xxx}\n\n{内容}\n\n链接: {url}"
-7. call_llm() → AI 生成摘要
-8. DigestHistory.mark_digested() → 标记已摘要
-9. outbox.add(notif_type="oa_digest")
-10. push_target=="ilink"? → iLink 推送
-11. WebSocket 广播 oa_digest_progress
+```text
+定时或手动触发
+  → 读取分组内文章
+  → 时间窗口过滤和 URL 去重
+  → 优先使用缓存正文，必要时抓取公开文章内容
+  → 按模板或自定义指令调用 AI
+  → 写入任务中心和通知队列
+  → 投递到已绑定通知渠道
 ```
 
-### 摘要模板
+支持通用、技术、娱乐、商业、新闻等预设风格，也支持自定义指令。多文章场景会分块处理并合并结果。
 
-| key | 名称 | 风格 |
-|-----|------|------|
-| `default` | 通用摘要 | 核心要点 + 关键信息 + 简评 |
-| `tech` | 技术深度 | 核心技术 + 实现细节 |
-| `entertainment` | 娱乐速览 | 核心事件 + 关键人物 |
-| `business` | 商业分析 | 数据 + 市场影响 + 投资信号 |
-| `news` | 新闻报道 | 5W1H + 关键数据 |
-| `custom` | 自定义 | 完全自定义 prompt |
+没有 AI 时，账号、文章、搜索和缓存仍可使用；定时摘要的最终生成不可用。
 
-模板作为 system prompt 发送给 LLM。选择 custom 时，替换为用户的自定义指令。
+## 4. 即时提醒
 
-### 去重（DigestHistory）
+即时提醒由独立后台任务定期检查被监控账号：
 
-URL 级别的去重，持久化到 `data/oa_digest_history.json`。已摘要的文章在后续运行中跳过，30 天自动清理过期记录。
-
-### 时间窗口
-
-- **auto 模式**：解析 cron 表达式的小时字段，计算相邻执行间隔 + 1h buffer
-- **manual 模式**：直接使用 `lookback_hours`
-
-## OA 即时提醒
-
-独立的后台 daemon 线程（`OAMonitorEngine`），60s 轮询所有被监控的公众号，发现新文章即推通知。
-
-### 数据流
-
-```
-OAMonitorEngine daemon 线程（60s 轮询）
-    │
-    ▼
-对于每个启用的 monitor_group：
-    遍历 group.accounts[]（gh_xxx 列表）
-        │
-        ▼
-    fetch_oa_articles(client, gh_id, limit=10)
-        │
-        ▼
-    时间过滤（仅 5 分钟内发布的新文章）
-    URL 去重（内存 _alerted_urls 上限 5000 / 7 天清理 + oa_cache 持久化跨重启）
-        │
-        ▼
-    4 层文章内容获取链路（优先取最新一层）:
-      ① 本地 oa_cache.full_content
-      ② HTTP 抓取（15s 超时）→ HTML 清洗
-      ③ 本地数据库重查 URL + HTTP 重试
-      ④ 本地数据库短导语兜底
-        │
-        ▼
-    AI 摘要（后台线程 + 35s 硬超时，失败降级为标题摘要；摘要写回缓存）
-        │  用 custom_prompt（默认 "请用1-2句话总结以下公众号文章的核心内容"）
-        ▼
-    outbox.add(notif_type="oa_article_alert", priority="high")
-        │
-        ├── push_target == "ilink"? → iLink 推送
-        └── 仅入队
-        │
-        ▼
-    WebSocket 广播推送结果 / 触发 RAG 重索引（新文章写入缓存后）
+```text
+发现新文章
+  → 发布时间窗口过滤
+  → URL 去重
+  → 读取缓存正文或文章摘要
+  → 尝试生成 AI 速读
+  → AI 失败时退回文章摘要或标题
+  → 写入通知队列并投递
 ```
 
-### 与定时摘要的区别
+文章发现和通知投递不依赖 AI，因此未配置 AI 时仍可以收到文章提醒。
 
-| 维度 | 定时摘要 | 即时提醒 |
-|------|----------|----------|
-| 调度 | cron 定时 / 手动 | 60s 后台轮询 |
-| 范围 | 分组内所有号的历史文章 | 仅 5 分钟内最新发布文章 |
-| 去重 | DigestHistory（URL 持久化，30 天） | 内存 + 缓存双重 URL 去重 |
-| AI 摘要 | 必选（90s 超时） | 可选（35s 硬超时，失败降级） |
-| 推送频率 | 按计划 | 实时 |
+## 5. 推送规则
 
-## 代码位置
+业务内容由统一投递服务发送到消息推送页中已经绑定的渠道。旧配置中的单一推送目标仅用于兼容，不代表当前只能发送到某一个平台。
 
-| 组件 | 文件 |
-|------|------|
-| OADigestService | `src/assistant/oa_digest.py` |
-| OAMonitorEngine | `src/assistant/oa_monitor.py` |
-| OAGroupManager | `src/assistant/oa_groups.py` |
-| 文章解析 | `src/assistant/oa_parser.py` |
-| 全文抓取 | `src/assistant/oa_reader.py` |
-| 分组配置 | `src/assistant/config.py` |
-| 前端 OATab | `ui/src/components/OATab.jsx` |
-| 前端 Dashboard | `ui/src/components/Dashboard.jsx` |
+## 6. Skill 归档
+
+公众号摘要归档 Skill 只查询已经完成的摘要，并按指令追加 Markdown 笔记；它不会重新抓取文章或重新生成摘要。执行该 prompt Skill 仍需要 Agent/AI。
+
+## 7. 代码位置
+
+- 分组：`src/assistant/oa_groups.py`
+- 文章解析：`src/assistant/oa_parser.py`
+- 全文抓取：`src/assistant/oa_reader.py`
+- 定时摘要：`src/assistant/oa_digest.py`、`src/assistant/scheduler.py`
+- 即时提醒：`src/assistant/oa_monitor.py`
+- 缓存：`src/db/content_cache.py`
+- 前端：`ui/src/components/OATab.jsx`

@@ -1,117 +1,51 @@
-# 微信推送通道（iLink Push）
+# 微信消息推送
 
-## 一句话说明
+## 1. 功能定位
 
-通过 iLink Bot API 将摘要/通知推送到用户微信私聊，跨设备、无需微信 PC 在线。
+微信推送渠道用于把摘要、提醒和任务结果发送到用户的微信私聊。它与本地消息读取、群聊浏览和 AI 生成相互独立。
 
-## 数据流
+## 2. 绑定流程
 
-```
-用户在 ConfigPanel 点击"绑定微信 Bot"
-    │
-    ▼
-GET /api/ilink/qrcode → 获取二维码 URL 和 ID
-    │
-    ▼
-前端 QRCodeSVG 渲染二维码
-    │
-    ▼ 用户用手机微信扫码
-轮询 GET /api/ilink/qrcode-status?qrcode=...
-    │  wait → scanned → confirmed
-    ▼
-绑定成功 → 写入 data/ilink_account.json
-    │  弹窗提示"请立即在微信中给 Bot 发一条消息"
-    ▼
-用户在微信中给 Bot 发消息（激活通道）
-    │
-    ▼ 后续推送
-scheduler / oa_digest / alert / oa_monitor
-    │  检查 push_target == "ilink"
-    │  format_for_wechat(text) → 截断 4000 字
-    │  ilink.send_message(text)
-    ▼
-消息出现在用户微信私聊中
+```text
+系统配置 → 消息推送 → 获取二维码
+  → 手机扫码
+  → 轮询确认状态
+  → 保存绑定信息并启动接收服务
+  → 可以发送测试消息
 ```
 
-## iLink 与键盘操控模式对比
+- 绑定信息由应用本地管理，公开文档不记录真实账号、Token 或个人路径；运行时文件保存在应用数据目录（示例：`data/ilink_account.json`）。
 
-| 维度 | iLink Push | 键盘操控模式 |
-|------|------------|-------------|
-| 传输方式 | HTTP API | Win32 键盘模拟 |
-| 需要微信 PC 在线？ | 否 | 是 |
-| 目标 | Bot → 用户私聊 | 任意群聊/联系人 |
-| 跨设备 | 是 | 否 |
-| 速率限制 | 2.5s 间隔 | — |
-| 消息长度 | 4000 字截断 | — |
+## 3. 发送流程
 
-## API 端点
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/api/ilink/status` | GET | 绑定状态 |
-| `/api/ilink/qrcode` | GET | 获取二维码 |
-| `/api/ilink/qrcode-status` | GET | 轮询扫码状态 |
-| `/api/ilink/bind` | POST | 绑定账号 |
-| `/api/ilink/unbind` | POST | 解绑（两步确认） |
-| `/api/ilink/test-push` | POST | 发送测试消息 |
-
-## send_message 流程
-
-```
-1. 验证已绑定 + 文本非空
-2. 截断到 4000 字
-3. 速率限制：等待 MIN_SEND_INTERVAL_SEC=2.5s
-4. 构建请求体 → POST iLink API
-5. ret=-2（速率限制）→ 指数退避重试（3/6/12 秒）
-6. errcode=-14（会话过期）→ 返回错误，不重试
+```text
+业务模块
+  → Outbox 记录原始内容
+  → DeliveryService 选择已绑定渠道
+  → 格式化消息并分段发送
+  → 回写成功/部分成功/失败/跳过
 ```
 
-## 凭据管理
+较长内容会分段发送，并保留段序信息；不会简单截断正文。
 
-- 文件：`data/ilink_account.json`
-- 字段：`bot_token`、`account_id`、`base_url`、`user_id`、`created_at`
-- 原子写入：tmp + `os.replace()`
-- **不存 .env**：凭据是动态的（扫码绑定时生成）
+## 4. 失败处理
 
-## 前端 UI 状态机
+- 发送频率限制：按服务端规则退避；
+- 会话过期：提示重新绑定；
+- 没有绑定：记录 skipped；
+- 多渠道发送：按渠道记录结果，部分成功不会被当作全部失败。
 
-```
-未绑定 → 点击"绑定微信 Bot" → binding
-binding → QR 码显示 + 轮询 → confirmed
-confirmed → 弹窗提示激活 → 已绑定
-已绑定 → 显示 bot/user ID + "发送测试消息" + "解除绑定"
-```
+## 5. 与其他发送方式的区别
 
-## 解除绑定（两步确认）
+| 方式 | 适用场景 |
+|---|---|
+| 微信消息推送 | 摘要、提醒、任务结果到私聊 |
+| QQ/飞书渠道 | 多平台通知 |
+| 本地页面 | 查看历史通知和投递审计 |
 
-第一次点击显示"确认解除绑定？"，5 秒内再次点击才真正解绑，防止误操作。
+## 6. 代码位置
 
-## 前端消费
-
-Dashboard 首页"即时提醒"卡片和"定时任务"卡片中，推送到微信的条目会显示 `推送` 标签。iLink 推送结果通过 WebSocket 事件广播到前端，自动弹 Toast。
-
-## 关键设计决策
-
-### 1. QR 码绑定
-
-iLink Bot API 要求通过微信 QR 码登录流程获取 `bot_token`。Bot 请求 QR 码，用户用手机微信扫描，API 返回 `bot_token`。这是微信 Bot 标准授权模型，无用户名密码流程。
-
-### 2. 推送与键盘操控分离
-
-iLink 用于推送通知到私聊，不操控微信窗口。键盘操控模式（已弃用）用于在群内发言。
-
-### 3. 推送结果实时广播
-
-每次推送后通过 WebSocket 广播结果，前端实时显示成功/失败提示。失败时区分普通错误和会话过期，后者提示用户重新绑定。
-
-## 代码位置
-
-| 组件 | 文件 |
-|------|------|
-| ILinkPush 类 | `src/wechat/ilink_push.py` |
-| iLink 配置（共享） | `src/wechat/ilink_push.py`、`src/wechat/ilink_account.json` |
-| 群摘要推送调用 | `src/assistant/scheduler.py` |
-| 关键词提醒推送调用 | `src/assistant/alert.py` |
-| OA 摘要推送调用 | `src/assistant/scheduler.py`（_generate_oa_digest） |
-| OA 即时提醒推送调用 | `src/assistant/oa_monitor.py` |
-| 前端绑定 UI | `ui/src/components/ConfigPanel.jsx`（PushSection） |
+- 微信通道：`src/wechat/ilink_push.py`
+- 统一投递：`src/im/delivery.py`
+- 渠道选择：`src/im/targets.py`
+- 配置界面：`ui/src/components/ConfigPanel.jsx`
