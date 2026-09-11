@@ -2,6 +2,15 @@
 Official Account Article Reader — fetches full article content from URL
 
 Scrapes WeChat article HTML pages and extracts main text content.
+
+兼容两种微信文章模板：
+- 老模板（多数公众号）：正文在 ``<div id="js_content">`` 里，Method 1 直接拿到
+- 新模板（WeChat 4.x 部分文章）：``#js_content`` 是 aria-hidden="true" 空 div 占位
+  （"点击查看原文" 的客户端渲染占位），正文在散落的
+  ``<p style="line-height: 1.75em;">`` 段落里 —— Method 1 拿到 0 字符时降级到
+  line-height 段落提取
+
+为保证对老模板文章零影响，新分支只在 Method 1/2 捕获长度 < 30 时才介入。
 """
 import logging
 import re
@@ -17,6 +26,16 @@ try:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 except Exception:
     pass
+
+# Method 1/2 命中后判定"空占位"的阈值：< 30 字符视为 aria-hidden 占位 div
+# 老模板正文远大于此值（实测 1000-12000 字符），新模板空 div 是 0 字符
+_EMPTY_CONTENT_THRESHOLD = 30
+
+# line-height 提取最少字符阈值：低于此值视为失败，继续走 Method 3/4
+_LINE_HEIGHT_MIN_CHARS = 200
+
+# line-height 段落过滤：短于 30 字符的视为菜单/分隔符/占位文字
+_LINE_HEIGHT_PARA_MIN_CHARS = 30
 
 
 class WeChatArticleExtractor(HTMLParser):
@@ -71,6 +90,42 @@ class WeChatArticleExtractor(HTMLParser):
         return self.sections
 
 
+def _extract_line_height_paragraphs(html: str) -> str:
+    """从微信 4.x 新模板里提取正文。
+
+    新模板的真实正文散落在 ``<p style="line-height: 1.75em;">`` 这类段落里
+    （``#js_content`` 只是 aria-hidden="true" 的占位 div）。
+
+    策略：
+    1. 匹配所有带 line-height 样式的 ``<p>`` 段落
+    2. 清洗 HTML 标签与 HTML 实体
+    3. 过滤掉 < 30 字符的短段（菜单、按钮文字、占位"阅读全文"等）
+    4. 用 ``\\n\\n`` 拼接保留段落分隔
+
+    Returns:
+        拼接后的正文（可能为空字符串——让调用方走其他降级路径）
+    """
+    paragraphs = re.findall(
+        r'<p[^>]*style="[^"]*line-height:[^"]*"[^>]*>(.*?)</p>',
+        html, re.DOTALL,
+    )
+    if not paragraphs:
+        return ""
+    cleaned: list[str] = []
+    for p in paragraphs:
+        text = re.sub(r"<[^>]+>", "", p)
+        text = re.sub(r"&nbsp;", " ", text)
+        text = re.sub(r"&amp;", "&", text)
+        text = re.sub(r"&lt;", "<", text)
+        text = re.sub(r"&gt;", ">", text)
+        text = re.sub(r"&quot;", '"', text)
+        text = re.sub(r"&#39;", "'", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) >= _LINE_HEIGHT_PARA_MIN_CHARS:
+            cleaned.append(text)
+    return "\n\n".join(cleaned)
+
+
 def fetch_article_content(url: str, timeout: int = 15, title: str = "") -> str:
     """Fetch a WeChat article and extract its main text content.
 
@@ -100,18 +155,62 @@ def fetch_article_content(url: str, timeout: int = 15, title: str = "") -> str:
         return ""
 
     # Method 1: Regex extract #js_content
-    m = re.search(r'id="js_content"[^>]*>(.*?)</div>\s*<script', html, re.DOTALL)
+    # 用 lookahead (?=\s*<script) 确保匹配的是 js_content 自身的关闭 div，
+    # 而不是页面其他位置更后面的 </div><script> —— 微信 4.x 新模板的
+    # #js_content 是个空 div（aria-hidden="true"），真实正文在
+    # <p style="line-height:..."> 段落里，老模板的 #js_content 是真正的正文容器。
+    m = re.search(
+        r'<div[^>]*\bid="js_content"[^>]*>(.*?)</div>(?=\s*<script)',
+        html, re.DOTALL,
+    )
     if m:
-        logger.debug("[OA-READER] Extraction method: regex #js_content")
+        captured = m.group(1).strip()
+        # 新模板判定：捕获内容空 / < 30 字符 / 整个 div 自身带 aria-hidden="true"
+        # 三个条件任一为真都视为占位 div，让 m=None 走降级
+        full_div = m.group(0)
+        is_aria_hidden = 'aria-hidden="true"' in full_div
+        if len(captured) < _EMPTY_CONTENT_THRESHOLD or is_aria_hidden:
+            logger.debug(
+                "[OA-READER] js_content placeholder div (captured=%d chars, aria-hidden=%s), trying line-height p",
+                len(captured), is_aria_hidden,
+            )
+            m = None
+        else:
+            logger.debug("[OA-READER] Extraction method: regex #js_content (%d chars)", len(captured))
     if not m:
         # Method 2: class="rich_media_content"
         m = re.search(
-            r'class="rich_media_content[^"]*"[^>]*>(.*?)</div>\s*<script',
-            html,
-            re.DOTALL,
+            r'<div[^>]*class="rich_media_content[^"]*"[^>]*>(.*?)</div>(?=\s*<script)',
+            html, re.DOTALL,
         )
         if m:
-            logger.debug("[OA-READER] Extraction method: regex rich_media_content")
+            captured = m.group(1).strip()
+            full_div = m.group(0)
+            is_aria_hidden = 'aria-hidden="true"' in full_div
+            if len(captured) < _EMPTY_CONTENT_THRESHOLD or is_aria_hidden:
+                logger.debug(
+                    "[OA-READER] rich_media_content placeholder div (captured=%d chars, aria-hidden=%s), trying line-height p",
+                    len(captured), is_aria_hidden,
+                )
+                m = None
+            else:
+                logger.debug("[OA-READER] Extraction method: regex rich_media_content (%d chars)", len(captured))
+
+    # Method 0 (微信 4.x 新模板兜底)：Method 1/2 命中但只是空占位 div 时，
+    # 从 <p style="line-height:..."> 段落里拼正文。**仅在 m=None 时触发**，
+    # 对老模板（Method 1/2 拿到真实正文）零影响。
+    if not m:
+        line_height_text = _extract_line_height_paragraphs(html)
+        if line_height_text and len(line_height_text) >= _LINE_HEIGHT_MIN_CHARS:
+            logger.info(
+                "[OA-READER] line-height p extracted %d chars for %s",
+                len(line_height_text), url[:80],
+            )
+            return line_height_text
+        logger.debug(
+            "[OA-READER] line-height p 不达标 (%d chars < %d)，继续走 Method 3/4",
+            len(line_height_text) if line_height_text else 0, _LINE_HEIGHT_MIN_CHARS,
+        )
 
     if m:
         content_html = m.group(1)
