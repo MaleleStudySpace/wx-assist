@@ -7,6 +7,8 @@
 只 mock 掉 HTTP 调用，不改 fetch_article_content 的内部逻辑。
 """
 import re
+import threading
+import time
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -94,6 +96,85 @@ class TestOldTemplateArticle(unittest.TestCase):
         self.assertIn("这是老模板的正文第二段", content)
         # 短段不一定要包含（取决于清洗），但中文字符应 > 30
         self.assertGreater(len(content), 30)
+
+
+class TestSharedFetch(unittest.TestCase):
+    """Concurrent callers for one URL share only the active HTTP request."""
+
+    @patch("src.assistant.oa_reader.requests.get")
+    def test_same_url_overlapping_calls_share_http(self, mock_get):
+        entered = threading.Event()
+        release = threading.Event()
+        html = TestOldTemplateArticle.OLD_TEMPLATE_HTML
+
+        def get(_url, **_kwargs):
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return _mock_resp(html)
+
+        mock_get.side_effect = get
+        results = []
+        threads = [
+            threading.Thread(
+                target=lambda: results.append(
+                    fetch_article_content("https://mp.weixin.qq.com/s/shared", timeout=3)
+                )
+            )
+            for _ in range(2)
+        ]
+        for thread in threads:
+            thread.start()
+        self.assertTrue(entered.wait(2))
+        time.sleep(0.05)
+        release.set()
+        for thread in threads:
+            thread.join(2)
+
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0], results[1])
+        self.assertIn("这是老模板的正文第一段", results[0])
+
+    @patch("src.assistant.oa_reader.requests.get")
+    def test_different_urls_do_not_share_http(self, mock_get):
+        mock_get.return_value = _mock_resp(TestOldTemplateArticle.OLD_TEMPLATE_HTML)
+
+        first = fetch_article_content("https://mp.weixin.qq.com/s/one")
+        second = fetch_article_content("https://mp.weixin.qq.com/s/two")
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch("src.assistant.oa_reader.requests.get")
+    def test_empty_fetch_releases_flight_for_retry(self, mock_get):
+        from src.assistant import oa_reader
+        mock_get.return_value = _mock_resp("<html><body></body></html>")
+
+        self.assertEqual(
+            fetch_article_content("https://mp.weixin.qq.com/s/empty-flight"), ""
+        )
+        self.assertEqual(oa_reader._fetch_flights, {})
+
+        mock_get.return_value = _mock_resp(TestOldTemplateArticle.OLD_TEMPLATE_HTML)
+        self.assertTrue(fetch_article_content("https://mp.weixin.qq.com/s/empty-flight"))
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch("src.assistant.oa_reader.requests.get")
+    def test_failed_fetch_releases_flight_for_retry(self, mock_get):
+        import requests
+        mock_get.side_effect = [requests.Timeout("timeout"), _mock_resp(
+            TestOldTemplateArticle.OLD_TEMPLATE_HTML
+        )]
+
+        self.assertEqual(
+            fetch_article_content("https://mp.weixin.qq.com/s/retry"), ""
+        )
+        self.assertIn(
+            "这是老模板的正文第一段",
+            fetch_article_content("https://mp.weixin.qq.com/s/retry"),
+        )
+        self.assertEqual(mock_get.call_count, 2)
 
 
 class TestNewTemplateArticle(unittest.TestCase):

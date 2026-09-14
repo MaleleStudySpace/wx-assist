@@ -949,6 +949,64 @@ class ContentCache:
         except Exception as e:
             logger.warning("[CACHE] OA 全文任务补建失败: %s", e)
 
+    def _store_oa_full_content(self, url: str, content: str, status: int = 1) -> bool:
+        """Store article content only when the cache has no body yet.
+
+        Alert and full-text workers can finish the same URL in either order.
+        Keeping this compare-and-set inside the write lock prevents a late
+        worker from replacing an already stored body with a partial result.
+        """
+        if not url or not content:
+            return False
+        cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', html.unescape(content))[:50000]
+        if not cleaned:
+            return False
+        with self._write_lock:
+            conn = self._get_conn()
+            try:
+                cur = conn.execute(
+                    "UPDATE oa_cache SET full_content=?, content_status=?, cached_at=? "
+                    "WHERE url=? AND COALESCE(full_content, '')=''",
+                    (cleaned, int(status), int(time.time()), url),
+                )
+                conn.commit()
+                return cur.rowcount == 1
+            except Exception as e:
+                conn.rollback()
+                logger.warning("[CACHE] OA 全文写入失败 (%s): %s", url[:60], e)
+                return False
+            finally:
+                conn.close()
+
+    def _index_oa_cache(self) -> None:
+        """Index OA cache after a body becomes available, if RAG is active."""
+        try:
+            from src.web.server import get_rag_engine
+            rag = get_rag_engine()
+            if rag:
+                self.index_to_rag(rag, "oa")
+        except Exception:
+            pass
+
+    def _mark_oa_content_failed_if_empty(self, url: str) -> None:
+        """Mark a fetch failure without overwriting a body won by another worker."""
+        if not url:
+            return
+        with self._write_lock:
+            conn = self._get_conn()
+            try:
+                conn.execute(
+                    "UPDATE oa_cache SET content_status=-1 "
+                    "WHERE url=? AND COALESCE(full_content, '')=''",
+                    (url,),
+                )
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.warning("[CACHE] OA 失败状态写入失败 (%s): %s", url[:60], e)
+            finally:
+                conn.close()
+
     def _fetch_one_content_job(self):
         """Consume one durable full-text job without blocking alert workers."""
         job = self.claim_oa_job("full_text", lease_seconds=60)
@@ -956,35 +1014,41 @@ class ContentCache:
             return
         token = job["lease_token"]
         url, title = job["url"], job["title"]
-        row = self.query_one("SELECT gh_id FROM oa_cache WHERE url=?", [url])
+        row = self.query_one("SELECT gh_id, full_content FROM oa_cache WHERE url=?", [url])
         if not self._full_text_enabled or (row and row["gh_id"] in self._full_text_ignore):
             self.finish_oa_job(job["id"], token, "retry", "全文抓取已暂停", 30)
+            return
+        if row and row["full_content"]:
+            # The alert worker may have fetched and stored the body first.
+            # Marking the durable content job complete here avoids a second
+            # HTTP request while preserving the current status value.
+            self._index_oa_cache()
+            self.finish_oa_job(job["id"], token, "completed")
             return
         try:
             from src.assistant.oa_reader import fetch_article_content
             content = fetch_article_content(url, timeout=15, title=title)
             if not content:
-                self.update("oa_cache", {"content_status": -1}, {"url": url})
+                self._mark_oa_content_failed_if_empty(url)
                 self.finish_oa_job(job["id"], token, "dead", "未获取到文章全文")
                 return
-            content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', html.unescape(content))
-            self.update("oa_cache", {
-                "full_content": content[:50000], "content_status": 1,
-                "cached_at": int(time.time()),
-            }, {"url": url})
-            try:
-                from src.web.server import get_rag_engine
-                rag = get_rag_engine()
-                if rag:
-                    self.index_to_rag(rag, "oa")
-            except Exception:
-                pass
+            stored = self._store_oa_full_content(url, content, status=1)
+            if not stored:
+                # Another consumer may have won the cache write while this
+                # worker was fetching.  It is still a successful job if a
+                # body is now present; otherwise surface the write failure.
+                current = self.query_one(
+                    "SELECT full_content FROM oa_cache WHERE url=?", [url]
+                )
+                if not current or not current["full_content"]:
+                    raise RuntimeError("文章全文获取成功但写入缓存失败")
+            self._index_oa_cache()
             self.finish_oa_job(job["id"], token, "completed")
         except Exception as e:
             attempts = int(job.get("attempts") or 1)
             status = getattr(getattr(e, "response", None), "status_code", 0)
             if status in (403, 429) or attempts >= 5:
-                self.update("oa_cache", {"content_status": -1}, {"url": url})
+                self._mark_oa_content_failed_if_empty(url)
                 self.finish_oa_job(job["id"], token, "dead", str(e))
             else:
                 self.finish_oa_job(job["id"], token, "retry", str(e), min(300, 10 * 2 ** (attempts - 1)))

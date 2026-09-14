@@ -10,10 +10,11 @@ Scrapes WeChat article HTML pages and extracts main text content.
   ``<p style="line-height: 1.75em;">`` 段落里 —— Method 1 拿到 0 字符时降级到
   line-height 段落提取
 
-为保证对老模板文章零影响，新分支只在 Method 1/2 捕获长度 < 30 时才介入。
+为保证对老模板文章零影响，新分支只在 Method 1/2 捕获内容过短或容器标记为 ``aria-hidden`` 时介入。
 """
 import logging
 import re
+import threading
 from html.parser import HTMLParser
 
 import requests
@@ -36,6 +37,22 @@ _LINE_HEIGHT_MIN_CHARS = 200
 
 # line-height 段落过滤：短于 30 字符的视为菜单/分隔符/占位文字
 _LINE_HEIGHT_PARA_MIN_CHARS = 30
+
+
+class _FetchFlight:
+    """State for one in-progress article fetch shared by URL."""
+
+    def __init__(self):
+        self.done = threading.Event()
+        self.result = ""
+        self.error: BaseException | None = None
+
+
+# Only coalesce requests that overlap in time.  Results are deliberately not
+# retained after the owner finishes, so a later retry can recover from a
+# transient network failure.
+_fetch_flights: dict[str, _FetchFlight] = {}
+_fetch_flights_lock = threading.Lock()
 
 
 class WeChatArticleExtractor(HTMLParser):
@@ -126,7 +143,7 @@ def _extract_line_height_paragraphs(html: str) -> str:
     return "\n\n".join(cleaned)
 
 
-def fetch_article_content(url: str, timeout: int = 15, title: str = "") -> str:
+def _fetch_article_content_uncached(url: str, timeout: int = 15, title: str = "") -> str:
     """Fetch a WeChat article and extract its main text content.
 
     Args:
@@ -252,3 +269,51 @@ def fetch_article_content(url: str, timeout: int = 15, title: str = "") -> str:
     else:
         logger.debug("[OA-READER] Extracted %d chars from %s", len(result), url[:80])
     return result
+
+
+def fetch_article_content(url: str, timeout: int = 15, title: str = "") -> str:
+    """Fetch an article, sharing an overlapping request for the same URL.
+
+    The request is coalesced only while it is in flight.  Its result is not
+    cached here: callers may retry later after a transient failure, while the
+    durable ``oa_cache`` remains the source of truth across restarts.
+    """
+    key = (url or "").strip()
+    if not key:
+        return ""
+
+    with _fetch_flights_lock:
+        flight = _fetch_flights.get(key)
+        owner = flight is None
+        if owner:
+            flight = _FetchFlight()
+            _fetch_flights[key] = flight
+
+    if not owner:
+        # Do not start a second request when the shared owner is slow.  The
+        # caller's own timeout bounds how long they are willing to wait.
+        wait_timeout = max(0.1, float(timeout or 15))
+        if not flight.done.wait(wait_timeout):
+            logger.debug("[OA-READER] Shared fetch wait timed out for %s", key[:80])
+            return ""
+        return flight.result
+
+    try:
+        flight.result = _fetch_article_content_uncached(key, timeout=timeout, title=title)
+    except Exception as e:
+        # Preserve the existing best-effort contract for unexpected parser
+        # failures: callers receive an empty result, and waiters are released.
+        flight.error = e
+        logger.error("[OA-READER] Shared fetch failed for「%s」: %s", title or key[:60], e)
+    finally:
+        # Signal before removing the entry.  A caller arriving in this small
+        # window can safely consume the completed result instead of starting
+        # a duplicate request.
+        flight.done.set()
+        with _fetch_flights_lock:
+            if _fetch_flights.get(key) is flight:
+                del _fetch_flights[key]
+
+    if flight.error is not None:
+        raise flight.error
+    return flight.result

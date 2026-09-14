@@ -138,7 +138,7 @@ class OAMonitorEngine:
             logger.warning("OAMonitor alert job failed: %s", e)
 
     def _process_alert_job(self, job: dict, group, config) -> None:
-        """Build and deliver an alert from cached metadata, without HTTP/WCDB fetch."""
+        """Build and deliver an alert from persisted metadata."""
         import json as _json
         url = job["url"]
         if self._outbox and self._outbox.query_by_url(url, "oa_article_alert", only_success=True):
@@ -159,37 +159,13 @@ class OAMonitorEngine:
                 if fetched:
                     article_text = fetched
                     content_source = "http"
-                    self._content_cache.update("oa_cache", {
-                        "full_content": fetched[:50000], "content_status": 2,
-                        "cached_at": int(_time.time()),
-                    }, {"url": url})
+                    if self._content_cache:
+                        self._content_cache._store_oa_full_content(url, fetched, status=2)
             except Exception as e:
                 logger.warning("OAMonitor: HTTP fetch failed for '%s': %s", title[:30], e)
-        if not article_text and job.get("gh_id"):
-            try:
-                from src.assistant.oa_parser import decode_content, parse_oa_article
-                wcdb_client = self._get_wcdb_client()
-                if wcdb_client:
-                    for message in wcdb_client.get_messages(talker=job["gh_id"], limit=50) or []:
-                        xml = decode_content(message.get("message_content", ""))
-                        if "<appmsg" not in xml:
-                            continue
-                        parsed = parse_oa_article(xml)
-                        wcdb_url = parsed.get("url", "")
-                        if not wcdb_url or not (wcdb_url == url or wcdb_url.endswith(url[-32:])):
-                            continue
-                        from src.assistant.oa_reader import fetch_article_content
-                        fetched = fetch_article_content(wcdb_url, timeout=15, title=title)
-                        if fetched:
-                            article_text = fetched
-                            content_source = "wcdb_retry"
-                            self._content_cache.update("oa_cache", {
-                                "full_content": fetched[:50000], "content_status": 2,
-                                "cached_at": int(_time.time()),
-                            }, {"url": url})
-                        break
-            except Exception as e:
-                logger.warning("OAMonitor: WCDB retry failed for '%s': %s", title[:30], e)
+        # The discovery scan already persisted the article metadata (including
+        # URL and digest) in this job.  Do not query WCDB again here: it can
+        # duplicate the scan and may fail on an oversized native result.
         article_text = article_text or digest
         if not content_source:
             content_source = "wcdb_des" if digest else ""
