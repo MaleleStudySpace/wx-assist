@@ -598,6 +598,7 @@ export default function FavoritesTab() {
   const [showFilters, setShowFilters] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportStatus, setExportStatus] = useState('')
+  const [exportSummary, setExportSummary] = useState(null)
   const [favOffset, setFavOffset] = useState(0)          // Step 7: pagination
   const [hasMoreFav, setHasMoreFav] = useState(true)    // Step 7: pagination
   const [loadingMoreFav, setLoadingMoreFav] = useState(false) // Step 7: pagination
@@ -715,6 +716,7 @@ export default function FavoritesTab() {
   async function handleExport() {
     setExporting(true)
     setExportStatus('starting')
+    setExportSummary(null)
     try {
       // Build query params from current filters
       const queryParams = new URLSearchParams({ format: 'json,image,html' })
@@ -755,10 +757,15 @@ export default function FavoritesTab() {
       })
       const data = await res.json()
       if (data.ok) {
-        setExportStatus('completed')
+        const media = data.formats?.image || null
+        setExportSummary({
+          items: data.total ?? itemCount,
+          media,
+        })
+        setExportStatus(media && (media.errors > 0 || media.skipped > 0) ? 'partial' : 'completed')
         // Auto open folder
         openExportFolder()
-        setTimeout(() => setExportStatus(''), 3000)
+        setTimeout(() => setExportStatus(''), 5000)
       } else {
         setExportStatus('error')
         setError(data.error)
@@ -965,9 +972,17 @@ export default function FavoritesTab() {
             }`}
         >
           {exportStatus === 'completed' && <><Star weight="fill" /> 导出完成</>}
+          {exportStatus === 'partial' && <><Star /> 导出完成，但部分媒体处理失败或跳过</>}
           {exportStatus === 'error' && <><Star /> 导出失败</>}
           {exportStatus === 'started' && <><Clock /> 开始导出...</>}
           {exportStatus === 'exporting' && <><Clock /> 正在导出...</>}
+          {exportSummary?.media && (
+            <span className="ml-2 text-text-muted font-normal">
+              收藏 {exportSummary.items} 条 · 媒体 {exportSummary.media.total} 个 ·
+              成功 {exportSummary.media.downloaded} · 失败 {exportSummary.media.errors} ·
+              跳过 {exportSummary.media.skipped}
+            </span>
+          )}
         </motion.div>
       )}
 

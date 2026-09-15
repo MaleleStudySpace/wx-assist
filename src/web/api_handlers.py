@@ -1038,12 +1038,17 @@ def _download_fav_media(items: list[dict], export_dir: str, broadcast=None) -> d
         broadcast: Optional callable(name, dict) to send progress
 
     Returns:
-        {total: N, downloaded: M, errors: K, items_with_media: I, skipped: S}
+        {total: N, downloaded: M, errors: K, items_with_media: I, skipped: S,
+         images: N, videos: N, voices: N}
     """
     from src.wechat.image_decrypt import download_and_decrypt
 
-    MAX_DOWNLOAD_ITEMS = 1000
-    MAX_DOWNLOAD_SECONDS = 300
+    # Do not silently cap normal exports.  A caller can opt into a total
+    # wall-clock guard for unusually large exports with FAV_EXPORT_MAX_SECONDS.
+    try:
+        max_download_seconds = max(0.0, float(os.getenv("FAV_EXPORT_MAX_SECONDS", "0") or 0))
+    except (TypeError, ValueError):
+        max_download_seconds = 0.0
 
     images_dir = os.path.join(export_dir, "images")
     voice_dir = os.path.join(export_dir, "voice")
@@ -1051,20 +1056,38 @@ def _download_fav_media(items: list[dict], export_dir: str, broadcast=None) -> d
     os.makedirs(images_dir, exist_ok=True)
     os.makedirs(voice_dir, exist_ok=True)
     os.makedirs(videos_dir, exist_ok=True)
-    stats = {"total": 0, "downloaded": 0, "errors": 0, "items_with_media": 0, "skipped": 0}
+    stats = {
+        "total": 0,
+        "downloaded": 0,
+        "errors": 0,
+        "items_with_media": 0,
+        "skipped": 0,
+        "images": 0,
+        "videos": 0,
+        "voices": 0,
+    }
     start_time = time.monotonic()
 
-    for item in items:
-        # Safety: check download limits
-        if stats["downloaded"] >= MAX_DOWNLOAD_ITEMS:
-            stats["skipped"] = len(items) - items.index(item)
-            logger.warning("Fav export media: hit MAX_DOWNLOAD_ITEMS=%d, skipping %d remaining",
-                           MAX_DOWNLOAD_ITEMS, stats["skipped"])
-            break
-        if time.monotonic() - start_time > MAX_DOWNLOAD_SECONDS:
-            stats["skipped"] = len(items) - items.index(item)
-            logger.warning("Fav export media: hit %ds timeout, skipping %d remaining",
-                           MAX_DOWNLOAD_SECONDS, stats["skipped"])
+    def _timed_out() -> bool:
+        return bool(max_download_seconds and
+                    time.monotonic() - start_time > max_download_seconds)
+
+    def _record_skip(reason: str, count: int = 1) -> None:
+        count = max(0, int(count))
+        if not count:
+            return
+        stats["skipped"] += count
+        reasons = stats.setdefault("skip_reasons", {})
+        reasons[reason] = reasons.get(reason, 0) + count
+
+    for item_index, item in enumerate(items):
+        # Optional safety guard. Zero means no aggregate time limit.
+        if _timed_out():
+            remaining = len(items) - item_index
+            _record_skip("timeout", remaining)
+            logger.warning("Fav export media: hit total timeout %.0fs, "
+                           "stopping with %d items remaining",
+                           max_download_seconds, remaining)
             break
 
         ftype = item.get("type", 0)
@@ -1083,6 +1106,7 @@ def _download_fav_media(items: list[dict], export_dir: str, broadcast=None) -> d
                         f.write(voice_data)
                     item["voice_path"] = f"voice/{filename}"
                     stats["downloaded"] += 1
+                    stats["voices"] += 1
                 else:
                     stats["errors"] += 1
             except Exception as e:
@@ -1128,6 +1152,9 @@ def _download_fav_media(items: list[dict], export_dir: str, broadcast=None) -> d
                     # Mark video type for HTML rendering
                     if ext == "mp4":
                         img["is_video"] = True
+                        stats["videos"] += 1
+                    else:
+                        stats["images"] += 1
                     stats["downloaded"] += 1
                 except Exception as e:
                     logger.warning(f"Failed to download fav media {url}: {e}")
@@ -1166,6 +1193,11 @@ def _download_fav_media(items: list[dict], export_dir: str, broadcast=None) -> d
                                     f.write(data)
                                 rec["local_path"] = f"images/{filename}"
                                 stats["downloaded"] += 1
+                                if ext == "mp4":
+                                    rec["is_video"] = True
+                                    stats["videos"] += 1
+                                else:
+                                    stats["images"] += 1
                             else:
                                 stats["errors"] += 1
                         except Exception as e:
@@ -1186,6 +1218,7 @@ def _download_fav_media(items: list[dict], export_dir: str, broadcast=None) -> d
                                     f.write(voice_data)
                                 rec["voice_path"] = f"voice/{filename}"
                                 stats["downloaded"] += 1
+                                stats["voices"] += 1
                             else:
                                 stats["errors"] += 1
                         except Exception as e:
@@ -1221,6 +1254,11 @@ def _download_fav_media(items: list[dict], export_dir: str, broadcast=None) -> d
                                             f.write(data)
                                         sub["local_path"] = f"images/{filename}"
                                         stats["downloaded"] += 1
+                                        if ext == "mp4":
+                                            sub["is_video"] = True
+                                            stats["videos"] += 1
+                                        else:
+                                            stats["images"] += 1
                                     else:
                                         stats["errors"] += 1
                                 except Exception as e:
@@ -1241,6 +1279,7 @@ def _download_fav_media(items: list[dict], export_dir: str, broadcast=None) -> d
                                             f.write(voice_data)
                                         sub["voice_path"] = f"voice/{filename}"
                                         stats["downloaded"] += 1
+                                        stats["voices"] += 1
                                     else:
                                         stats["errors"] += 1
                                 except Exception as e:
