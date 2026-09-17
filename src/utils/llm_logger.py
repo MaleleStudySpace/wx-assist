@@ -99,6 +99,17 @@ def _mask_secrets(text: str) -> str:
     return text
 
 
+def mask_secrets(text: str) -> str:
+    """Public wrapper: mask credentials in caller-supplied text before logging.
+
+    ``log_llm_interaction`` only masks the prompt/response fields.  Callers that
+    additionally log an exception message (e.g. via ``extra``) must run it
+    through this helper so a provider error echoing an Authorization header
+    can never reach ``data/llm.log`` in the clear.
+    """
+    return _mask_secrets(str(text))
+
+
 def _truncate(text: str, max_len: int = 0) -> str:
     """Truncate text if max_len > 0 and text exceeds it."""
     if max_len > 0 and len(text) > max_len:

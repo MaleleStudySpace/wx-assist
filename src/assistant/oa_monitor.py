@@ -183,10 +183,26 @@ class OAMonitorEngine:
                                      requester_name="system", group_name=source)
                     try:
                         llm_summary = (fut.result(timeout=35) or "").strip()
-                    except Exception:
+                    except concurrent.futures.TimeoutError:
                         llm_summary = ""
+                        logger.warning(
+                            "OAMonitor: 即时提醒摘要 LLM 超时（35s）'%s' (%s)",
+                            title[:30], url,
+                        )
+                    except Exception as e:
+                        # 这里原来静默吞掉异常（llm_summary=""），失败原因只能
+                        # 在 base.chat() 的失败交互日志里找。补一条带文章标题和
+                        # URL 的 warning，让 bot.log 自身就能定位是哪篇文章。
+                        llm_summary = ""
+                        logger.warning(
+                            "OAMonitor: 即时提醒摘要 LLM 调用失败 '%s' (%s): %s: %s",
+                            title[:30], url, type(e).__name__, e,
+                        )
             except Exception as e:
-                logger.debug("OAMonitor alert summary failed for '%s': %s", title[:30], e)
+                logger.warning(
+                    "OAMonitor: 即时提醒摘要初始化失败 '%s' (%s): %s: %s",
+                    title[:30], url, type(e).__name__, e,
+                )
         digest = llm_summary or digest or "（暂无文章摘要）"
         ts = job.get("article_time") or job.get("pub_time") or 0
         time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else ""
@@ -489,11 +505,14 @@ class OAMonitorEngine:
                             ai_digest = _fut.result(timeout=35)
                         except concurrent.futures.TimeoutError:
                             logger.warning(
-                                "OAMonitor: LLM 超时（35s）: %s", title[:20],
+                                "OAMonitor: LLM 超时（35s）: %s (%s)", title[:20], art.url,
                             )
                             ai_digest = ""
                         except Exception as e:
-                            logger.debug("OAMonitor: LLM 调用失败: %s", e)
+                            logger.warning(
+                                "OAMonitor: LLM 调用失败: %s (%s): %s: %s",
+                                title[:20], art.url, type(e).__name__, e,
+                            )
                             ai_digest = ""
 
                     _latency = (_time.monotonic() - _t0) * 1000

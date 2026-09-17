@@ -6,13 +6,70 @@ Implementations: ClaudeSummarizer, OpenAICompatSummarizer.
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import Callable, Iterator, TypeVar
+from typing import Any, Callable, Iterator, TypeVar
 
-from ..utils.llm_logger import log_llm_interaction
+from ..utils.llm_logger import log_llm_interaction, mask_secrets
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+# 失败交互日志里错误串的长度上限 —— 中转网关偶尔会把整个请求体回显进错误信息。
+_ERROR_CLIP_CHARS = 600
+
+
+def _clip(text: str, limit: int = _ERROR_CLIP_CHARS) -> str:
+    """截断错误串，但保留原始长度，避免日志被超长响应撑爆。"""
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...(共 {len(text)} 字)"
+
+
+def _exc_chain(exc: BaseException) -> Iterator[BaseException]:
+    """沿 ``__cause__`` / ``__context__`` 回溯异常链（带去重，防自引用死循环）。"""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = (getattr(current, "__cause__", None)
+                   or getattr(current, "__context__", None))
+
+
+def _error_diagnostics(exc: BaseException) -> dict[str, Any]:
+    """从 LLM 异常链里提取可定位、已脱敏的标量诊断字段。
+
+    覆盖线上实际出现的三种形态：
+      - openai ``APIStatusError`` → ``status_code`` / ``response.status_code``
+      - ``LLMResponseError``（中转 HTTP 200 + ``choices: null``）
+        → ``status_code`` / ``status_msg`` / ``prompt_tokens``
+      - 连接类失败 → 没有状态码，但有 ``cause_type``（如 ConnectError）
+    """
+    info: dict[str, Any] = {
+        "error_type": type(exc).__name__,
+        "error": mask_secrets(_clip(str(exc))),
+    }
+    for err in _exc_chain(exc):
+        status = getattr(err, "status_code", None)
+        if not isinstance(status, int):
+            response = getattr(err, "response", None)
+            status = getattr(response, "status_code", None)
+        if isinstance(status, int) and "status_code" not in info:
+            info["status_code"] = status
+
+        status_msg = getattr(err, "status_msg", None)
+        if status_msg and "status_msg" not in info:
+            info["status_msg"] = mask_secrets(_clip(str(status_msg), 300))
+
+        prompt_tokens = getattr(err, "prompt_tokens", None)
+        if isinstance(prompt_tokens, int) and "prompt_tokens" not in info:
+            info["prompt_tokens"] = prompt_tokens
+
+        if err is not exc and "cause_type" not in info:
+            info["cause_type"] = type(err).__name__
+            info["cause"] = mask_secrets(_clip(str(err), 300))
+    return info
 
 
 class AbstractSummarizer(ABC):
@@ -156,9 +213,30 @@ class AbstractSummarizer(ABC):
                 extra={"requester": requester_name, "group": group_name},
             )
             return result
-        except RuntimeError:
+        except RuntimeError as e:
             latency = (time.monotonic() - start) * 1000
-            logger.info("[LLM] chat FAILED after %.1fms", latency)
+            logger.warning(
+                "[LLM] chat FAILED after %.1fms (%s: %s)",
+                latency, type(e).__name__, e,
+            )
+            # 成功路径本来就写 data/llm.log；失败路径此前只写 bot.log 一行
+            # "chat FAILED"，导致上游错误码、异常类型全部丢失。这里补齐失败
+            # 交互记录：response 以 "[Error:" 开头 → 日志状态标 FAILED，
+            # extra 带异常类型 / HTTP 状态码 / provider 业务码 / token 数。
+            log_llm_interaction(
+                backend=self._backend_name,
+                call_type="chat",
+                model=getattr(self, 'model', 'unknown'),
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response=f"[Error: {type(e).__name__}: {_clip(str(e))}]",
+                latency_ms=latency,
+                extra={
+                    "requester": requester_name,
+                    "group": group_name,
+                    **_error_diagnostics(e),
+                },
+            )
             raise
 
     # ⚠ DEAD CODE REMOVED: proactive_chat() and PROACTIVE_SYSTEM_PROMPT
@@ -317,7 +395,12 @@ class AbstractSummarizer(ABC):
                 time.sleep(wait)
                 last_error = e
 
-        raise RuntimeError(
+        error = RuntimeError(
             f"Failed after {self.max_retries} retries on '{label}': "
             f"{last_error}"
         )
+        # 保留原始异常为 __cause__：否则重试耗尽后 HTTP 状态码 / provider
+        # 业务码只剩错误串，失败交互日志无法结构化记录。
+        if last_error is not None:
+            raise error from last_error
+        raise error
