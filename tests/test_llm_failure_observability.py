@@ -159,6 +159,20 @@ class TestChatFailureLogging(unittest.TestCase):
             smrz.chat("hi")
         self.assertIs(cm.exception, err)
 
+    def test_logging_failure_does_not_mask_llm_error(self):
+        """data/ 不可写等日志故障不能顶掉真正的 LLM 异常。
+
+        否则调用方的 ``except RuntimeError`` 会失效，拿到一个与业务无关的
+        OSError —— 这正是"新增日志反而破坏现有功能"的典型路径。
+        """
+        err = LLMResponseError("choices 为 null", status_code=2013)
+        smrz = _FailingSummarizer(err)
+        with patch("src.summarize.base.log_llm_interaction",
+                   side_effect=OSError("data/ is read-only")):
+            with self.assertRaises(LLMResponseError) as cm:
+                smrz.chat("hi")
+        self.assertIs(cm.exception, err)
+
     # ── 2. 凭证脱敏 ────────────────────────────────────────────────────
 
     def test_api_key_in_error_message_is_masked(self):

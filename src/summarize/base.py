@@ -223,20 +223,27 @@ class AbstractSummarizer(ABC):
             # "chat FAILED"，导致上游错误码、异常类型全部丢失。这里补齐失败
             # 交互记录：response 以 "[Error:" 开头 → 日志状态标 FAILED，
             # extra 带异常类型 / HTTP 状态码 / provider 业务码 / token 数。
-            log_llm_interaction(
-                backend=self._backend_name,
-                call_type="chat",
-                model=getattr(self, 'model', 'unknown'),
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                response=f"[Error: {type(e).__name__}: {_clip(str(e))}]",
-                latency_ms=latency,
-                extra={
-                    "requester": requester_name,
-                    "group": group_name,
-                    **_error_diagnostics(e),
-                },
-            )
+            #
+            # 必须包一层 try：日志写入自身失败（data/ 不可写、磁盘满等）不能
+            # 顶掉真正的 LLM 异常，否则调用方的 except RuntimeError 会失效，
+            # 拿到一个与业务无关的 OSError。诊断信息丢一条可以，异常语义不能变。
+            try:
+                log_llm_interaction(
+                    backend=self._backend_name,
+                    call_type="chat",
+                    model=getattr(self, 'model', 'unknown'),
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response=f"[Error: {type(e).__name__}: {_clip(str(e))}]",
+                    latency_ms=latency,
+                    extra={
+                        "requester": requester_name,
+                        "group": group_name,
+                        **_error_diagnostics(e),
+                    },
+                )
+            except Exception as log_err:  # noqa: BLE001 - 日志失败绝不改变异常语义
+                logger.debug("[LLM] 失败交互日志写入失败: %s", log_err)
             raise
 
     # ⚠ DEAD CODE REMOVED: proactive_chat() and PROACTIVE_SYSTEM_PROMPT
