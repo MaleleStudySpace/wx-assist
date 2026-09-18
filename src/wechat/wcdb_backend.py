@@ -128,11 +128,26 @@ class WcdbBackend(AbstractWeChatBackend):
                 pass
             return
 
-        # Resolve group talker IDs
-        self._resolve_groups()
+        # Resolve group talker IDs.
+        # 会话列表查询失败（结果过大 / 密钥异常）时只记录并提示，不让异常
+        # 冒泡——否则 _run 会把整个服务判为崩溃，用户只看到一句误导性的
+        # "WCDB query result too large or corrupted"。
+        try:
+            self._resolve_groups()
+        except Exception as e:
+            logger.error("Failed to resolve groups: %s", e)
+            op_log_error("DB", "群组解析失败: %s", e)
+            self._push_start_error(
+                f"会话列表读取失败，无法解析群组：{e}。请确认微信已登录后重试。"
+            )
+            return
 
         if not self._talker_ids:
             logger.error("No groups resolved. Check WECHAT_GROUPS.")
+            op_log_error("BOOT", "未解析到任何会话，请检查会话配置")
+            self._push_start_error(
+                "未解析到任何会话：请确认微信已登录、数据目录配置正确后重试。"
+            )
             return
 
         # Pre-find WeChat window
@@ -220,6 +235,18 @@ class WcdbBackend(AbstractWeChatBackend):
         self._running = False
         if self._pool:
             self._pool.shutdown(wait=False)
+
+    @staticmethod
+    def _push_start_error(message: str) -> None:
+        """Push a startup failure to the Web UI (best-effort).
+
+        让用户在「运行状态」页看到可操作的原因，而不是只看到"服务已停止"。
+        """
+        try:
+            from src.web.server import update_status
+            update_status(running=False, error=message)
+        except Exception:
+            pass
 
     # ── Recovery ─────────────────────────────────────────────────────
 

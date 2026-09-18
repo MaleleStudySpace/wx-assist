@@ -119,20 +119,33 @@ def _apply_drm_patch(dll_handle, dll_path):
     )
 
 
-def _read_gbk_string(ptr):
-    """Read null-terminated string from a raw pointer.
+# Maximum number of bytes read from a single DLL-returned string.  The DLL's
+# internal serialization buffer is far smaller than this, so hitting the cap
+# means the output was truncated — a JSON payload can never be complete then.
+_MAX_DLL_STRING_BYTES = 500000
+
+
+def _read_gbk_string_ex(ptr, max_bytes=_MAX_DLL_STRING_BYTES):
+    """Read a null-terminated string, returning ``(text, truncated)``.
+
+    ``truncated`` is True when no NUL terminator was found within
+    ``max_bytes``, i.e. the DLL output exceeded the read cap and was cut off
+    (typically because the query result was too large).  Callers that need to
+    tell "too large" apart from "corrupted" must use this variant.
 
     The WCDB DLL may return GBK or UTF-8 depending on the data source.
     Since all DLL inputs are UTF-8, try UTF-8 first, then fall back to GBK.
     Validates with JSON parse to confirm the correct encoding was chosen.
     """
     if not ptr or ptr.value == 0:
-        return ""
+        return "", False
     raw = bytearray()
     addr = ptr.value
-    for _ in range(500000):
+    truncated = True
+    for _ in range(max_bytes):
         b = (ct.c_ubyte * 1).from_address(addr)[0]
         if b == 0:
+            truncated = False
             break
         raw.append(b)
         addr += 1
@@ -145,10 +158,20 @@ def _read_gbk_string(ptr):
         try:
             text = raw.decode(enc)
             _json.loads(text)
-            return text
+            return text, truncated
         except (UnicodeDecodeError, _json.JSONDecodeError):
             continue
-    return raw.decode("utf-8", errors="replace")
+    return raw.decode("utf-8", errors="replace"), truncated
+
+
+def _read_gbk_string(ptr):
+    """Read a null-terminated string from a raw pointer.
+
+    Compatibility wrapper for non-JSON callers (install/uninstall/voice...).
+    Truncation is intentionally ignored here; JSON callers should use
+    :func:`_read_gbk_string_ex` so a truncated payload can be detected.
+    """
+    return _read_gbk_string_ex(ptr)[0]
 
 
 # ── Filesystem auto-detection ─────────────────────────────────────────
@@ -703,9 +726,34 @@ class WcdbNativeClient:
                     self._favorite_db = str(Path(account_dir) / "db_storage" / "favorite" / "favorite.db")
                     self._sns_db = str(Path(account_dir) / "db_storage" / "sns" / "sns.db")
 
-                    # Verify the key actually decrypts data
-                    sessions = self.get_sessions()
-                    if sessions:
+                    # Verify the key actually decrypts data.
+                    # get_sessions() 可能因结果过大或密钥异常抛 ValueError，
+                    # 这里必须自行消化：单次查询失败不能让整个启动崩溃。
+                    key_valid = False
+                    sessions = []
+                    try:
+                        sessions = self.get_sessions()
+                        key_valid = bool(sessions)
+                    except ValueError as e:
+                        if "too large" not in str(e):
+                            # 不是大小问题 → 密钥无效或数据损坏，换下一个候选
+                            logger.warning(
+                                "会话校验失败（source=%s, fmt=%s, path=%s）：%s",
+                                source_label, key_fmt, path_label, e,
+                            )
+                            self._close_handle()
+                            continue
+                        # 「结果过大」说明已能解密出数据，密钥本身有效，只是
+                        # 会话列表超出 DLL 缓冲。保留该密钥并跳过本次校验，
+                        # 后续按群解析失败时再给出可操作提示。
+                        logger.warning(
+                            "会话列表超出 WCDB 缓冲（source=%s）——密钥视为有效，"
+                            "跳过会话校验: %s",
+                            source_label, e,
+                        )
+                        key_valid = True
+
+                    if key_valid:
                         session_count = (
                             len(sessions) if isinstance(sessions, list)
                             else len(sessions.get("sessions", sessions))
@@ -886,30 +934,58 @@ class WcdbNativeClient:
 
     def _call_json_inner(self, func, *args):
         """Actual ctypes call — runs under _dll_lock."""
+        name = getattr(func, "__name__", "dll_call")
         out = ct.c_void_p()
         ret = func(*args, ct.byref(out))
         if ret != 0:
-            logger.warning("WCDB call %s failed: ret=%d", func.__name__, ret)
+            logger.warning("WCDB call %s failed: ret=%d", name, ret)
             return None
         if not out.value:
-            logger.debug("WCDB call %s returned null pointer", func.__name__)
+            logger.debug("WCDB call %s returned null pointer", name)
             return {}
+        # 解析失败时不在 except 块里直接 raise——否则会被下面的
+        # `except Exception` 吞掉并返回 {}。先把要抛的异常存起来，出了
+        # try 再抛，既保证向上传递，又不改变"意外异常返回 {}"的原行为。
+        failure = None
         try:
-            data = _read_gbk_string(out)
+            data, truncated = _read_gbk_string_ex(out)
             self._dll.wcdb_free_string(out)
-            return json.loads(data)
-        except json.JSONDecodeError as e:
-            logger.warning("WCDB JSON parse error in %s — data may be truncated",
-                           getattr(func, "__name__", "dll_call"))
-            # wcdb_free_string already called above — double-free would crash
-            raise ValueError(f"WCDB query result too large or corrupted") from e
+            try:
+                return json.loads(data)
+            except json.JSONDecodeError as e:
+                if truncated:
+                    # 读取触顶 → DLL 输出被截断，JSON 必然不完整。
+                    # 明确标注「结果过大」，上层可据此降级为更小的查询重试。
+                    logger.warning(
+                        "WCDB %s result truncated at %d bytes — query result too large",
+                        name, _MAX_DLL_STRING_BYTES,
+                    )
+                    failure = ValueError(
+                        "WCDB query result too large "
+                        f"(truncated at {_MAX_DLL_STRING_BYTES} bytes)"
+                    )
+                else:
+                    # 未触顶却无法解析：通常不是大小问题，而是密钥错误/数据
+                    # 损坏导致解密出乱码，或查询返回了非 JSON 内容。
+                    logger.warning(
+                        "WCDB JSON parse error in %s (len=%d bytes) — "
+                        "data may be corrupted (wrong key?)",
+                        name, len(data),
+                    )
+                    failure = ValueError(
+                        "WCDB query result corrupted "
+                        f"(JSON parse failed, {len(data)} bytes)"
+                    )
+                failure.__cause__ = e
         except Exception as e:
-            logger.warning("Unexpected error in _call_json for %s: %s",
-                           func.__name__, e)
-            # wcdb_free_string already called above — double-free would crash
-            # Only free if we got past line 874; if we crashed AT line 874,
+            logger.warning("Unexpected error in _call_json for %s: %s", name, e)
+            # wcdb_free_string already called above — double-free would crash.
+            # Only free if we got past the read; if we crashed mid-read,
             # there's nothing we can do — the process is already dying.
             return {}
+        if failure is not None:
+            raise failure
+        return {}
 
     def get_sessions(self, limit=500):
         """Get all chat sessions with metadata."""
