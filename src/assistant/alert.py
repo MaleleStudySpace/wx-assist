@@ -119,6 +119,11 @@ class AlertEngine:
         compiled: dict[str, re.Pattern] = {}
         for ag in self._config.alert_groups:
             for kw in ag.keywords or []:
+                # 类型判断必须**先于** `kw in compiled`：手改配置塞进数组/对象时
+                # 字典查键会抛 TypeError: unhashable type，而这里跑在
+                # AlertEngine.__init__ —— 会让 Bot 启动阶段直接崩。
+                if not isinstance(kw, str) or not kw:
+                    continue
                 if kw in compiled or not is_regex_keyword(kw):
                     continue
                 # 复用配置层的校验规则（非空 / 长度上限 / 可编译），

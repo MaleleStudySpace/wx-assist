@@ -237,10 +237,28 @@ class TestRegexRuntimeSafety(_EngineCase):
         self.assertEqual(engine.check(self._msg("急单来了")), 1)
 
     def test_non_string_keyword_does_not_break_engine(self):
-        """坏条目只影响自己，不能让引擎构造或整组关键词失效。"""
-        engine, _ = self._engine([123, "急单"])
-        self.assertEqual(engine._compiled, {})
-        self.assertEqual(engine.check(self._msg("急单来了")), 1)
+        """坏条目只影响自己，不能让引擎构造或整组关键词失效。
+
+        回归护栏：`kw in compiled` 是字典查键，对 list/dict 会抛
+        ``TypeError: unhashable type``。而 _rebuild_compiled 跑在
+        AlertEngine.__init__ 里 —— 一旦抛出，bot.py 会把整个 Assistant
+        初始化判为失败（关键词提醒 + 公众号监控 + 定时摘要全停），
+        比"仅该条关键词失效"严重得多。
+        """
+        for bad in (123, None, ["/a/"], {"a": 1}, True):
+            with self.subTest(bad=bad):
+                engine, _ = self._engine([bad, "急单"])
+                self.assertEqual(engine._compiled, {})
+                self.assertEqual(engine.check(self._msg("急单来了")), 1)
+
+    def test_update_config_tolerates_bad_entries(self):
+        """热更新走同一条预编译路径，坏条目同样不能让它抛异常。"""
+        engine, _ = self._engine(["派单"])
+        cfg = AssistantConfig(assistant_enabled=True)
+        cfg.alert_groups = [AlertGroup(chat_id="g@chatroom", group_name="测试群",
+                                       keywords=[["/a/"], "/\\d+元/"])]
+        engine.update_config(cfg)
+        self.assertIn("/\\d+元/", engine._compiled)
 
     def test_check_does_not_compile_per_message(self):
         """check() 跑在每条消息的接收线程上，绝不能在那里 re.compile。"""
