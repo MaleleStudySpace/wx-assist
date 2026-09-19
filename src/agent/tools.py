@@ -19,6 +19,8 @@ from src.assistant.config import (
     OAGroup,
     OAMonitorGroup,
     _next_digest_group_id,
+    is_regex_keyword,
+    validate_alert_keywords,
 )
 from src.skill.engine import SkillNotFound
 
@@ -276,6 +278,12 @@ class ToolExecutor:
             description="为指定群聊添加关键词预警。当群里有人提到这些关键词时，"
                        "系统会生成通知并自动推送到消息推送页中已绑定的平台。"
                        "用户说'帮我盯着某某群的关键词'时调用。"
+                       "关键词支持两种写法：1) 普通词——大小写不敏感的子串匹配，"
+                       "如 'bug'；2) 正则——首尾用斜杠包裹，如 '/\\d{2,}元/'、"
+                       "'/(?i)urgent/'。正则是**大小写敏感**的，需要忽略大小写必须"
+                       "在开头写 (?i)，例如 '/(?i)error/'。"
+                       "只有用户明确要求模糊/正则/规则匹配时才用正则写法；"
+                       "普通词不要加斜杠，否则斜杠本身会被当成正则语法。"
                        "这是写操作，会修改系统配置。",
             parameters={
                 "type": "object",
@@ -287,7 +295,9 @@ class ToolExecutor:
                     "keywords": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "要预警的关键词列表，如 ['bug','故障']",
+                        "description": "要预警的关键词列表，如 ['bug','故障']；"
+                                       "正则写法则形如 ['/\\d{2,}元/', '/(?i)urgent/']"
+                                       "——首尾斜杠包裹，默认大小写敏感",
                     },
                 },
                 "required": ["group_name", "keywords"],
@@ -1005,6 +1015,18 @@ class ToolExecutor:
         if not group_name or not keywords:
             return "请提供群聊名称和至少一个关键词"
 
+        # 与配置 API 同一套校验：非法正则不落盘。错误信息里带上写法说明，
+        # 因为调用方是 LLM/用户，需要知道「斜杠包裹」这条规则才能修正。
+        err = validate_alert_keywords(keywords)
+        if err:
+            return (
+                f"❌ 关键词不合法：{err}\n"
+                "写法说明：普通关键词直接写文字（大小写不敏感的子串匹配），"
+                "不要加斜杠；需要正则时用斜杠包裹，例如 '/\\d{2,}元/'、"
+                "'/(?i)urgent/'（默认大小写敏感，(?i) 需放在开头）。"
+            )
+
+        regex_kws = [k for k in keywords if is_regex_keyword(k)]
         outcome: dict = {}
 
         def _apply(cfg):
@@ -1032,14 +1054,21 @@ class ToolExecutor:
         if self._alert_engine:
             self._alert_engine.update_config(cfg)
 
+        # 明确回执里有几个是正则条目，让用户/LLM 确认"斜杠被当成了正则"
+        # 而不是普通词 —— 否则写错一个斜杠会静默改变匹配语义。
+        regex_note = (
+            f"\n其中 {len(regex_kws)} 个按正则匹配: {', '.join(regex_kws[:5])}"
+            if regex_kws else ""
+        )
         if outcome.get("updated"):
             return (
                 f"✅ 已更新「{group_name}」的关键词预警\n"
                 f"新增 {outcome['added']} 个关键词，当前共 {outcome['count']} 个关键词"
+                f"{regex_note}"
             )
         return (
             f"✅ 已为「{group_name}」添加关键词预警\n"
-            f"关键词: {', '.join(keywords[:10])}"
+            f"关键词: {', '.join(keywords[:10])}{regex_note}"
         )
 
     # ── add_digest (写操作) ─────────────────────────────────────────

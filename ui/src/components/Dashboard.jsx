@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Stop, Key, Spinner, CheckCircle, XCircle, ArrowsClockwise, WarningOctagon, Clock, ChatCircle, Newspaper, Database, WechatLogo, Brain, Robot, Cube, Lightning, ArrowRight, PaperPlaneTilt, Bell } from '@phosphor-icons/react'
-import { API_BASE } from './SharedComponents'
+import { API_BASE, isRegexTag } from './SharedComponents'
 import { cronToLabel } from '../utils/cron'
 
 const spring = { type: 'spring', stiffness: 100, damping: 20 }
@@ -154,7 +154,15 @@ function KeywordAlertCard({ onTabChange }) {
                       </div>
                       <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                         {(ag.keywords || []).map((kw, ki) => (
-                          <span key={ki} className="text-xs font-mono font-medium px-1.5 py-px rounded bg-amber-500/[0.08] text-amber-600 dark:text-amber-400">{kw}</span>
+                          <span
+                            key={ki}
+                            title={isRegexTag(kw) ? '正则匹配（大小写敏感）' : undefined}
+                            className={`text-xs font-mono font-medium px-1.5 py-px rounded ${
+                              isRegexTag(kw)
+                                ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
+                                : 'bg-amber-500/[0.08] text-amber-600 dark:text-amber-400'
+                            }`}
+                          >{kw}</span>
                         ))}
                       </div>
                     </div>

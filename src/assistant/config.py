@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -35,6 +36,72 @@ class AlertGroup:
     keywords: list[str] = field(default_factory=list)
     enabled: bool = True
     push_target: str = ""  # "" | "ilink"
+
+
+# ── 关键词正则语法 ──────────────────────────────────────────────────────
+# 形如 /pattern/ 的条目按正则处理，其余仍是字面关键词（大小写不敏感的
+# 子串包含）——这样 `keywords: list[str]` 的结构无需变更，历史配置
+# （纯字面）行为逐字节不变，也不需要对 assistant_config.json 做迁移。
+#
+# 正则**默认大小写敏感**（需忽略大小写写 (?i)，且必须置于 pattern 开头）。
+# 长度上限是 ReDoS 的第一道闸门：标准库 re 不支持匹配超时，只能靠
+# 编译期校验 + 限制 pattern 规模，把明显危险的写法挡在配置层。
+
+REGEX_KEYWORD_MAX_LEN = 200
+
+# 至少 /x/ 三个字符才视为正则：单个 "/"、"//" 这类短串按字面处理，
+# 避免用户想匹配 URL 里的 "//" 时被误当成空正则。
+_REGEX_KEYWORD_MIN_LEN = 3
+
+
+def is_regex_keyword(keyword: str) -> bool:
+    """条目是否为正则：首尾都是 "/" 且长度 >= 3（即 /pattern/）。
+
+    非字符串（手改 assistant_config.json 可能塞进数字/对象）一律视为非正则，
+    而不是抛异常 —— 配置解析期的异常会让 Bot 在启动阶段直接挂掉。
+    """
+    if not isinstance(keyword, str):
+        return False
+    kw = keyword.strip()
+    return (
+        len(kw) >= _REGEX_KEYWORD_MIN_LEN
+        and kw.startswith("/")
+        and kw.endswith("/")
+    )
+
+
+def regex_keyword_pattern(keyword: str) -> str:
+    """/pattern/ → pattern；非正则条目返回空串。"""
+    if not is_regex_keyword(keyword):
+        return ""
+    return keyword.strip()[1:-1]
+
+
+def validate_alert_keywords(keywords) -> str:
+    """校验一组关键词，返回错误信息；空串表示通过。
+
+    字面关键词不做限制（保持既有行为）；正则条目必须非空、不超长且能被
+    ``re.compile`` 通过。配置 API 与 Agent add_alert 工具都调用这里，
+    保证非法正则不落盘、不进运行态。
+    """
+    for kw in keywords or []:
+        if not isinstance(kw, str) or not kw.strip():
+            return "关键词不能为空"
+        if not is_regex_keyword(kw):
+            continue
+        pattern = regex_keyword_pattern(kw)
+        if not pattern:
+            return f"正则内容为空：{kw}"
+        if len(pattern) > REGEX_KEYWORD_MAX_LEN:
+            return (
+                f"正则过长（{len(pattern)} 字符，上限 "
+                f"{REGEX_KEYWORD_MAX_LEN}）：{kw}"
+            )
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            return f"正则语法错误（{e}）：{kw}"
+    return ""
 
 
 @dataclass

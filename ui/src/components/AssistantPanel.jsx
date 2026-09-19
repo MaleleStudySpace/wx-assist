@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle, Warning, Spinner, MagnifyingGlass, Bell, Clock, ChatCircle, CaretDown, CaretRight, EnvelopeOpen, Archive, Lightning, Trash, X, Plus, Play } from '@phosphor-icons/react'
-import { Toggle, SectionHeader, TagInput, Input, API_BASE, getWsUrl } from './SharedComponents'
+import { Toggle, SectionHeader, TagInput, Input, API_BASE, getWsUrl, isRegexTag } from './SharedComponents'
 import { WEEKDAY_LABELS, parseCronExpr, cronToLabel } from '../utils/cron'
 
 const pageTransition = {
@@ -1276,7 +1276,15 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
           </span>
           <div className="flex gap-1 mt-1 flex-wrap items-center">
             {(values.keywords || []).map((kw, ki) => (
-              <span key={ki} className="text-xs px-2 py-0.5 rounded bg-brand-green/10 text-brand-green-hover dark:text-brand-green font-medium">{kw}</span>
+              <span
+                key={ki}
+                title={isRegexTag(kw) ? '正则匹配（大小写敏感）' : undefined}
+                className={`text-xs px-2 py-0.5 rounded font-medium ${
+                  isRegexTag(kw)
+                    ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
+                    : 'bg-brand-green/10 text-brand-green-hover dark:text-brand-green'
+                }`}
+              >{kw}</span>
             ))}
             <span className="text-xs px-1.5 py-0.5 rounded bg-status-info-soft text-status-info font-medium">推送</span>
           </div>
@@ -1319,8 +1327,14 @@ function AlertGroupCard({ ag, index, groups, expanded, draft, onToggleExpand, on
                 <TagInput
                   tags={values.keywords || []}
                   onChange={onKeywordsChange}
-                  placeholder="输入关键词后按回车添加"
+                  placeholder="输入关键词后按回车添加；正则用 /模式/ 包裹"
                 />
+                <p className="text-xs text-text-muted mt-1.5 leading-relaxed">
+                  按回车添加。支持正则：首尾加斜杠，如{' '}
+                  <span className="font-mono text-violet-600 dark:text-violet-400">{'/[0-9]{2,}元/'}</span>
+                  ；正则默认<b>大小写敏感</b>，需忽略大小写请在开头写{' '}
+                  <span className="font-mono">{'(?i)'}</span>。不加斜杠的普通词按大小写不敏感处理。
+                </p>
               </div>
               <div className="rounded-lg bg-bg-raised border border-border-main px-3 py-2">
                 <p className="text-xs text-text-muted">自动推送到已扫码绑定的平台（在「系统配置 → 消息推送」完成绑定后生效）</p>
@@ -1882,8 +1896,14 @@ function AlertGroupEditor({ draft, groups, error, onDraftChange, onSave, onCance
         <TagInput
           tags={draft.keywords || []}
           onChange={keywords => onDraftChange({ ...draft, keywords })}
-          placeholder="输入关键词后按回车添加"
+          placeholder="输入关键词后按回车添加；正则用 /模式/ 包裹"
         />
+        <p className="text-xs text-text-muted mt-1.5 leading-relaxed">
+          按回车添加。支持正则：首尾加斜杠，如{' '}
+          <span className="font-mono text-violet-600 dark:text-violet-400">{'/[0-9]{2,}元/'}</span>
+          ；正则默认<b>大小写敏感</b>，需忽略大小写请在开头写{' '}
+          <span className="font-mono">{'(?i)'}</span>。不加斜杠的普通词按大小写不敏感处理。
+        </p>
       </div>
       <div className="rounded-lg bg-bg-raised border border-border-main px-3 py-2">
         <p className="text-xs text-text-muted">保存后自动推送到已绑定的平台（在「系统配置 → 消息推送」完成绑定后生效）</p>

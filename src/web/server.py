@@ -2983,7 +2983,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     body = {}
                 from src.assistant.config import (
                     _dict_to_config, merge_digest_groups, mutate_config,
-                    validate_digest_groups,
+                    validate_alert_keywords, validate_digest_groups,
                 )
                 from src.utils.cron import validate_daily_cron
 
@@ -2998,7 +2998,18 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     if "rag_enabled" in body:
                         cfg.rag_enabled = bool(body["rag_enabled"])
                     if "alert_groups" in body:
-                        cfg.alert_groups = _dict_to_config({"alert_groups": body["alert_groups"]}).alert_groups
+                        parsed_groups = _dict_to_config(
+                            {"alert_groups": body["alert_groups"]}).alert_groups
+                        # 正则关键词（/pattern/）必须能编译：非法正则在这里拦住，
+                        # 不落盘、不进运行态。字面关键词不受影响。
+                        for ag in parsed_groups:
+                            kerr = validate_alert_keywords(ag.keywords)
+                            if kerr:
+                                raise ValueError(
+                                    f"关键词提醒「{ag.group_name or ag.chat_id or '未命名'}」"
+                                    f"{kerr}"
+                                )
+                        cfg.alert_groups = parsed_groups
                     if "oa_monitor_groups" in body:
                         cfg.oa_monitor_groups = _dict_to_config({"oa_monitor_groups": body["oa_monitor_groups"]}).oa_monitor_groups
                     if "digest_groups" in body:

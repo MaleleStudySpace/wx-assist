@@ -8,15 +8,24 @@ _poll_group error recovery that clears the in-memory _known_ids set.
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Optional
 
-from .config import AssistantConfig
+from .config import (
+    AssistantConfig,
+    is_regex_keyword,
+    regex_keyword_pattern,
+    validate_alert_keywords,
+)
 from .digest import _strip_ids
 from .outbox import Outbox
 
 logger = logging.getLogger(__name__)
+
+# 正则命中片段在推送正文里的展示长度上限。
+_HIT_SNIPPET_MAX = 30
 
 # Skip messages older than this (seconds) — prevents startup from triggering
 # alerts on historical messages that the user hasn't seen yet.
@@ -30,6 +39,14 @@ ALERT_COOLDOWN_SEC = 5  # 5 seconds
 _TRIGGERED_PATH = Path("data/alert_triggered.json")
 _MAX_TRIGGERED_RECORDS = 5000
 _TRIGGERED_CLEANUP_AGE = 86400 * 7  # 7 days — keep at most a week of history
+
+
+def _clip_hit(text: str) -> str:
+    """截断正则命中片段，避免超长内容把推送正文撑爆。"""
+    text = (text or "").replace("\n", " ").strip()
+    if len(text) <= _HIT_SNIPPET_MAX:
+        return text
+    return text[:_HIT_SNIPPET_MAX] + "…"
 
 
 def _load_triggered() -> dict[str, float]:
@@ -80,17 +97,49 @@ class AlertEngine:
     def __init__(self, config: AssistantConfig, outbox: Outbox):
         self._config = config
         self._outbox = outbox
-        # Cooldown tracker: (chat_id_or_group_name, keyword_lower) → last_trigger_ts
+        # Cooldown tracker: (chat_id_or_group_name, keyword_key) → last_trigger_ts
         self._last_triggered: dict[tuple[str, str], float] = {}
         # Persistent dedup: message_id → timestamp  (survives restarts)
         self._triggered: dict[str, float] = _load_triggered()
         self._triggered_dirty = False
+        # Pre-compiled regex keywords: 关键词原文(/pattern/) → compiled Pattern
+        self._compiled: dict[str, re.Pattern] = {}
+        self._rebuild_compiled()
+
+    def _rebuild_compiled(self) -> None:
+        """预编译配置里的正则关键词。
+
+        check() 跑在**每条消息的接收线程**上，绝不能在那里 re.compile；
+        配置变更时重建一次即可（构造 + update_config）。
+
+        编译失败的条目只记 warning 后跳过，而不是让整组关键词失效：
+        用户手改 assistant_config.json 塞进坏正则时，其余关键词仍要正常工作，
+        也不能变成每条消息刷一条异常。
+        """
+        compiled: dict[str, re.Pattern] = {}
+        for ag in self._config.alert_groups:
+            for kw in ag.keywords or []:
+                if kw in compiled or not is_regex_keyword(kw):
+                    continue
+                # 复用配置层的校验规则（非空 / 长度上限 / 可编译），
+                # 保证「保存被接受」与「运行期可执行」用的是同一套判据。
+                err = validate_alert_keywords([kw])
+                if err:
+                    logger.warning(
+                        "Alert: 跳过不可用的正则关键词（group=%s）: %s",
+                        ag.group_name or ag.chat_id, err,
+                    )
+                    continue
+                compiled[kw] = re.compile(regex_keyword_pattern(kw))
+        self._compiled = compiled
 
     def update_config(self, config: AssistantConfig) -> None:
         """Hot-reload config after PUT /api/assistant/config saves new config."""
         self._config = config
         # Clear cooldown tracker so new keywords take effect immediately
         self._last_triggered.clear()
+        # Recompile regex keywords (new/removed patterns take effect immediately)
+        self._rebuild_compiled()
         # Persist triggered set if it was dirtied
         self._flush_triggered()
 
@@ -163,23 +212,48 @@ class AlertEngine:
 
             content_lower = content.lower()
             matched = []
+            # 正则条目 → 实际命中片段，仅用于推送正文展示
+            hits: dict[str, str] = {}
             for kw in ag.keywords:
-                kw_lower = kw.lower()
-                if kw_lower in content_lower:
-                    # ── Cooldown check ───────────────────────────────
-                    cooldown_key = (chat_id or group_name, kw_lower)
-                    last = self._last_triggered.get(cooldown_key, 0)
-                    if now - last < ALERT_COOLDOWN_SEC:
-                        logger.debug(
-                            "Alert cooldown: '%s' in '%s' skipped (%.0fs ago)",
-                            kw, group_name, now - last,
-                        )
+                if not isinstance(kw, str) or not kw:
+                    continue
+                pattern = self._compiled.get(kw)
+                if pattern is not None:
+                    # 正则默认大小写敏感：必须匹配**原始** content。
+                    # 若匹配 content.lower()，[A-Z] / \b 这类语义会失效。
+                    m = pattern.search(content)
+                    if not m:
                         continue
-                    matched.append(kw)
-                    self._last_triggered[cooldown_key] = now
+                    hit = _clip_hit(m.group(0))
+                    if hit:
+                        hits[kw] = hit
+                    kw_key = kw
+                else:
+                    # 字面关键词：既有行为，大小写不敏感的子串包含
+                    if kw.lower() not in content_lower:
+                        continue
+                    kw_key = kw.lower()
+                # ── Cooldown check ───────────────────────────────
+                cooldown_key = (chat_id or group_name, kw_key)
+                last = self._last_triggered.get(cooldown_key, 0)
+                if now - last < ALERT_COOLDOWN_SEC:
+                    logger.debug(
+                        "Alert cooldown: '%s' in '%s' skipped (%.0fs ago)",
+                        kw, group_name, now - last,
+                    )
+                    continue
+                matched.append(kw)
+                self._last_triggered[cooldown_key] = now
 
             if matched:
                 import json as _json
+                # 正则条目额外展示实际命中片段：只给用户看一个 pattern，
+                # 很难判断为什么触发；`/\d{2,}元/` ‹500元› 一目了然。
+                # keywords 字段保持纯字符串列表，下游 UI 无需改动。
+                tag_strs = [
+                    f"`{kw}`" if kw not in hits else f"`{kw}` ‹{hits[kw]}›"
+                    for kw in matched
+                ]
                 title = f"🔑 关键词命中 · {group_name}"
                 notif_content = _json.dumps({
                     "group": group_name,
@@ -189,7 +263,7 @@ class AlertEngine:
                     "display": (
                         f"👤 **发送者:** {sender_name}\n"
                         f"💬 **消息:** {content}\n"
-                        + "🏷️ **匹配关键词:** " + " ".join(f"`{kw}`" for kw in matched)
+                        + "🏷️ **匹配关键词:** " + " ".join(tag_strs)
                     ),
                 }, ensure_ascii=False)
                 nid = self._outbox.add(

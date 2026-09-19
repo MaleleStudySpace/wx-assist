@@ -248,6 +248,20 @@ export function Avatar({ src, name, size = 36, className = '' }) {
 
 // ── TagInput ───────────────────────────────────────────────────────
 // Chips-style tag input: type + Enter to add, click x to remove.
+
+// 关键词提醒里的正则条目：/pattern/（首尾斜杠，至少 /x/ 三个字符）。
+// 与服务端 src/assistant/config.py::is_regex_keyword 保持一致。
+export function isRegexTag(tag) {
+  return typeof tag === 'string' && tag.length >= 3 && tag.startsWith('/') && tag.endsWith('/')
+}
+
+// 未闭合的正则：以 "/" 开头但还没打出收尾的 "/"。
+// 这类输入里的逗号是正则语法的一部分（\d{1,3}、{2,5}、a|b），
+// 若按分隔符处理会把用户正在输入的模式拆成两个残破的 tag。
+function isOpenRegexInput(value) {
+  return value.startsWith('/') && !value.slice(1).includes('/')
+}
+
 export function TagInput({ tags = [], onChange, placeholder = '输入后按回车或逗号添加' }) {
   const [input, setInput] = useState('')
   const ref = useRef(null)
@@ -264,7 +278,11 @@ export function TagInput({ tags = [], onChange, placeholder = '输入后按回�
   }
 
   function handleKey(e) {
-    if (e.key === 'Enter' || e.key === ',') {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      addTag(input)
+    } else if (e.key === ',') {
+      if (isOpenRegexInput(input)) return   // 正则未闭合 → 逗号是模式的一部分
       e.preventDefault()
       addTag(input)
     } else if (e.key === 'Backspace' && !input && tags.length) {
@@ -280,13 +298,22 @@ export function TagInput({ tags = [], onChange, placeholder = '输入后按回�
       {tags.map(tag => (
         <span
           key={tag}
-          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-brand-green/10 text-brand-green-hover dark:text-brand-green text-xs font-medium"
+          title={isRegexTag(tag) ? '正则匹配（大小写敏感）' : '普通关键词（大小写不敏感的包含匹配）'}
+          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium ${
+            isRegexTag(tag)
+              ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
+              : 'bg-brand-green/10 text-brand-green-hover dark:text-brand-green'
+          }`}
         >
           {tag}
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); removeTag(tag) }}
-            className="text-brand-green/50 hover:text-status-error transition-colors cursor-pointer"
+            className={`transition-colors cursor-pointer ${
+              isRegexTag(tag)
+                ? 'text-violet-500/50 hover:text-status-error'
+                : 'text-brand-green/50 hover:text-status-error'
+            }`}
           >
             <X size={10} weight="bold" />
           </button>
