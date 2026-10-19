@@ -1590,9 +1590,10 @@ class ContentCache:
             logger.debug("[CACHE] %s: 无新内容可索引", label)
             return
         try:
-            texts = [c.content for c in chunks]
-            embeddings = rag._embedder.encode(texts)
-            rag._store.add(chunks, embeddings)
+            for offset in range(0, len(chunks), 64):
+                batch = chunks[offset:offset + 64]
+                embeddings = rag._embedder.encode([c.content for c in batch])
+                rag._store.add(batch, embeddings)
             # 日志带标题摘要（前 5 条，每条截 25 字），便于确认索引了哪些内容
             _title_sum = " | ".join(
                 "{}/{}".format((c.sender_name or "?")[:12], (c.content or "").replace("\n", " ")[:25])
@@ -1602,6 +1603,8 @@ class ContentCache:
                         " | " + _title_sum if _title_sum else "")
         except Exception as e:
             logger.warning("[CACHE] RAG 索引 %s 失败: %s", label, e)
+            # The caller updates last_indexed only after every batch succeeds.
+            raise
 
 
 # ══════════════════════════════════════════════════════════════

@@ -4,6 +4,8 @@
 将连续多条消息拼接成一段完整对话后再编码。
 """
 
+import hashlib
+import json
 import logging
 from abc import ABC, abstractmethod
 from typing import Optional
@@ -87,9 +89,17 @@ class SlidingWindowChunker(ChunkingStrategy):
         ]
         content = "\n".join(lines)
         last = group[-1]
+        # Object addresses change across retries/restarts. Stable IDs let an
+        # interrupted batch be upserted without accumulating duplicate vectors.
+        identity = json.dumps(
+            [source, str(last.get("chat_id", "")),
+             [str(m.get("id", "0")) for m in group]],
+            ensure_ascii=False,
+        )
+        chunk_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
         return Chunk(
-            id=f"{source}_{last.get('id', '0')}_{id(group)}",
+            id=f"{source}_{chunk_id}",
             source=source,
             source_id=str(last.get('id', '0')),
             chat_id=str(last.get('chat_id', '')),

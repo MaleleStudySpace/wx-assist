@@ -155,6 +155,8 @@ class RAGEngine:
             self._store.add(chunks, embeddings)
         except Exception as e:
             logger.warning("[RAG] ingest 批量索引失败: %s", e)
+            # cold_start must not checkpoint a batch that was never persisted.
+            raise
 
     def ingest_one(self, msg: dict, source: str = "msg"):
         """增量索引单条消息。
@@ -292,7 +294,7 @@ class RAGEngine:
 
             if not groups:
                 logger.info("[RAG] 冷启动跳过：没有需要索引的群")
-                return
+                return True
 
             # created_at 是 UNIX 时间戳（秒）
             cutoff_ts = int((datetime.now() - timedelta(days=COLD_START_DAYS)).timestamp())
@@ -322,9 +324,11 @@ class RAGEngine:
                     self._save_state()
 
             logger.info("[RAG] 冷启动完成: 共索引 %d 条消息", total)
+            return True
 
         except Exception as e:
             logger.warning("[RAG] 冷启动失败: %s", e)
+            return False
 
     # 状态持久化 — 前面已有
 

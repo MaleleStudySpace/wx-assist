@@ -6,6 +6,7 @@
 
 import logging
 import sys
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -47,8 +48,14 @@ class FastEmbedder(Embedder):
     模型文件已放入项目 models/ 目录，运行时从本地加载，不联网。
     """
 
-    def __init__(self, model_name: str = "BAAI/bge-small-zh-v1.5"):
+    def __init__(self, model_name: str = "BAAI/bge-small-zh-v1.5",
+                 batch_size: int = 16, threads: int = 2):
+        if batch_size < 1 or threads < 1:
+            raise ValueError("batch_size and threads must be positive")
         self.model_name = model_name
+        self._batch_size = batch_size
+        self._threads = threads
+        self._encode_lock = threading.Lock()
         self._model = None
         self._dim = None
 
@@ -91,6 +98,7 @@ class FastEmbedder(Embedder):
             self._model = TextEmbedding(
                 model_name=self.model_name,
                 cache_dir=cache_dir,
+                threads=self._threads,
             )
 
             # 预热：编码一次确保 ONNX Runtime 就绪
@@ -111,7 +119,10 @@ class FastEmbedder(Embedder):
             raise RuntimeError("Embedder 未预热，请先调用 warmup()")
 
         try:
-            vectors = list(self._model.embed(texts))
+            # FastEmbed defaults to 256 documents per batch. Long messages can
+            # consume several GB, multiplied by concurrent cache/cold-start jobs.
+            with self._encode_lock:
+                vectors = list(self._model.embed(texts, batch_size=self._batch_size))
             return np.array(vectors, dtype=np.float32)
         except Exception as e:
             logger.warning("[RAG] encode 失败: %s", e)

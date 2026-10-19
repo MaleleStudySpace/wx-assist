@@ -7,6 +7,8 @@
 """
 
 import logging
+import multiprocessing
+from pathlib import Path
 import threading
 from abc import ABC, abstractmethod
 from typing import Optional
@@ -14,6 +16,7 @@ from typing import Optional
 import numpy as np
 
 from .models import Chunk, SearchResult
+from .chroma_worker import run_chroma_worker
 
 logger = logging.getLogger(__name__)
 
@@ -62,76 +65,131 @@ class VectorStore(ABC):
 
 
 class ChromaStore(VectorStore):
-    """ChromaDB 实现。数据在磁盘，不占内存。"""
+    """Persistent vectors owned by a worker process with bounded RPC waits.
 
-    def __init__(self, path: str = "data/chroma"):
-        self._path = path
-        self._client = None
-        self._collection = None
-        self._write_lock = threading.Lock()
+    Native Chroma/HNSW recovery can hold the GIL indefinitely. A thread timeout
+    cannot protect the desktop process from that failure; a process can.
+    """
+
+    def __init__(self, path: str = "data/chroma", timeout: float = 30.0):
+        self._path = str(Path(path).resolve())
+        self._timeout = timeout
+        self._process = None
+        self._connection = None
+        self._failure = None
+        self._write_lock = threading.RLock()
+
+    def _discard_worker(self):
+        process, connection = self._process, self._connection
+        self._process = self._connection = None
+        if connection is not None:
+            connection.close()
+        if process is not None:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=2)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=2)
+            if not process.is_alive():
+                process.close()
+
+    def _fail(self, reason):
+        self._failure = (
+            f"RAG 向量索引不可用 ({self._path}): {reason}。"
+            "请停止应用后重建 RAG 索引；聊天数据库无需删除。"
+        )
+        self._discard_worker()
+        raise RuntimeError(self._failure)
+
+    def _exchange(self, timeout, request=None):
+        # Bound the entire transfer, including send() and recv(): a worker can
+        # stall before reading a large payload or while sending its response.
+        connection = self._connection
+        done = threading.Event()
+        response = []
+
+        def transfer():
+            try:
+                if request is not None:
+                    connection.send(request)
+                response.append(connection.recv())
+            except (EOFError, OSError) as exc:
+                response.append((False, f"ChromaDB 子进程已退出: {exc}"))
+            finally:
+                done.set()
+
+        threading.Thread(target=transfer, name="rag-chroma-rpc", daemon=True).start()
+        if not done.wait(timeout):
+            self._fail(f"ChromaDB 操作超过 {timeout:g} 秒")
+        ok, result = response[0]
+        if not ok:
+            self._fail(result)
+        return result
 
     def warmup(self):
-        """初始化 ChromaDB 客户端和 collection。"""
-        try:
-            import chromadb
-            from chromadb.config import Settings as _Settings
+        with self._write_lock:
+            if self._failure:
+                raise RuntimeError(self._failure)
+            if self._process is not None:
+                return
+            context = multiprocessing.get_context("spawn")
+            parent, child = context.Pipe()
+            process = context.Process(
+                target=run_chroma_worker, args=(child, self._path),
+                name="rag-chroma", daemon=True,
+            )
+            try:
+                process.start()
+            except Exception:
+                parent.close()
+                child.close()
+                process.close()
+                raise
+            child.close()
+            self._process, self._connection = process, parent
+            count = self._exchange(self._timeout)
+            logger.info("[RAG] ChromaDB 就绪: path=%s count=%d", self._path, count)
 
-            self._client = chromadb.PersistentClient(
-                path=self._path,
-                settings=_Settings(
-                    chroma_telemetry_impl="",        # 禁用遥测，避免 posthog 导入
-                    anonymized_telemetry=False,
-                ),
+    def _request(self, command, payload=None, timeout=None):
+        with self._write_lock:
+            if self._failure:
+                raise RuntimeError(self._failure)
+            if self._connection is None:
+                raise RuntimeError("ChromaStore 未初始化")
+            return self._exchange(
+                self._timeout if timeout is None else timeout, (command, payload),
             )
-            self._collection = self._client.get_or_create_collection(
-                name="rag",
-                metadata={"hnsw:space": "cosine"},
-            )
-            logger.info("[RAG] ChromaDB 就绪: path=%s", self._path)
-        except Exception as e:
-            logger.warning("[RAG] ChromaDB 初始化失败: %s", e)
-            raise
 
     def add(self, chunks: list[Chunk], embeddings: np.ndarray):
-        if self._collection is None:
-            raise RuntimeError("ChromaStore 未初始化")
-
-        try:
-            with self._write_lock:
-                self._collection.add(
-                    ids=[c.id for c in chunks],
-                    embeddings=embeddings.tolist(),
-                    metadatas=[{
-                        "source": c.source,
-                        "source_id": c.source_id,
-                        "chat_id": c.chat_id,
-                        "sender_name": c.sender_name,
-                        "created_at": c.created_at,
-                        "created_at_ts": int(c.created_at) if c.created_at and c.created_at.isdigit() else 0,
-                        "content": c.content,
-                    } for c in chunks],
-                    # 不传 documents — 我们只做向量搜索，不需要 FTS5 索引
-                )
-        except Exception as e:
-            logger.warning("[RAG] ChromaDB add 失败: %s", e)
+        # Bound IPC payloads and Chroma batches, and make retries idempotent.
+        for offset in range(0, len(chunks), 128):
+            batch = chunks[offset:offset + 128]
+            self._request("upsert", {
+                "ids": [c.id for c in batch],
+                "embeddings": embeddings[offset:offset + 128].tolist(),
+                "metadatas": [{
+                    "source": c.source,
+                    "source_id": c.source_id,
+                    "chat_id": c.chat_id,
+                    "sender_name": c.sender_name,
+                    "created_at": c.created_at,
+                    "created_at_ts": int(c.created_at) if c.created_at and c.created_at.isdigit() else 0,
+                    "content": c.content,
+                } for c in batch],
+            })
 
     def search(self, query_emb: np.ndarray, top_k: int,
                where: Optional[dict] = None) -> list[SearchResult]:
-        if self._collection is None:
-            return []
-
         try:
-            q = query_emb.reshape(1, -1).tolist()
-            # ChromaDB 的 where 要求多条件使用 $and/$or 语法
-            chroma_where = self._normalize_where(where)
-            with self._write_lock:
-                results = self._collection.query(
-                    query_embeddings=q,
-                    n_results=top_k,
-                    where=chroma_where,
-                )
-        except Exception as e:
-            logger.warning("[RAG] ChromaDB search 失败: %s", e)
+            results = self._request("query", {
+                "query_embeddings": query_emb.reshape(1, -1).tolist(),
+                "n_results": top_k,
+                "where": self._normalize_where(where),
+                "include": ["metadatas", "documents", "distances"],
+            })
+        except Exception as exc:
+            logger.warning("[RAG] ChromaDB search 失败: %s", exc)
             return []
 
         # 解析返回结果
@@ -163,64 +221,31 @@ class ChromaStore(VectorStore):
         return search_results
 
     def delete_by_source(self, source: str, source_ids: list[str]):
-        if self._collection is None:
+        if not source_ids:
             return
-
-        try:
-            where = {"$and": [
-                {"source": source},
-                {"source_id": {"$in": source_ids}},
-            ]}
-            with self._write_lock:
-                self._collection.delete(where=where)
-        except Exception as e:
-            logger.warning("[RAG] ChromaDB delete 失败: %s", e)
+        self._request("delete", {"where": {"$and": [
+            {"source": source}, {"source_id": {"$in": source_ids}},
+        ]}})
 
     def delete_older_than(self, cutoff_ts: int) -> int:
-        """删除 created_at < cutoff_ts 的所有 chunk。返回删除条数。
+        return self._request("delete_older_than", cutoff_ts)
 
-        Args:
-            cutoff_ts: UNIX 时间戳（秒），早于此时间的 chunk 被删除
-        """
-        if self._collection is None:
-            return 0
-        try:
-            with self._write_lock:
-                # 先查符合条件的数量
-                results = self._collection.get(
-                    where={"created_at_ts": {"$lt": cutoff_ts}},
-                    limit=999999,
-                )
-                ids = results.get("ids", [])
-                if not ids:
-                    return 0
-                self._collection.delete(ids=ids)
-            logger.info("[RAG] ChromaDB delete_older_than: 删除了 %d 个 chunk (cutoff=%d)",
-                        len(ids), cutoff_ts)
-            return len(ids)
-        except Exception as e:
-            logger.warning("[RAG] ChromaDB delete_older_than 失败: %s", e)
-            return 0
+    def count(self) -> int:
+        return self._request("count")
 
     def _normalize_where(self, where: Optional[dict]) -> Optional[dict]:
-        """将扁平 dict 转为 ChromaDB 的 where 语法。
-
-        ChromaDB 要求多条件使用 {"$and": [...]}。
-        """
         if not where:
             return None
         if len(where) == 1:
             return where
-        items = [{k: v} for k, v in where.items()]
-        return {"$and": items}
+        return {"$and": [{k: v} for k, v in where.items()]}
 
     def close(self):
-        """关闭 ChromaDB 客户端，确保 WAL 正确 commit。"""
-        try:
-            if self._client is not None:
-                self._client.close()
-        except Exception as e:
-            logger.warning("[RAG] ChromaDB client close 失败: %s", e)
-        self._client = None
-        self._collection = None
-        logger.info("[RAG] ChromaDB 已关闭")
+        with self._write_lock:
+            if self._connection is not None:
+                try:
+                    self._request("close", timeout=5)
+                    self._process.join(timeout=2)
+                except Exception as exc:
+                    logger.warning("[RAG] ChromaDB close: %s", exc)
+            self._discard_worker()
