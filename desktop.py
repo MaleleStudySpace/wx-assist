@@ -593,4 +593,8 @@ if __name__ == "__main__":
     # PyInstaller worker processes must enter multiprocessing before starting UI.
     import multiprocessing
     multiprocessing.freeze_support()
-    main()
+    if len(sys.argv) == 3 and sys.argv[1] == "--check-rag":
+        from src.assistant.rag.diagnostics import check
+        sys.exit(check(sys.argv[2]))
+    else:
+        main()

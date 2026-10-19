@@ -31,6 +31,11 @@ def failed_startup_worker(connection, path):
     time.sleep(60)
 
 
+def nonreading_worker(connection, path):
+    connection.send((True, 0))
+    time.sleep(60)
+
+
 def crashed_worker(connection, path):
     import os
     connection.send((True, 0))
@@ -77,6 +82,22 @@ def test_startup_timeout_reaps_worker(tmp_path, monkeypatch):
         store.warmup()
     assert store._process is None
     store.close()
+
+
+def test_timeout_also_bounds_a_blocked_pipe_write(tmp_path, monkeypatch):
+    monkeypatch.setattr(vector_store, "run_chroma_worker", nonreading_worker)
+    store = ChromaStore(str(tmp_path), timeout=10)
+    try:
+        store.warmup()
+        store._timeout = 0.2
+        chunk = Chunk("large", "msg", "1", "chat", "sender", "x" * 1_000_000, "1")
+        start = time.monotonic()
+        with pytest.raises(RuntimeError, match="超过"):
+            store.add([chunk], np.array([[1.0, 0.0]]))
+        assert time.monotonic() - start < 5
+        assert store._process is None
+    finally:
+        store.close()
 
 
 def test_vectors_survive_restart_and_upsert_updates_content(tmp_path):
@@ -171,3 +192,37 @@ def test_embedding_calls_are_serialized_and_keep_output_order():
         results = list(pool.map(embedder.encode, [["1", "2"], ["3"], ["4", "5"]]))
     assert model.max_active == 1
     assert [result[:, 0].tolist() for result in results] == [[1, 2], [3], [4, 5]]
+
+
+def test_offline_rebuild_replaces_only_derived_state(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    from scripts.rebuild_rag import rebuild
+    from src.assistant import rag
+
+    class LocalEmbedder:
+        def warmup(self):
+            pass
+
+        def encode(self, texts):
+            return np.array([[1.0, 0.0] for _ in texts], dtype=np.float32)
+
+    monkeypatch.setattr(rag, "FastEmbedder", LocalEmbedder)
+    source = tmp_path / "messages.db"
+    connection = sqlite3.connect(source)
+    connection.execute("CREATE TABLE messages(chat_id, sender_name, content, created_at)")
+    connection.executemany("INSERT INTO messages VALUES (?, ?, ?, ?)", [
+        ("chat", "sender", "message", int(time.time())) for _ in range(3)
+    ])
+    connection.commit()
+    connection.close()
+    before = hashlib.sha256(source.read_bytes()).hexdigest()
+    (tmp_path / "chroma").mkdir()
+    (tmp_path / "chroma" / "broken.txt").write_text("old index")
+    (tmp_path / "rag_state.json").write_text('{"old": true}')
+    stage = rebuild(tmp_path)
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == before
+    assert (stage / "previous" / "chroma" / "broken.txt").exists()
+    assert json.loads((tmp_path / "rag_state.json").read_text())["last_indexed_ids"]["chat"] == 3
+    assert (tmp_path / "last_indexed.json").exists()
+    assert json.loads((stage / "result.json").read_text())["vectors"] == 1

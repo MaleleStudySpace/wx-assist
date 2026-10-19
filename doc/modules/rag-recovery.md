@@ -41,7 +41,7 @@ ChromaDB 1.5.9 的 `collection.count()` / HNSW 恢复卡住：底层调用占住
 
 ## 进度与显卡加速
 
-运行状态和 AI 配置页显示聊天、公众号、朋友圈、收藏各自的索引进度。
+运行状态和「系统配置 → 数据配置」显示聊天、公众号、朋友圈、收藏各自的索引进度。
 进度表示已成功处理的当前任务；缓存同步发现新内容后会开始新的增量任务。
 模型加载、错误和实际计算设备单独显示。故障不会伪装成“已完成”。
 
@@ -67,3 +67,7 @@ CPU 使用 `-Device cpu`，CUDA 使用 `-Device cuda`；CUDA 还需要与 ONNX R
 发布 EXE 时在对应环境执行 `pyinstaller build_rag.spec --noconfirm`，将运行库和
 模型一并打包；普通用户选择加速模式即可，不需要自行安装 Python/CUDA（DirectML 版）。
 只有 CPU 运行库的旧 EXE 不会因为设置选择 GPU 就获得加速能力。
+
+打包后可运行 `wx-assist.exe --check-rag D:\rag-check`。这会使用合成文本测试
+模型、子进程、索引写入及重启查询，将结果写入该目录的 `result.json`；
+不启动微信连接、推送或 AI API。建议 CPU/DirectML 发布包分别通过此检查再分发。

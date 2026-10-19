@@ -30,7 +30,7 @@ export default function RagStatus({ form, update }) {
   const jobs = Object.entries(status?.jobs || {})
   const busy = jobs.some(([, job]) => ['preparing', 'running'].includes(job.state))
   const hardware = status?.hardware || {}
-  const selectClass = 'rounded-lg border border-border-main bg-bg-card px-3 py-2 text-sm text-text-main'
+  const selectClass = 'w-full min-w-0 rounded-lg border border-border-main bg-bg-card px-3 py-2 text-sm text-text-main'
 
   return (
     <section className="rounded-2xl border border-border-main bg-bg-card p-5 space-y-4" aria-label="语义索引">
@@ -42,19 +42,19 @@ export default function RagStatus({ form, update }) {
       </div>
       {form && (
         <div className="space-y-3">
-          <div className="flex flex-wrap gap-4">
-            <label className="flex flex-col gap-1 text-xs text-text-muted">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="flex min-w-0 flex-col gap-1 text-xs text-text-muted">
               计算设备
-              <select className={selectClass} value={form.rag_device || 'auto'} onChange={e => update('rag_device', e.target.value)}>
+              <select aria-label="计算设备" className={selectClass} value={form.rag_device || 'auto'} onChange={e => update('rag_device', e.target.value)}>
                 <option value="auto">自动选择（推荐）</option>
                 <option value="cpu">CPU</option>
                 <option value="directml">Windows 显卡加速（DirectML）</option>
                 <option value="cuda">NVIDIA CUDA</option>
               </select>
             </label>
-            <label className="flex flex-col gap-1 text-xs text-text-muted">
+            <label className="flex min-w-0 flex-col gap-1 text-xs text-text-muted">
               每批处理数量
-              <select className={selectClass} value={form.rag_batch_size || 16} onChange={e => update('rag_batch_size', Number(e.target.value))}>
+              <select aria-label="每批处理数量" className={selectClass} value={form.rag_batch_size || 16} onChange={e => update('rag_batch_size', Number(e.target.value))}>
                 <option value={8}>8（低内存 / 2 GB 显存）</option>
                 <option value={16}>16（推荐）</option>
                 <option value={32}>32</option>
@@ -72,7 +72,7 @@ export default function RagStatus({ form, update }) {
         const percent = job.total ? Math.min(100, Math.floor(job.completed / job.total * 100)) : job.state === 'done' ? 100 : 0
         return (
           <div key={name} className="space-y-1.5">
-            <div className="flex justify-between gap-3 text-xs text-text-muted">
+            <div className="flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs text-text-muted">
               <span>{name}</span>
               <span>{job.state === 'preparing' ? '统计待处理内容' : `${job.completed.toLocaleString()} / ${job.total.toLocaleString()} ${job.unit} · ${percent}%`}{job.state === 'done' ? ' · 完成' : job.state === 'paused' ? ' · 已暂停' : ''}</span>
             </div>

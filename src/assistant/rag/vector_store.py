@@ -116,7 +116,7 @@ class ChromaStore(VectorStore):
                 if request is not None:
                     connection.send(request)
                 response.append(connection.recv())
-            except (EOFError, OSError) as exc:
+            except Exception as exc:
                 response.append((False, f"ChromaDB 子进程已退出: {exc}"))
             finally:
                 done.set()
