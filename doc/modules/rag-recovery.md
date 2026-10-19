@@ -38,3 +38,32 @@ ChromaDB 1.5.9 的 `collection.count()` / HNSW 恢复卡住：底层调用占住
 
 覆盖子进程卡住/退出、启动超时、重启后查询、幂等更新，以及失败后的索引进度。
 测试使用合成数据，不提交真实数据库、日志、密钥或模型文件。
+
+## 进度与显卡加速
+
+运行状态和 AI 配置页显示聊天、公众号、朋友圈、收藏各自的索引进度。
+进度表示已成功处理的当前任务；缓存同步发现新内容后会开始新的增量任务。
+模型加载、错误和实际计算设备单独显示。故障不会伪装成“已完成”。
+
+设置中可选择自动、CPU、DirectML、CUDA，以及每批 8/16/32/64 项。
+自动模式优先 CUDA，其次 DirectML，最后 CPU。GPU 初始化失败、驱动不匹配或
+编码时显存不足会记录原因并回退 CPU；界面显示实际后端，不仅是用户选择。
+2 GB 显卡建议每批 8 项；显卡加速只加速向量编码，索引存储仍使用 CPU。
+
+Windows 推荐 DirectML（支持兼容 DirectX 12 的 NVIDIA/AMD/Intel 显卡）：
+
+```powershell
+py -3.13 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+powershell -File scripts/setup-rag.ps1 -Device directml
+```
+
+CPU 使用 `-Device cpu`，CUDA 使用 `-Device cuda`；CUDA 还需要与 ONNX Runtime
+匹配的 NVIDIA 驱动、CUDA/cuDNN 运行库。安装脚本仅修改指定虚拟环境。
+三个 ONNX 包共享模块文件，必须只保留一种；安装其他依赖后若重新装入 CPU 包，
+重新运行脚本恢复目标后端。FastEmbed 的依赖元数据仍声明 CPU 包，故 GPU 环境
+的 `pip check` 可能报告缺少 `onnxruntime`，以实际 provider 和编码测试为准。
+
+发布 EXE 时在对应环境执行 `pyinstaller build_rag.spec --noconfirm`，将运行库和
+模型一并打包；普通用户选择加速模式即可，不需要自行安装 Python/CUDA（DirectML 版）。
+只有 CPU 运行库的旧 EXE 不会因为设置选择 GPU 就获得加速能力。

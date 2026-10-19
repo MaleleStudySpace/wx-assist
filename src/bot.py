@@ -602,6 +602,8 @@ class Bot:
 
             # ── RAG Engine (optional, zero impact on failure) ──
             rag_engine = None
+            from src.assistant import rag_status
+            rag_status.reset("loading" if asst_cfg.rag_enabled else "disabled")
             if not asst_cfg.rag_enabled:
                 logger.info("[RAG] 已通过配置禁用，跳过 RAG 初始化")
                 router.set_rag(None)
@@ -620,11 +622,12 @@ class Bot:
                     ChromaStore = _rag_mod.ChromaStore
                     SlidingWindowChunker = _rag_mod.SlidingWindowChunker
 
-                    embedder = FastEmbedder()
+                    embedder = FastEmbedder(device=asst_cfg.rag_device, batch_size=asst_cfg.rag_batch_size)
                     vec_store = ChromaStore(path="data/chroma")
                     chunker = SlidingWindowChunker()
                     rag_engine = RAGEngine(store=vec_store, embedder=embedder, chunker=chunker)
                     rag_engine.warmup()
+                    rag_status.update(phase="ready")
 
                     # Inject into Router（用于实时索引）和 ToolExecutor（用于搜索工具）
                     router.set_rag(rag_engine)
@@ -653,6 +656,7 @@ class Bot:
                                      name="rag-cold-start").start()
 
                 except Exception as rag_e:
+                    rag_status.update(phase="error", error="语义索引启动失败，请查看运行日志；索引损坏时可离线重建。")
                     logger.warning("[RAG] RAGEngine init failed (continuing without): %s", rag_e)
                     rag_engine = None
                     router.set_rag(None)

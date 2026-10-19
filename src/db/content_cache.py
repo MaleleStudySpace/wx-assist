@@ -1585,15 +1585,19 @@ class ContentCache:
 
     def _index_chunks(self, rag, chunks, label: str):
         """批量索引 chunks 到 ChromaDB。"""
+        from src.assistant import rag_status
         if not chunks:
             # 无新内容 → 静默（debug 级），避免每分钟刷屏
             logger.debug("[CACHE] %s: 无新内容可索引", label)
+            rag_status.job(label, total=0, completed=0, state="done")
             return
+        rag_status.job(label, total=len(chunks), completed=0, unit="项")
         try:
             for offset in range(0, len(chunks), 64):
                 batch = chunks[offset:offset + 64]
                 embeddings = rag._embedder.encode([c.content for c in batch])
                 rag._store.add(batch, embeddings)
+                rag_status.job(label, completed=offset + len(batch), unit="项")
             # 日志带标题摘要（前 5 条，每条截 25 字），便于确认索引了哪些内容
             _title_sum = " | ".join(
                 "{}/{}".format((c.sender_name or "?")[:12], (c.content or "").replace("\n", " ")[:25])
@@ -1601,8 +1605,10 @@ class ContentCache:
             )
             logger.info("[CACHE] RAG 索引 %s: %d 条%s", label, len(chunks),
                         " | " + _title_sum if _title_sum else "")
+            rag_status.job(label, completed=len(chunks), state="done", unit="项")
         except Exception as e:
             logger.warning("[CACHE] RAG 索引 %s 失败: %s", label, e)
+            rag_status.job(label, state="error", error="索引失败，进度已保留", unit="项")
             # The caller updates last_indexed only after every batch succeeds.
             raise
 

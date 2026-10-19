@@ -17,6 +17,7 @@ import numpy as np
 
 from .models import Chunk, SearchResult
 from .chroma_worker import run_chroma_worker
+from .. import rag_status
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,7 @@ class ChromaStore(VectorStore):
                 process.close()
 
     def _fail(self, reason):
+        rag_status.update(phase="error", error="语义索引无响应或损坏，已停止索引服务；其他功能可以继续使用。请退出应用后重建索引。")
         self._failure = (
             f"RAG 向量索引不可用 ({self._path}): {reason}。"
             "请停止应用后重建 RAG 索引；聊天数据库无需删除。"
