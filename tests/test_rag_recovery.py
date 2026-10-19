@@ -123,6 +123,38 @@ def test_vectors_survive_restart_and_upsert_updates_content(tmp_path):
         reopened.close()
 
 
+def test_persisted_hnsw_reopens_under_unicode_directory(tmp_path):
+    from pathlib import Path
+    import shutil
+
+    original_cwd = Path.cwd()
+    source = tmp_path / "ascii-index"
+    destination = tmp_path / "微信助手 空格" / "数据" / "chroma"
+    store = ChromaStore(str(source))
+    # Small collections stay in the WAL/brute-force buffer and do not exercise
+    # native HNSW file reopening. Exceed the default sync threshold (1000).
+    chunks = [Chunk(str(i), "msg", str(i), "chat", "sender", "content", "1")
+              for i in range(1100)]
+    vectors = np.tile(np.array([[1.0, 0.0]], dtype=np.float32), (len(chunks), 1))
+    try:
+        store.warmup()
+        store.add(chunks, vectors)
+    finally:
+        store.close()
+    assert list(source.glob("*/header.bin")), "Test requires persisted HNSW files"
+    shutil.copytree(source, destination)
+    for _ in range(2):
+        reopened = ChromaStore(str(destination))
+        try:
+            reopened.warmup()
+            assert reopened.count() == 1100
+            assert reopened.search(vectors[0], 3)
+            reopened.add([chunks[0]], vectors[:1])
+        finally:
+            reopened.close()
+        assert Path.cwd() == original_cwd
+
+
 def test_failed_cold_start_does_not_checkpoint(tmp_path):
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row

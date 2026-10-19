@@ -4,11 +4,20 @@
 def run_chroma_worker(connection, path):
     client = None
     try:
+        import os
+        from pathlib import Path
         import chromadb
         from chromadb.config import Settings
 
+        # Windows HNSW native file I/O cannot reliably reopen a persisted index
+        # through a non-ASCII absolute path. Python can enter that directory
+        # using Unicode APIs; all native segment paths then stay ASCII/relative.
+        # Only this dedicated worker changes cwd, never the desktop process.
+        index_dir = Path(path).resolve()
+        index_dir.mkdir(parents=True, exist_ok=True)
+        os.chdir(index_dir)
         client = chromadb.PersistentClient(
-            path=path, settings=Settings(anonymized_telemetry=False),
+            path=".", settings=Settings(anonymized_telemetry=False),
         )
         collection = client.get_or_create_collection(
             name="rag", metadata={"hnsw:space": "cosine"},

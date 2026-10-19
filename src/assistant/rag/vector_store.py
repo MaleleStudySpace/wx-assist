@@ -99,7 +99,7 @@ class ChromaStore(VectorStore):
         rag_status.update(phase="error", error="语义索引无响应或损坏，已停止索引服务；其他功能可以继续使用。请退出应用后重建索引。")
         self._failure = (
             f"RAG 向量索引不可用 ({self._path}): {reason}。"
-            "请停止应用后重建 RAG 索引；聊天数据库无需删除。"
+            "请检查索引路径和运行日志；确认索引损坏后再停止应用重建，聊天数据库无需删除。"
         )
         self._discard_worker()
         raise RuntimeError(self._failure)

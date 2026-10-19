@@ -5,7 +5,12 @@
 已有数据时重启，窗口可能未响应，日志停在 RAG 冷启动附近。曾在真实索引中复现
 ChromaDB 1.5.9 的 `collection.count()` / HNSW 恢复卡住：底层调用占住 GIL，
 连主线程也无法运行。SQLite `quick_check` 通过不代表向量索引正常。
-这不能单凭日志归因于某次强制退出，也不是中文安装目录导致。
+这不能单凭日志归因于某次强制退出。
+
+另一个独立问题是 Windows 下中文绝对路径触发 `Error loading hnsw index`。
+同一索引的 HNSW 文件校验一致，在英文路径或以相对路径打开时正常。
+子进程先通过 Python Unicode API 进入索引目录，再使用 `.` 打开，规避底层
+HNSW 路径兼容问题；主程序的工作目录保持不变。不要仅凭此报错清空数据。
 
 ## 运行时保护
 
@@ -69,6 +74,11 @@ CPU 使用 `-Device cpu`，CUDA 使用 `-Device cuda`；CUDA 还需要与 ONNX R
 模型一并打包；普通用户选择加速模式即可，不需要自行安装 Python/CUDA（DirectML 版）。
 只有 CPU 运行库的旧 EXE 不会因为设置选择 GPU 就获得加速能力。
 
-打包后可运行 `wx-assist.exe --check-rag D:\rag-check`。这会使用合成文本测试
-模型、子进程、索引写入及重启查询，将结果写入该目录的 `result.json`；
+打包后可运行 `wx-assist.exe --check-rag D:\rag-check`。这会使用 1100 条合成记录
+跨过 HNSW 落盘阈值，测试模型、子进程、索引写入及重启查询，将结果写入该目录的 `result.json`；
 不启动微信连接、推送或 AI API。建议 CPU/DirectML 发布包分别通过此检查再分发。
+
+退出应用后可追加现有索引路径，例如
+`wx-assist.exe --check-rag D:\rag-check "D:\微信助手\data\chroma"`，
+直接验证安装目录中的真实索引。此模式不添加测试记录，但 ChromaDB 打开时可能
+正常恢复 WAL 或更新内部元数据。输出只包含条数和设备状态，不包含聊天内容。
