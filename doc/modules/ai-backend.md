@@ -108,6 +108,29 @@ POST /api/ai/chat/message
 
 聊天上下文有字符上限和压缩机制。关闭对话面板不会自动删除 session，用户选择“开启新对话”时才会销毁旧 session。
 
+### 6.1 空回复恢复与复制
+
+OpenAI 兼容后端的流式请求默认使用 4,096 输出 token。若模型只输出思考内容而没有
+回复正文，会尝试关闭思考并以至少 8,192 token 重试；中转明确拒绝 `thinking`
+参数时，仅增加输出额度。已经输出正文后不会重播，内部思考也不会作为答案显示。
+重试仍无正文则发送错误事件并记录失败，不保存空的 assistant 消息。
+
+群聊、私聊和收藏共用的对话面板按完整 SSE 事件解析，支持跨网络分段的中文内容。
+空完成事件、异常断线及超时会显示原因；断线前收到的正文保留供查看。
+首次响应等待最多 120 秒（包含等待响应头和推理恢复），收到正文后按 60 秒无内容超时处理。
+
+回复下方的“复制”按钮支持多行内容，并显示成功或失败结果；WebView 或局域网
+HTTP 环境缺少 Clipboard API 时使用兼容方式复制，也可以手动选择文字。
+
+![回复复制反馈（合成数据）](../screenshots/ai-reply-copy.png)
+
+回归检查：
+
+```powershell
+python -m pytest tests/test_ai_chat_stream.py tests/test_llm_errors.py tests/test_llm_health.py -q
+node --test ui/tests/sse.test.mjs
+```
+
 ## 7. 当前已知体验差异
 
 未配置 AI 时，部分 AI 专用接口仍可能先返回会话或普通回复，随后才在真正调用阶段显示未配置提示；Dashboard 也可能显示“未响应”而不是“未配置”。这属于状态表达问题，不影响消息读取、提醒和导出等非 AI 主链。
