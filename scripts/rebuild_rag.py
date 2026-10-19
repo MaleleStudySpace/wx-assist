@@ -18,9 +18,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def rebuild(data_dir: Path) -> Path:
     from src.assistant.rag import ChromaStore, FastEmbedder, RAGEngine
+    from src.assistant.config import _dict_to_config
     from src.db.content_cache import ContentCache
+    import psutil
 
     data_dir = data_dir.resolve()
+    for process in psutil.process_iter(["name", "exe"]):
+        executable = process.info.get("exe")
+        if executable and (process.info.get("name") or "").lower().startswith("wx-assist"):
+            if Path(executable).resolve().parent == data_dir.parent:
+                raise RuntimeError("请先退出该目录中的微信助手，再重建索引")
     source = data_dir / "messages.db"
     if not source.is_file():
         raise FileNotFoundError(source)
@@ -41,7 +48,9 @@ def rebuild(data_dir: Path) -> Path:
         def _index_cursor_path(self):
             return str(staging / "last_indexed.json")
 
-    embedder = FastEmbedder()
+    config_path = data_dir / "assistant_config.json"
+    config = _dict_to_config(json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {})
+    embedder = FastEmbedder(device=config.rag_device, batch_size=config.rag_batch_size)
     embedder.warmup()
     store = ChromaStore(str(staging / "chroma"))
     engine = RAGEngine(store, embedder)

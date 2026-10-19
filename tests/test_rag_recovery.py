@@ -201,6 +201,9 @@ def test_offline_rebuild_replaces_only_derived_state(tmp_path, monkeypatch):
     from src.assistant import rag
 
     class LocalEmbedder:
+        def __init__(self, **kwargs):
+            pass
+
         def warmup(self):
             pass
 
