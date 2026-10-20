@@ -23,6 +23,7 @@ from .embedder import Embedder
 from .models import Chunk, ChunkConfig, SearchResult
 from .reranker import NoopReranker, Reranker
 from .vector_store import VectorStore
+from .. import rag_status
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TOP_K = 20       # 粗搜条数
 DEFAULT_FINAL_K = 5      # 最终返回条数
 DEFAULT_SCORE_THRESHOLD = 0.4  # 相似度阈值
-COLD_START_BATCH = 1000  # 冷启动每批处理条数
+COLD_START_BATCH = 128  # 小批次及时保存进度，避免长时间没有反馈
 COLD_START_DAYS = 30     # 冷启动回溯天数
 MAX_CHUNK_AGE_DAYS = 60  # chunk 最大存活天数，超过的被 compress 清理
 STATE_FILE = "data/rag_state.json"  # 索引进度持久化
@@ -62,6 +63,7 @@ class RAGEngine:
         # 索引进度（按群追踪）
         self._last_indexed_ids: dict[str, int] = {}
         self._state_path = Path(STATE_FILE)
+        self._stop_event = threading.Event()
 
     # ── 生命周期 ──────────────────────────────────────────────────
 
@@ -71,18 +73,14 @@ class RAGEngine:
         self._store.warmup()  # ChromaStore 的 warmup
         self._reranker.warmup()
         self._load_state()
-        # 注意：warmup 中不调用 compress()，因为 ChromaDB Rust 层
-        # 在 daemon thread 中调用 collection.get(where=...) 可能触发
-        # access violation (SIGSEGV)，导致整个进程崩溃。
-        # 清理由后台 rag-compress 线程在首次循环时完成。
+        # Cleanup uses the same isolated worker and starts after one hour.
         self._start_compress_loop()
         logger.info("[RAG] RAGEngine 就绪: dim=%d", self._embedder.dim)
 
     def _start_compress_loop(self):
         """启动后台清理线程，每小时压缩一次 ChromaDB。"""
         def _loop():
-            while True:
-                time.sleep(3600)  # 每小时
+            while not self._stop_event.wait(3600):
                 try:
                     self.compress()
                 except Exception as e:
@@ -92,6 +90,7 @@ class RAGEngine:
 
     def close(self):
         """关闭时调用。释放资源。"""
+        self._stop_event.set()
         self._store.close()
         logger.info("[RAG] RAGEngine 已关闭")
 
@@ -155,6 +154,8 @@ class RAGEngine:
             self._store.add(chunks, embeddings)
         except Exception as e:
             logger.warning("[RAG] ingest 批量索引失败: %s", e)
+            # cold_start must not checkpoint a batch that was never persisted.
+            raise
 
     def ingest_one(self, msg: dict, source: str = "msg"):
         """增量索引单条消息。
@@ -275,6 +276,7 @@ class RAGEngine:
             tracked_groups: 关注的群 ID 列表
         """
         logger.info("[RAG] 冷启动开始")
+        rag_status.job("聊天记录", total=0, completed=0, state="preparing")
         try:
             groups = tracked_groups
             if not groups:
@@ -288,21 +290,30 @@ class RAGEngine:
                     # 查询失败与"确实没有群"在日志上同形（都是"跳过"），
                     # 必须区分故障与真空。
                     logger.warning("[RAG] 冷启动查询群列表失败: %s", e)
-                    groups = []
+                    raise
 
             if not groups:
                 logger.info("[RAG] 冷启动跳过：没有需要索引的群")
-                return
+                rag_status.job("聊天记录", total=0, completed=0, state="done")
+                return True
 
             # created_at 是 UNIX 时间戳（秒）
             cutoff_ts = int((datetime.now() - timedelta(days=COLD_START_DAYS)).timestamp())
             batch_size = COLD_START_BATCH
             total = 0
             cursor = db_conn.cursor()
+            pending = sum(db_conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE chat_id = ? AND rowid > ? AND created_at >= ?",
+                (chat_id, self._last_indexed_ids.get(chat_id, 0), cutoff_ts),
+            ).fetchone()[0] for chat_id in groups)
+            rag_status.job("聊天记录", total=pending, completed=0)
 
             for chat_id in groups:
                 last_id = self._last_indexed_ids.get(chat_id, 0)
                 while True:
+                    if self._stop_event.is_set():
+                        rag_status.job("聊天记录", state="paused")
+                        return False
                     rows = cursor.execute(
                         """SELECT rowid AS id, chat_id, sender_name, content, created_at
                            FROM messages
@@ -320,11 +331,16 @@ class RAGEngine:
                     last_id = messages[-1]["id"]
                     self._last_indexed_ids[chat_id] = last_id
                     self._save_state()
+                    rag_status.job("聊天记录", completed=total)
 
             logger.info("[RAG] 冷启动完成: 共索引 %d 条消息", total)
+            rag_status.job("聊天记录", total=total, completed=total, state="done")
+            return True
 
         except Exception as e:
             logger.warning("[RAG] 冷启动失败: %s", e)
+            rag_status.job("聊天记录", state="error", error="索引失败，进度已保留，请查看运行日志")
+            return False
 
     # 状态持久化 — 前面已有
 

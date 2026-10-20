@@ -274,7 +274,7 @@ class OpenAICompatSummarizer(AbstractSummarizer):
 
     def _call_chat_api_stream(self, system_prompt: str,
                                messages: list[dict],
-                               max_tokens: int = 2000,
+                               max_tokens: int = 4096,
                                extra_body: dict | None = None) -> Iterator[str]:
         """Stream chat API response, yielding token strings.
 
@@ -282,7 +282,6 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         以 OpenAI SDK 的 extra_body 参数传递，不平铺进顶层 kwargs
         （否则 SDK 报 unexpected keyword argument 错误）。
         """
-        from typing import Iterator as _Iter
         api_messages = [{"role": "system", "content": system_prompt}] + messages
         params = {
             "model": self.model,
@@ -297,13 +296,54 @@ class OpenAICompatSummarizer(AbstractSummarizer):
             sdk_extra.update(extra_body)
         if sdk_extra:
             params["extra_body"] = sdk_extra
-        stream = self.client.chat.completions.create(**params)
-        for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            if delta.content:
-                yield delta.content
+        def consume(request, state):
+            stream = self.client.chat.completions.create(**request)
+            try:
+                for chunk in stream:
+                    # A final usage-only chunk is valid; provider business errors
+                    # returned with HTTP 200 must still be surfaced.
+                    base_resp = getattr(chunk, "base_resp", None)
+                    if isinstance(base_resp, dict) and base_resp.get("status_code"):
+                        self._extract_choice(chunk, log_tag="CHAT-STREAM")
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    state["finish"] = choice.finish_reason or state["finish"]
+                    delta = choice.delta
+                    if delta is None:
+                        continue
+                    state["reasoning_chars"] += len(getattr(delta, "reasoning_content", None) or "")
+                    if delta.content:
+                        state["has_content"] |= bool(delta.content.strip())
+                        yield delta.content
+            finally:
+                stream.close()
+
+        state = {"has_content": False, "reasoning_chars": 0, "finish": None}
+        yield from consume(params, state)
+        if not state["has_content"] and state["reasoning_chars"] and state["finish"] != "content_filter":
+            # Match the non-streaming thinking guard: never display reasoning as
+            # the answer, and never replay once visible answer text was sent.
+            logger.warning("[CHAT-STREAM] reasoning-only response (model=%s, finish=%s, reasoning_chars=%d); retrying",
+                           self.model, state["finish"], state["reasoning_chars"])
+            retry = dict(params, max_tokens=max(max_tokens * 2, 8192))
+            retry["extra_body"] = {**sdk_extra, "thinking": {"type": "disabled"}}
+            state = {"has_content": False, "reasoning_chars": 0, "finish": None}
+            try:
+                yield from consume(retry, state)
+            except APIStatusError as exc:
+                # Some relays reject the thinking option; preserve all configured
+                # parameters and use only the larger output budget in that case.
+                if state["has_content"] or exc.status_code not in (400, 422) or "thinking" not in str(exc).lower():
+                    raise
+                retry = dict(params, max_tokens=retry["max_tokens"])
+                state = {"has_content": False, "reasoning_chars": 0, "finish": None}
+                yield from consume(retry, state)
+        if not state["has_content"]:
+            raise LLMResponseError(
+                "AI 未返回回复正文，请重试或调整模型的思考模式/输出额度"
+                f"（model={self.model}, finish_reason={state['finish'] or 'unknown'}, "
+                f"reasoning_chars={state['reasoning_chars']}）")
 
     # ── Agent chat (tool calling) ──────────────────────────────────
 

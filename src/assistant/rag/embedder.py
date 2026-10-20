@@ -6,9 +6,12 @@
 
 import logging
 import sys
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
+from . import acceleration
+from .. import rag_status
 
 import numpy as np
 
@@ -47,8 +50,17 @@ class FastEmbedder(Embedder):
     模型文件已放入项目 models/ 目录，运行时从本地加载，不联网。
     """
 
-    def __init__(self, model_name: str = "BAAI/bge-small-zh-v1.5"):
+    def __init__(self, model_name: str = "BAAI/bge-small-zh-v1.5",
+                 batch_size: int = 16, threads: int = 2, device: str = "auto"):
+        if batch_size < 1 or threads < 1:
+            raise ValueError("batch_size and threads must be positive")
         self.model_name = model_name
+        self._batch_size = batch_size
+        self._threads = threads
+        self._requested_device = device
+        self._device = "cpu"
+        self._fallback_reason = ""
+        self._encode_lock = threading.Lock()
         self._model = None
         self._dim = None
 
@@ -83,35 +95,67 @@ class FastEmbedder(Embedder):
             return
 
         try:
-            from fastembed import TextEmbedding
-
             cache_dir = self._find_cache_dir()
             logger.info("[RAG] 加载嵌入模型: cache_dir=%s", cache_dir)
+            available = acceleration.capabilities()
+            self._device = acceleration.select_device(self._requested_device, available)
+            if self._requested_device not in ("auto", "cpu") and self._device == "cpu":
+                self._fallback_reason = "当前运行环境未包含所选显卡支持，已使用 CPU"
+            try:
+                self._load_model(cache_dir)
+            except Exception:
+                if self._device == "cpu":
+                    raise
+                logger.warning("[RAG] 显卡初始化失败，回退 CPU", exc_info=True)
+                self._device = "cpu"
+                self._fallback_reason = "显卡初始化失败，已使用 CPU"
+                self._load_model(cache_dir)
 
-            self._model = TextEmbedding(
-                model_name=self.model_name,
-                cache_dir=cache_dir,
-            )
-
-            # 预热：编码一次确保 ONNX Runtime 就绪
-            list(self._model.embed(["预热"]))
-
-            # 确认维度
-            test = list(self._model.embed(["d"]))
-            self._dim = len(test[0])
-            logger.info("[RAG] 嵌入模型就绪: dim=%d", self._dim)
+            active = acceleration.active_device(self._model)
+            if active != self._device:
+                self._fallback_reason = "显卡后端未成功启用，已使用 CPU"
+            self._device = active
+            self._publish_hardware()
+            logger.info("[RAG] 嵌入模型就绪: dim=%d device=%s", self._dim, self._device)
 
         except Exception as e:
             logger.warning("[RAG] 模型加载失败: %s", e)
             self._model = None
             raise
 
+    def _load_model(self, cache_dir):
+        self._model = acceleration.create_model(
+            self.model_name, cache_dir, self._threads, self._device,
+        )
+        test = list(self._model.embed(["预热"], batch_size=1))
+        self._dim = len(test[0])
+
+    def _publish_hardware(self):
+        rag_status.update(hardware={
+            "requested": self._requested_device, "active": self._device,
+            "label": acceleration.LABELS[self._device],
+            "batch_size": self._batch_size, "fallback_reason": self._fallback_reason,
+        })
+
     def encode(self, texts: list[str]) -> np.ndarray:
         if self._model is None:
             raise RuntimeError("Embedder 未预热，请先调用 warmup()")
 
         try:
-            vectors = list(self._model.embed(texts))
+            # FastEmbed defaults to 256 documents per batch. Long messages can
+            # consume several GB, multiplied by concurrent cache/cold-start jobs.
+            with self._encode_lock:
+                try:
+                    vectors = list(self._model.embed(texts, batch_size=self._batch_size))
+                except Exception:
+                    if self._device == "cpu":
+                        raise
+                    logger.warning("[RAG] 显卡编码失败，改用 CPU 重试", exc_info=True)
+                    self._device = "cpu"
+                    self._fallback_reason = "显卡编码失败（可能显存不足），已使用 CPU"
+                    self._load_model(self._find_cache_dir())
+                    self._publish_hardware()
+                    vectors = list(self._model.embed(texts, batch_size=self._batch_size))
             return np.array(vectors, dtype=np.float32)
         except Exception as e:
             logger.warning("[RAG] encode 失败: %s", e)

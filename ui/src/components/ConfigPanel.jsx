@@ -6,6 +6,7 @@ import { spring, Field, Toggle, Select, Input, API_BASE, getWsUrl } from './Shar
 import ChatDrawer from './ChatDrawer'
 import PlatformConfigDemo from './PlatformConfigDemo'
 import VoiceSection from './VoiceSection'
+import RagStatus from './RagStatus'
 
 const pageTransition = {
   initial: { opacity: 0, x: 12 },
@@ -412,9 +413,7 @@ function RagToggleRow({ form, update }) {
                 <Info size={15} className="text-text-muted cursor-help" />
                 <div className="hidden group-hover:block absolute left-1/2 top-full -translate-x-1/2 mt-2 w-72 p-3 rounded-lg bg-bg-card border border-border-main shadow-xl text-xs text-text-muted leading-relaxed z-50">
                   <div>开启后支持聊天、收藏、朋友圈、公众号文章语义搜索。</div>
-                  <div className="mt-2">首次 RAG 冷启动会大量占用计算机资源，</div>
-                  <div>可能会造成 5-30 分钟系统卡顿。</div>
-                  <div>取决于数据量大小</div>
+                  <div className="mt-2">首次建立索引耗时取决于数据量，可在下方查看进度并选择计算设备。</div>
                 </div>
               </div>
             </div>
@@ -423,6 +422,7 @@ function RagToggleRow({ form, update }) {
         </div>
         <Toggle enabled={Boolean(form.rag_enabled)} onChange={v => update('rag_enabled', v)} />
       </div>
+      <RagStatus form={form} update={update} />
     </div>
   )
 }
@@ -2734,7 +2734,7 @@ export default function ConfigPanel({ activeSection, onNavigate, updateInfo, onC
   }
   const [form, setForm] = useState({
     ai_provider_base_url: '', ai_provider_api_key: '',
-    ai_provider_type: 'auto', ai_provider_model: '', rag_enabled: false,
+    ai_provider_type: 'auto', ai_provider_model: '', rag_enabled: false, rag_device: 'auto', rag_batch_size: 16,
     wechat_backend: 'wcdb', wechat_groups: '*',
     wechat_data_dir: '',
     wxid: '', db_path: '', has_key: false, key_preview: '', wcdb_key: '',
@@ -2779,6 +2779,8 @@ export default function ConfigPanel({ activeSection, onNavigate, updateInfo, onC
       ai_provider_model: form.ai_provider_model,
       ai_provider_extra_body: form.ai_provider_extra_body || '',
       rag_enabled: Boolean(form.rag_enabled),
+      rag_device: form.rag_device || 'auto',
+      rag_batch_size: form.rag_batch_size || 16,
       wechat_backend: form.wechat_backend,
       wechat_groups: form.wechat_groups,
       wechat_data_dir: form.wechat_data_dir,

@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Stop, Key, Spinner, CheckCircle, XCircle, ArrowsClockwise, WarningOctagon, Clock, ChatCircle, Newspaper, Database, WechatLogo, Brain, Robot, Cube, Lightning, ArrowRight, PaperPlaneTilt, Bell } from '@phosphor-icons/react'
 import { API_BASE, isRegexTag } from './SharedComponents'
 import { cronToLabel } from '../utils/cron'
+import RagStatus from './RagStatus'
 
 const spring = { type: 'spring', stiffness: 100, damping: 20 }
 const easeOut = [0.16, 1, 0.3, 1]
@@ -432,6 +433,7 @@ export default function Dashboard({ status, onTabChange }) {
 
   return (
     <div className="relative z-10 space-y-5">
+      {status.rag_enabled && <RagStatus />}
 
       {/* ── Error banner ─── */}
       {status.error && !status.error.includes('KEY_MISSING') && (

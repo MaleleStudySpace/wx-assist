@@ -915,24 +915,21 @@ def handle_ai_chat_message_stream(body: dict, wfile) -> None:
     # 否则面板的 AI 状态不会随网页对话的结果变化。
     from src.summarize.base import record_llm_failure
     from src.web.server import update_status
-    FIRST_TOKEN_TIMEOUT_SEC = 40
     full_response = []
     stream_start = time.monotonic()
     first_token_received = False
     try:
         for token in summarizer._call_chat_api_stream(system_prompt, api_messages):
-            if not first_token_received:
+            if not token:
+                continue
+            if not first_token_received and token.strip():
                 first_token_received = True
-                elapsed = time.monotonic() - stream_start
-                if elapsed > FIRST_TOKEN_TIMEOUT_SEC:
-                    logger.warning(f"AI chat stream: first token took {elapsed:.1f}s (> {FIRST_TOKEN_TIMEOUT_SEC}s)")
-                    _send_sse_event(wfile, "error", {"message": "⚠️ AI 响应超时，请重试"})
-                    record_llm_failure(f"AI chat: 首 token 超时 {elapsed:.0f}s")
-                    update_status()
-                    return
                 _mark_stream_success(summarizer)
             _send_sse_event(wfile, "token", {"content": token})
             full_response.append(token)
+        if not "".join(full_response).strip():
+            from src.summarize.errors import LLMResponseError
+            raise LLMResponseError("AI 未返回回复正文，请重试或调整模型的思考模式/输出额度")
     except BrokenPipeError:
         logger.info("Client disconnected during AI chat stream")
         # Don't try to save — client gone

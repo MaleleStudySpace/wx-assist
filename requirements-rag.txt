@@ -1,0 +1,5 @@
+# Optional RAG dependencies; install after requirements.txt.
+# For Windows GPU support, use scripts/setup-rag.ps1 instead.
+chromadb==1.5.9
+fastembed==0.8.0
+onnxruntime==1.27.0

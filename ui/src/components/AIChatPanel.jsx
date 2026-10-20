@@ -1,6 +1,8 @@
-﻿import { useRef, useEffect, useCallback } from 'react'
-import { PaperPlaneTilt, ArrowsClockwise, Robot, User, Sparkle } from '@phosphor-icons/react'
+﻿import { useState, useRef, useEffect, useCallback } from 'react'
+import { PaperPlaneTilt, ArrowsClockwise, Robot, User, Sparkle, Copy, Check } from '@phosphor-icons/react'
 import { API_BASE } from './SharedComponents'
+import { readSSE } from '../utils/sse.mjs'
+import { copyText } from '../utils/clipboard.mjs'
 
 /**
  * Shared AI Chat Panel component for both Favorites and Group Chat.
@@ -49,6 +51,8 @@ export default function AIChatPanel({
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const abortRef = useRef(null)
+  const copyTimerRef = useRef(null)
+  const [copyStatus, setCopyStatus] = useState(null)
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -64,6 +68,7 @@ export default function AIChatPanel({
   useEffect(() => {
     return () => {
       if (abortRef.current) abortRef.current.abort()
+      clearTimeout(copyTimerRef.current)
     }
   }, [])
 
@@ -90,126 +95,75 @@ export default function AIChatPanel({
     // Track current messages locally for SSE updates (avoids stale ref issues)
     let currentMessages = baseMessages
 
-    // Timeout: if no token arrives within 60s, show error
-    let firstTokenTimer = null
+    const controller = new AbortController()
+    abortRef.current = controller
+    let aiContent = ''
+    let timeoutMessage = ''
+    let responseTimer
+    const armTimeout = (ms) => {
+      clearTimeout(responseTimer)
+      responseTimer = setTimeout(() => {
+        timeoutMessage = 'AI 响应超时，请重试'
+        controller.abort()
+      }, ms)
+    }
+    const updateReply = (content, streaming, isError = false) => {
+      const updated = [...currentMessages]
+      updated[aiMsgIndex] = { role: 'assistant', content, streaming, isError }
+      currentMessages = updated
+      onMessagesChange(updated)
+    }
 
+    // Includes connection/header wait and leaves room for reasoning-only retry.
+    armTimeout(120000)
     try {
-      const controller = new AbortController()
-      abortRef.current = controller
-
       const resp = await fetch(`${API_BASE}/api/ai/chat/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, message: text }),
         signal: controller.signal,
       })
+      if (!resp.ok) throw new Error(`请求失败（HTTP ${resp.status}），请重试`)
+      if (!resp.body) throw new Error('未收到 AI 响应，请重试')
 
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}`)
-      }
-
-      // Parse SSE stream
-      const reader = resp.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let aiContent = ''
-      let hasReceivedToken = false
-
-      firstTokenTimer = setTimeout(() => {
-        if (!hasReceivedToken) {
-          try { reader.cancel() } catch {}
-          const updated = [...currentMessages]
-          updated[aiMsgIndex] = {
-            role: 'assistant',
-            content: '⚠️ AI 响应超时，请重试',
-            streaming: false,
-            isError: true,
-          }
-          onMessagesChange(updated)
-          onIsStreamingChange(false)
-        }
-      }, 60000)
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-
-        // Process complete SSE events
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''  // keep incomplete last line
-
-        let currentEvent = ''
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.slice(7).trim()
-          } else if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (currentEvent === 'token' && data.content) {
-                if (!hasReceivedToken) {
-                  hasReceivedToken = true
-                  clearTimeout(firstTokenTimer)
-                }
-                aiContent += data.content
-                const updated = [...currentMessages]
-                updated[aiMsgIndex] = { role: 'assistant', content: aiContent, streaming: true }
-                currentMessages = updated
-                onMessagesChange(updated)
-              } else if (currentEvent === 'done') {
-                clearTimeout(firstTokenTimer)
-                if (data.token_usage) onTokenUsageChange(data.token_usage)
-                if (data.auto_compressed) onAutoCompressedChange(true)
-                const updated = [...currentMessages]
-                updated[aiMsgIndex] = { role: 'assistant', content: aiContent, streaming: false }
-                currentMessages = updated
-                onMessagesChange(updated)
-                // The backend has already sent the terminal event. Unlock the input
-                // immediately instead of waiting for the HTTP stream to fully close.
-                onIsStreamingChange(false)
-                try { await reader.cancel() } catch {}
-                return
-              } else if (currentEvent === 'error') {
-                clearTimeout(firstTokenTimer)
-                const updated = [...currentMessages]
-                updated[aiMsgIndex] = {
-                  role: 'assistant',
-                  content: `⚠️ ${data.message || '未知错误'}`,
-                  streaming: false,
-                  isError: true,
-                }
-                currentMessages = updated
-                onMessagesChange(updated)
-                onIsStreamingChange(false)
-                try { await reader.cancel() } catch {}
-                return
-              }
-            } catch {
-              // Skip malformed JSON
-            }
-            currentEvent = ''
-          }
+      for await (const { event, data: payload } of readSSE(resp.body)) {
+        const data = JSON.parse(payload)
+        if (event === 'token' && data.content) {
+          aiContent += data.content
+          armTimeout(60000)
+          updateReply(aiContent, true)
+        } else if (event === 'done') {
+          if (!aiContent.trim()) throw new Error('AI 未返回回复正文，请重试或调整模型的思考模式/输出额度')
+          if (data.token_usage) onTokenUsageChange(data.token_usage)
+          if (data.auto_compressed) onAutoCompressedChange(true)
+          updateReply(aiContent, false)
+          return
+        } else if (event === 'error') {
+          throw new Error(data.message || 'AI 服务错误，请重试')
         }
       }
+      // EOF is not a successful response: the stream must send a done event.
+      throw new Error(aiContent.trim() ? '回复连接中断，内容可能不完整，请重试' : '未收到 AI 回复，连接已结束，请重试')
     } catch (e) {
-      if (firstTokenTimer) clearTimeout(firstTokenTimer)
-      if (e.name === 'AbortError') return
-      console.error('AI chat error:', e)
-      const updated = [...currentMessages]
-      updated[aiMsgIndex] = {
-        role: 'assistant',
-        content: '⚠️ 网络错误，请重试',
-        streaming: false,
-        isError: true,
-      }
-      onMessagesChange(updated)
+      const reason = timeoutMessage || (e.name === 'AbortError' ? '生成已取消，请重试' : e.message || '网络错误，请重试')
+      updateReply(`${aiContent.trim() ? aiContent + '\n\n' : ''}⚠️ ${reason}`, false, true)
     } finally {
-      if (firstTokenTimer) clearTimeout(firstTokenTimer)
+      clearTimeout(responseTimer)
       onIsStreamingChange(false)
       abortRef.current = null
     }
-  }, [inputText, isStreaming, sessionId, messages.length, onMessagesChange, onInputTextChange, onIsStreamingChange, onTokenUsageChange, onAutoCompressedChange])
+  }, [inputText, isStreaming, sessionId, messages, onMessagesChange, onInputTextChange, onIsStreamingChange, onTokenUsageChange, onAutoCompressedChange])
+
+  const handleCopy = async (text, index) => {
+    clearTimeout(copyTimerRef.current)
+    try {
+      await copyText(text)
+      setCopyStatus({ index, ok: true })
+    } catch {
+      setCopyStatus({ index, ok: false })
+    }
+    copyTimerRef.current = setTimeout(() => setCopyStatus(null), 2500)
+  }
 
   // ── Compress ─────────────────────────────────────────────
   const handleCompress = useCallback(async () => {
@@ -315,10 +269,10 @@ export default function AIChatPanel({
                   ? 'bg-red-50 border border-red-200 text-red-700 rounded-2xl rounded-bl-sm'
                   : 'bg-bg-card border border-border-main text-text-main rounded-2xl rounded-bl-sm'
             }`}>
-              <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+              <p className="text-sm leading-relaxed whitespace-pre-wrap break-words select-text">
                 {msg.content}
                 {msg.streaming && !msg.content && (
-                  <span className="inline-flex items-center gap-1 ml-0.5">
+                  <span className="inline-flex items-center gap-1 ml-0.5" role="status" aria-label="正在等待 AI 回复">
                     <span className="w-1.5 h-1.5 rounded-full bg-brand-green animate-bounce" style={{ animationDelay: '0ms' }} />
                     <span className="w-1.5 h-1.5 rounded-full bg-brand-green animate-bounce" style={{ animationDelay: '150ms' }} />
                     <span className="w-1.5 h-1.5 rounded-full bg-brand-green animate-bounce" style={{ animationDelay: '300ms' }} />
@@ -330,6 +284,19 @@ export default function AIChatPanel({
                   <span className="inline-block w-1.5 h-4 bg-text-muted animate-pulse align-text-bottom" />
                   <span className="text-[11px] text-text-muted/50">生成中</span>
                 </span>
+              )}
+              {msg.role === 'assistant' && !msg.streaming && msg.content?.trim() && (
+                <button
+                  type="button"
+                  aria-label="复制回复"
+                  onClick={() => handleCopy(msg.content, i)}
+                  className="flex items-center gap-1 mt-2 text-xs text-text-muted hover:text-brand-green cursor-pointer"
+                >
+                  {copyStatus?.index === i && copyStatus.ok ? <Check size={13} /> : <Copy size={13} />}
+                  <span role="status">
+                    {copyStatus?.index === i ? (copyStatus.ok ? '已复制' : '复制失败，请选择文字复制') : '复制'}
+                  </span>
+                </button>
               )}
             </div>
           </div>

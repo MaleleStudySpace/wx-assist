@@ -643,6 +643,9 @@ class _ServerStatus:
         snapshot["version"] = __version__
         snapshot["build_variant"] = "full" if _resolve_rag_availability() else "lite"
         snapshot["is_frozen"] = bool(getattr(_sys, "frozen", False))
+        from src.assistant import rag_status
+        if rag_status.snapshot()["phase"] == "error":
+            snapshot["rag_ok"] = False
         return snapshot
 
     def add_client(self, sock):
@@ -2083,7 +2086,14 @@ class _UIHandler(SimpleHTTPRequestHandler):
             return
 
         # ── API: Load config ───────────────────────────────────────────
+        if self.path == "/api/rag/status" and self.command == "GET":
+            from src.assistant import rag_status
+            self.send_json({"ok": True, **rag_status.snapshot()})
+            return
+
         if self.path == "/api/load-config":
+            from src.assistant.config import load_assistant_config
+            rag_config = load_assistant_config()
             env_path = _find_or_create_env()
             raw = {}
             if env_path.exists():
@@ -2101,6 +2111,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "ai_provider_model": raw.get("AI_PROVIDER_MODEL", ""),
                     "ai_provider_extra_body": raw.get("AI_PROVIDER_EXTRA_BODY", ""),
                     "rag_enabled": _load_rag_enabled(),
+                    "rag_device": rag_config.rag_device,
+                    "rag_batch_size": rag_config.rag_batch_size,
                     "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                     "memory_consolidation_enabled": raw.get("MEMORY_CONSOLIDATION_ENABLED", "false").lower() == "true",
                     "log_level": raw.get("LOG_LEVEL", "INFO"),
@@ -2136,6 +2148,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "ai_provider_type": raw.get("AI_PROVIDER_TYPE", "auto"),
                     "ai_provider_model": raw.get("AI_PROVIDER_MODEL", ""),
                     "rag_enabled": assistant_config.rag_enabled,
+                    "rag_device": assistant_config.rag_device,
+                    "rag_batch_size": assistant_config.rag_batch_size,
                     "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                     "memory_consolidation_enabled": raw.get("MEMORY_CONSOLIDATION_ENABLED", "false").lower() == "true",
                     "log_level": raw.get("LOG_LEVEL", "INFO"),
@@ -2161,11 +2175,20 @@ class _UIHandler(SimpleHTTPRequestHandler):
             body = self.rfile.read(content_len) if content_len else b"{}"
             try:
                 config = json.loads(body)
-                if "rag_enabled" in config:
+                if any(key in config for key in ("rag_enabled", "rag_device", "rag_batch_size")):
                     from src.assistant.config import mutate_config
+                    if config.get("rag_device", "auto") not in ("auto", "cpu", "cuda", "directml"):
+                        raise ValueError("不支持的 RAG 加速模式")
+                    if config.get("rag_batch_size", 16) not in (8, 16, 32, 64):
+                        raise ValueError("RAG 批次必须为 8、16、32 或 64")
 
                     def _apply_rag(cfg):
-                        cfg.rag_enabled = bool(config["rag_enabled"])
+                        if "rag_enabled" in config:
+                            cfg.rag_enabled = bool(config["rag_enabled"])
+                        if "rag_device" in config:
+                            cfg.rag_device = config["rag_device"]
+                        if "rag_batch_size" in config:
+                            cfg.rag_batch_size = config["rag_batch_size"]
 
                     rag_config = mutate_config(_apply_rag)
                     update_status(rag_enabled=rag_config.rag_enabled)
