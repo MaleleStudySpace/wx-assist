@@ -107,7 +107,8 @@ class HealthMonitor:
                 if self._summarizer.last_api_call_time > 0 else -1,
         )
 
-        logger.info(
+        # 每 5 分钟一条，正常运行时只是噪声；排障时把日志级别调到 DEBUG 才可见
+        logger.debug(
             "HEARTBEAT: uptime=%dm, msgs=%d, db=%s, wechat=%s, last_api=%s",
             uptime_min, msgs, db_status, wechat_status, last_api_str,
         )

@@ -34,6 +34,7 @@ def test_deepseek_agent_chat_retries_and_updates_last_call_time(monkeypatch):
     backend.max_retries = 2
     backend.retry_exceptions = (_TransientError,)
     backend.last_api_call_time = 0.0
+    backend.agent_timeout = 120.0   # 正常由 __init__ 从 AI_AGENT_TIMEOUT_SEC 读入
 
     monkeypatch.setattr("src.summarize.base.time.sleep", lambda _seconds: None)
     monkeypatch.setattr("src.summarize.deepseek_backend.log_llm_interaction", lambda **_kwargs: None)
@@ -68,6 +69,7 @@ def test_claude_agent_chat_retries_and_updates_last_call_time(monkeypatch):
     backend.max_retries = 2
     backend.retry_exceptions = (_TransientError,)
     backend.last_api_call_time = 0.0
+    backend.agent_timeout = 120.0   # 正常由 __init__ 从 AI_AGENT_TIMEOUT_SEC 读入
 
     monkeypatch.setattr("src.summarize.base.time.sleep", lambda _seconds: None)
     monkeypatch.setattr("src.summarize.claude_backend.log_llm_interaction", lambda **_kwargs: None)

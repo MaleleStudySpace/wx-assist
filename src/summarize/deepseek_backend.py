@@ -9,6 +9,7 @@ Docs: https://platform.deepseek.com/api-docs
 
 import json
 import logging
+import os
 import time
 from typing import Iterator, Optional
 
@@ -83,6 +84,12 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         self.chunk_size = chunk_size
         self.max_retries = max_retries
         self.extra_body = extra_body
+        # Agent 对话（带工具）单次请求超时：工具越多请求体越大、首字越慢，
+        # 客户端默认的 60s 常常不够。只作用于 agent 对话，不影响普通 chat / 摘要。
+        try:
+            self.agent_timeout = float(os.getenv("AI_AGENT_TIMEOUT_SEC", "120") or 120)
+        except ValueError:
+            self.agent_timeout = 120.0
 
     # ── Conversational chat API call (called by base class) ─────
 
@@ -362,7 +369,8 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         start = time.monotonic()
         try:
             response = self._retry_with_backoff(
-                lambda: self.client.chat.completions.create(**params),
+                lambda: self.client.chat.completions.create(
+                    **params, timeout=self._request_timeout(self.agent_timeout)),
                 "agent chat",
             )
             latency = (time.monotonic() - start) * 1000
@@ -455,7 +463,8 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         start = time.monotonic()
         try:
             stream = self._retry_with_backoff(
-                lambda: self.client.chat.completions.create(**params),
+                lambda: self.client.chat.completions.create(
+                    **params, timeout=self._request_timeout(self.agent_timeout)),
                 "agent chat stream",
             )
         except Exception:

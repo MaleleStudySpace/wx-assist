@@ -5,6 +5,7 @@ Uses the Anthropic Python SDK with native structured output (Pydantic parse).
 
 import json
 import logging
+import os
 import time
 from typing import Iterator
 
@@ -50,6 +51,11 @@ class ClaudeSummarizer(AbstractSummarizer):
         self.model = model
         self.chunk_size = chunk_size
         self.max_retries = max_retries
+        # Agent 对话（带工具）单次请求超时，与 OpenAI 兼容后端保持一致
+        try:
+            self.agent_timeout = float(os.getenv("AI_AGENT_TIMEOUT_SEC", "120") or 120)
+        except ValueError:
+            self.agent_timeout = 120.0
 
     # ── Conversational chat API call (called by base class) ─────
 
@@ -155,7 +161,8 @@ class ClaudeSummarizer(AbstractSummarizer):
         start = time.monotonic()
         try:
             response = self._retry_with_backoff(
-                lambda: self.client.messages.create(**request_kwargs),
+                lambda: self.client.messages.create(
+                    **request_kwargs, timeout=self.agent_timeout),
                 "agent chat",
             )
             latency = (time.monotonic() - start) * 1000
