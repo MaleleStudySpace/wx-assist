@@ -47,7 +47,17 @@ class ClaudeSummarizer(AbstractSummarizer):
                  base_url: str = "https://api.anthropic.com",
                  chunk_size: int = 400,
                  max_retries: int = 3):
-        self.client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
+        # Anthropic SDK 默认 600s；只有显式配置 AI_REQUEST_TIMEOUT_SEC 时才覆盖，
+        # 避免把 Claude 原本宽松的超时意外收紧。
+        _client_kwargs = {}
+        _req_timeout = (os.getenv("AI_REQUEST_TIMEOUT_SEC", "") or "").strip()
+        if _req_timeout:
+            try:
+                _client_kwargs["timeout"] = float(_req_timeout)
+            except ValueError:
+                pass
+        self.client = anthropic.Anthropic(api_key=api_key, base_url=base_url,
+                                          **_client_kwargs)
         self.model = model
         self.chunk_size = chunk_size
         self.max_retries = max_retries

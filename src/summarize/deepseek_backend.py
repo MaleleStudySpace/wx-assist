@@ -75,8 +75,14 @@ class OpenAICompatSummarizer(AbstractSummarizer):
         import httpx
         def _fix_user_agent(request):
             request.headers["user-agent"] = "wx-assist/1.0"
+        # 客户端级默认超时：普通对话、即时提醒摘要等没有单独传 timeout 的调用都走它。
+        # 群聊/公众号定时摘要、Agent 对话有各自的 per-request 覆盖。
+        try:
+            base_timeout = float(os.getenv("AI_REQUEST_TIMEOUT_SEC", "60") or 60)
+        except ValueError:
+            base_timeout = 60.0
         http_client = httpx.Client(
-            timeout=httpx.Timeout(60.0, connect=10.0),
+            timeout=httpx.Timeout(base_timeout, connect=10.0),
             event_hooks={"request": [_fix_user_agent]},
         )
         self.client = OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)

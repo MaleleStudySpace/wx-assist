@@ -9,6 +9,7 @@ and XML parsing, rather than re-implementing content decoding.
 """
 
 import logging
+import os
 import threading
 import time as _time
 from datetime import datetime
@@ -33,6 +34,14 @@ DEDUP_MAX = 5000
 
 # Cleanup alerted URLs older than 7 days.
 DEDUP_MAX_AGE_SEC = 7 * 86400
+
+# 即时提醒摘要的外层等待。必须比 LLM 客户端超时（AI_REQUEST_TIMEOUT_SEC，默认 60）
+# 更宽：以前写死 35 秒，模型 40 秒才成功时结果会被直接丢弃，推送里显示"暂无文章摘要"。
+try:
+    OA_ALERT_SUMMARY_TIMEOUT_SEC = float(
+        os.getenv("OA_ALERT_SUMMARY_TIMEOUT_SEC", "90") or 90)
+except ValueError:
+    OA_ALERT_SUMMARY_TIMEOUT_SEC = 90.0
 
 
 class OAMonitorEngine:
@@ -182,12 +191,13 @@ class OAMonitorEngine:
                     fut = exe.submit(smrz.chat, message=prompt, context_messages=[],
                                      requester_name="system", group_name=source)
                     try:
-                        llm_summary = (fut.result(timeout=35) or "").strip()
+                        llm_summary = (fut.result(
+                            timeout=OA_ALERT_SUMMARY_TIMEOUT_SEC) or "").strip()
                     except concurrent.futures.TimeoutError:
                         llm_summary = ""
                         logger.warning(
-                            "OAMonitor: 即时提醒摘要 LLM 超时（35s）'%s' (%s)",
-                            title[:30], url,
+                            "OAMonitor: 即时提醒摘要 LLM 超时（%.0fs）'%s' (%s)",
+                            OA_ALERT_SUMMARY_TIMEOUT_SEC, title[:30], url,
                         )
                     except Exception as e:
                         # 这里原来静默吞掉异常（llm_summary=""），失败原因只能
@@ -491,7 +501,8 @@ class OAMonitorEngine:
                     prompt = f"{base_prompt}\n\n{article_text}"
                     _t0 = _time.monotonic()
 
-                    # 后台线程执行 LLM 调用，硬超时 35 秒（httpx 60s + 安全余量）
+                    # 后台线程执行 LLM 调用，硬超时 OA_ALERT_SUMMARY_TIMEOUT_SEC
+                    # （默认 90 秒，需比 LLM 客户端超时更宽）
                     import concurrent.futures
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _exe:
                         _fut = _exe.submit(
@@ -502,10 +513,11 @@ class OAMonitorEngine:
                             group_name=source,
                         )
                         try:
-                            ai_digest = _fut.result(timeout=35)
+                            ai_digest = _fut.result(timeout=OA_ALERT_SUMMARY_TIMEOUT_SEC)
                         except concurrent.futures.TimeoutError:
                             logger.warning(
-                                "OAMonitor: LLM 超时（35s）: %s (%s)", title[:20], art.url,
+                                "OAMonitor: LLM 超时（%.0fs）: %s (%s)",
+                                OA_ALERT_SUMMARY_TIMEOUT_SEC, title[:20], art.url,
                             )
                             ai_digest = ""
                         except Exception as e:
